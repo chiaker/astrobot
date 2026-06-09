@@ -5,6 +5,7 @@ from aiogram import Router
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import ErrorEvent, Message
 
+from astrobot.alerts import record_error
 from astrobot.metrics import ERRORS_TOTAL, FLOOD_RETRIES_TOTAL
 
 router = Router(name="errors")
@@ -45,12 +46,17 @@ async def on_error(event: ErrorEvent) -> bool:
         log.warning("telegram_bad_request", error=msg_text)
         return True
 
-    ERRORS_TOTAL.labels(error_type=type(exc).__name__).inc()
+    error_type = type(exc).__name__
+    ERRORS_TOTAL.labels(error_type=error_type).inc()
     log.exception(
         "handler_failed",
-        error_type=type(exc).__name__,
+        error_type=error_type,
         update_id=event.update.update_id,
     )
+    try:
+        await record_error(error_type)
+    except Exception as alert_err:
+        log.warning("alert_record_failed", error=str(alert_err))
 
     message = _extract_chat_message(event)
     if message is not None:

@@ -20,14 +20,15 @@ INTER_MESSAGE_DELAY = 0.08
 
 def response_toggle_kb(response_id: int, current: str) -> InlineKeyboardMarkup:
     if current == "brief":
-        button = InlineKeyboardButton(
+        toggle = InlineKeyboardButton(
             text="📖 Подробнее", callback_data=f"resp:{response_id}:full"
         )
     else:
-        button = InlineKeyboardButton(
+        toggle = InlineKeyboardButton(
             text="📝 Кратко", callback_data=f"resp:{response_id}:brief"
         )
-    return InlineKeyboardMarkup(inline_keyboard=[[button]])
+    save = InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{response_id}")
+    return InlineKeyboardMarkup(inline_keyboard=[[save, toggle]])
 
 
 def chunk_text(text: str, limit: int = CHUNK_LIMIT) -> list[str]:

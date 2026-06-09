@@ -34,6 +34,19 @@ class User(Base):
     premium_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+    referral_code: Mapped[str] = mapped_column(String(16), unique=True)
+    referred_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    bonus_questions: Mapped[int] = mapped_column(Integer, default=0)
+    push_horoscope_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    push_lunar_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_horoscope_push_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    legal_agreed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -48,6 +61,9 @@ class User(Base):
         back_populates="user", cascade="all, delete-orphan"
     )
     responses: Mapped[list[Response]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    favorites: Mapped[list[Favorite]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -135,6 +151,33 @@ class HoroscopeCache(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class Favorite(Base):
+    __tablename__ = "favorites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32))
+    label: Mapped[str] = mapped_column(String(255))
+    brief: Mapped[str] = mapped_column(Text)
+    full: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    user: Mapped[User] = relationship(back_populates="favorites")
+
+
+class LunarEvent(Base):
+    __tablename__ = "lunar_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_date: Mapped[date] = mapped_column(Date, unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(8))
+    notified: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class LLMUsageLog(Base):

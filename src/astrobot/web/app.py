@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from astrobot.bot.dispatcher import build_bot, build_dispatcher
 from astrobot.config import get_settings
 from astrobot.logging_setup import configure_logging
+from astrobot.scheduler import build_scheduler
 from astrobot.web.admin import setup_admin
 from astrobot.web.routes import health, metrics, payments, telegram
 
@@ -27,6 +28,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.dp = dp
 
     polling_task: asyncio.Task | None = None
+    scheduler = build_scheduler(bot)
+    scheduler.start()
+    log.info("scheduler_started")
 
     if settings.run_mode == "webhook":
         await bot.set_webhook(
@@ -43,6 +47,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        try:
+            scheduler.shutdown(wait=False)
+        except Exception as e:
+            log.warning("scheduler_shutdown_failed", error=str(e))
         if polling_task is not None:
             polling_task.cancel()
             try:

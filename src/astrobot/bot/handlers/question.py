@@ -13,17 +13,24 @@ from astrobot.bot.handlers.natal import _profile_to_birth
 from astrobot.bot.keyboards import (
     MENU_QUESTION,
     SUGGESTED_QUESTIONS,
-    ask_again_kb,
+    ask_again_with_save_kb,
     question_entry_kb,
     suggested_questions_kb,
 )
 from astrobot.bot.responses import chunk_text, safe_answer
 from astrobot.bot.states import AskingQuestion
 from astrobot.bot.utils import need_profile
-from astrobot.db.models import BirthProfile, LLMUsageLog, QuestionLog, User
-from astrobot.limits import check_question, paywall_text
+from astrobot.db.models import BirthProfile, LLMUsageLog, QuestionLog, Response, User
+from astrobot.limits import (
+    check_question,
+    consume_question_bonus_if_needed,
+    is_premium,
+    paywall_text,
+)
 from astrobot.llm.client import HistoryMessage, get_llm
 from astrobot.llm.prompts import SYSTEM_QUESTION
+from astrobot.metrics import CRISIS_TRIGGERED
+from astrobot.safety.crisis import CRISIS_REPLY, is_crisis
 
 router = Router(name="question")
 
@@ -58,6 +65,10 @@ async def _answer_question(
     question: str,
 ) -> None:
     progress = await target.answer("🌟 Прикладываю карту к твоему вопросу…")
+
+    # Pre-call snapshot for bonus accounting
+    pre_call_allowance = await check_question(session, user)
+    pre_call_used = pre_call_allowance.used
 
     birth = _profile_to_birth(profile, name=user_name or "User")
     chart = build_natal_chart(birth)
@@ -95,14 +106,38 @@ async def _answer_question(
             output_tokens=response.output_tokens,
         )
     )
+    resp_row = Response(
+        user_id=user.id,
+        kind="question",
+        brief=response.text,
+        full=response.text,
+    )
+    session.add(resp_row)
+    consume_question_bonus_if_needed(user, pre_call_used)
+    await session.flush()
     await session.commit()
 
     await progress.delete()
     rendered = md_to_telegram_html(response.text)
     chunks = chunk_text(rendered)
     for i, chunk in enumerate(chunks):
-        kb = ask_again_kb() if i == len(chunks) - 1 else None
+        kb = ask_again_with_save_kb(resp_row.id) if i == len(chunks) - 1 else None
         await safe_answer(target, chunk, reply_markup=kb)
+
+    # Soft-upsell for free users near their limit
+    if not is_premium(user):
+        q_left_check = await check_question(session, user)
+        left = max(0, q_left_check.limit - q_left_check.used)
+        if left == 0:
+            await target.answer(
+                "🌙 Это был твой последний бесплатный вопрос. "
+                "Если хочешь продолжать — открой <b>💎 Премиум</b>."
+            )
+        elif left == 1:
+            await target.answer(
+                "🌙 У тебя остался <b>1 вопрос</b> на бесплатном тарифе. "
+                "Премиум снимает границы ✨"
+            )
 
 
 @router.message(AskingQuestion.waiting_for_text)
@@ -115,6 +150,12 @@ async def on_question_text(
     question = (message.text or "").strip()
     if len(question) < 3:
         await message.answer("Слишком коротко — расскажи подробнее, что тебя волнует.")
+        return
+
+    if is_crisis(question):
+        CRISIS_TRIGGERED.inc()
+        await state.clear()
+        await message.answer(CRISIS_REPLY, disable_web_page_preview=True)
         return
 
     profile = await session.get(BirthProfile, user.id)

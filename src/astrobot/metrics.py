@@ -54,3 +54,24 @@ FLOOD_RETRIES_TOTAL = Counter(
     "astrobot_flood_retries_total",
     "TelegramRetryAfter occurrences caught and retried",
 )
+
+CRISIS_TRIGGERED = Counter(
+    "astrobot_crisis_triggered_total",
+    "Crisis-keyword detector matched user input (LLM call skipped)",
+)
+
+PUSH_SENT = Counter(
+    "astrobot_push_sent_total",
+    "Push notifications dispatched",
+    ["kind", "result"],
+)
+
+REFERRALS_REGISTERED = Counter(
+    "astrobot_referrals_registered_total",
+    "Successful referral applications",
+)
+
+FAVORITES_SAVED = Counter(
+    "astrobot_favorites_saved_total",
+    "Items added to favorites",
+)

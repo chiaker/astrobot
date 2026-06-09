@@ -20,23 +20,50 @@ from astrobot.limits import check_horoscope, check_question, is_premium
 router = Router(name="profile")
 
 
-def _profile_kb(default_response: str) -> InlineKeyboardMarkup:
-    mode = "кратко" if default_response == "brief" else "подробно"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def _profile_kb(user: User) -> InlineKeyboardMarkup:
+    mode = "кратко" if user.default_response == "brief" else "подробно"
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text=f"📏 Ответы по умолчанию: {mode}",
+                callback_data="settings:response_toggle",
+            )
+        ],
+    ]
+    if is_premium(user):
+        horo_state = "вкл" if user.push_horoscope_enabled else "выкл"
+        lunar_state = "вкл" if user.push_lunar_enabled else "выкл"
+        rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"📏 Ответы по умолчанию: {mode}",
-                    callback_data="settings:response_toggle",
+                    text=f"🌅 Утренний гороскоп: {horo_state}",
+                    callback_data="settings:push_horoscope",
                 )
-            ],
+            ]
+        )
+        rows.append(
             [
                 InlineKeyboardButton(
-                    text="🔄 Ввести данные заново", callback_data="profile:reset"
+                    text=f"🌑 Лунные фазы: {lunar_state}",
+                    callback_data="settings:push_lunar",
                 )
-            ],
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🤝 Пригласить друга", callback_data="referral:show"
+            )
         ]
     )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🔄 Ввести данные заново", callback_data="profile:reset"
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _profile_text(profile: BirthProfile, user: User, session: AsyncSession) -> str:
@@ -81,7 +108,7 @@ async def on_profile(message: Message, session: AsyncSession, user: User) -> Non
         )
         return
     text = await _profile_text(profile, user, session)
-    await message.answer(text, reply_markup=_profile_kb(user.default_response))
+    await message.answer(text, reply_markup=_profile_kb(user))
 
 
 @router.callback_query(F.data == "settings:response_toggle")
@@ -97,9 +124,47 @@ async def on_response_toggle(
         await call.answer()
         return
     text = await _profile_text(profile, user, session)
-    await call.message.edit_text(text, reply_markup=_profile_kb(user.default_response))
+    await call.message.edit_text(text, reply_markup=_profile_kb(user))
     mode_label = "кратко" if user.default_response == "brief" else "подробно"
     await call.answer(f"Теперь по умолчанию — {mode_label}")
+
+
+@router.callback_query(F.data == "settings:push_horoscope")
+async def on_push_horoscope_toggle(
+    call: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    if not is_premium(user):
+        await call.answer("Доступно только в Премиуме", show_alert=True)
+        return
+    user.push_horoscope_enabled = not user.push_horoscope_enabled
+    await session.commit()
+    profile = await session.get(BirthProfile, user.id)
+    if profile is not None:
+        text = await _profile_text(profile, user, session)
+        await call.message.edit_text(text, reply_markup=_profile_kb(user))
+    state_label = "включён" if user.push_horoscope_enabled else "выключен"
+    await call.answer(f"Утренний гороскоп {state_label}")
+
+
+@router.callback_query(F.data == "settings:push_lunar")
+async def on_push_lunar_toggle(
+    call: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    if not is_premium(user):
+        await call.answer("Доступно только в Премиуме", show_alert=True)
+        return
+    user.push_lunar_enabled = not user.push_lunar_enabled
+    await session.commit()
+    profile = await session.get(BirthProfile, user.id)
+    if profile is not None:
+        text = await _profile_text(profile, user, session)
+        await call.message.edit_text(text, reply_markup=_profile_kb(user))
+    state_label = "включены" if user.push_lunar_enabled else "выключены"
+    await call.answer(f"Лунные фазы {state_label}")
 
 
 @router.callback_query(F.data == "profile:reset")

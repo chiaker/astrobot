@@ -11,14 +11,16 @@ MENU_QUESTION = "💬 Спросить Астру"
 MENU_PROFILE = "👤 Профиль"
 MENU_PREMIUM = "💎 Премиум"
 MENU_ABOUT = "ℹ️ Об Астре"
+MENU_FAVORITES = "⭐ Избранное"
 
 
 def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=MENU_NATAL), KeyboardButton(text=MENU_HOROSCOPE)],
-            [KeyboardButton(text=MENU_QUESTION), KeyboardButton(text=MENU_PROFILE)],
-            [KeyboardButton(text=MENU_PREMIUM), KeyboardButton(text=MENU_ABOUT)],
+            [KeyboardButton(text=MENU_QUESTION), KeyboardButton(text=MENU_FAVORITES)],
+            [KeyboardButton(text=MENU_PREMIUM), KeyboardButton(text=MENU_PROFILE)],
+            [KeyboardButton(text=MENU_ABOUT)],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выбери пункт меню",
@@ -64,6 +66,17 @@ def ask_again_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="💬 Спросить ещё", callback_data="ask_again")]
+        ]
+    )
+
+
+def ask_again_with_save_kb(response_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{response_id}"),
+                InlineKeyboardButton(text="💬 Спросить ещё", callback_data="ask_again"),
+            ]
         ]
     )
 

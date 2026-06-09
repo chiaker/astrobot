@@ -8,7 +8,12 @@ import structlog
 from openai import AsyncOpenAI
 
 from astrobot.config import get_settings
-from astrobot.metrics import LLM_CALLS_TOTAL, LLM_DURATION, LLM_TOKENS_TOTAL
+from astrobot.metrics import (
+    LLM_CALLS_TOTAL,
+    LLM_COST_TOTAL,
+    LLM_DURATION,
+    LLM_TOKENS_TOTAL,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -127,6 +132,14 @@ class DeepSeekClient:
         LLM_TOKENS_TOTAL.labels(kind=kind, model=model, direction="output").inc(output_tokens)
         if reasoning:
             LLM_TOKENS_TOTAL.labels(kind=kind, model=model, direction="reasoning").inc(reasoning)
+
+        settings = get_settings()
+        cost = (
+            (input_tokens - cache_hit) / 1_000_000 * settings.llm_price_input_usd_per_m
+            + cache_hit / 1_000_000 * settings.llm_price_cache_hit_usd_per_m
+            + output_tokens / 1_000_000 * settings.llm_price_output_usd_per_m
+        )
+        LLM_COST_TOTAL.labels(kind=kind, model=model).inc(cost)
 
         log.info(
             "llm_complete",

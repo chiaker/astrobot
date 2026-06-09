@@ -36,6 +36,21 @@ class Settings(BaseSettings):
     admin_password: str = Field(default="", alias="ADMIN_PASSWORD")
     admin_secret: str = Field(default="", alias="ADMIN_SECRET")
 
+    bot_username: str = Field(default="", alias="BOT_USERNAME")
+    ops_chat_id: int | None = Field(default=None, alias="OPS_CHAT_ID")
+
+    push_horoscope_hour: int = Field(default=9, alias="PUSH_HOROSCOPE_HOUR")
+
+    llm_price_input_usd_per_m: float = Field(
+        default=0.14, alias="LLM_PRICE_INPUT_USD_PER_M"
+    )
+    llm_price_output_usd_per_m: float = Field(
+        default=0.28, alias="LLM_PRICE_OUTPUT_USD_PER_M"
+    )
+    llm_price_cache_hit_usd_per_m: float = Field(
+        default=0.07, alias="LLM_PRICE_CACHE_HIT_USD_PER_M"
+    )
+
     @property
     def webhook_path(self) -> str:
         return f"/telegram/webhook/{self.webhook_secret}"

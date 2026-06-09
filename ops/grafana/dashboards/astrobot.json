@@ -113,6 +113,92 @@
           "legendFormat": "{{error_type}}"
         }
       ]
+    },
+    {
+      "type": "stat",
+      "title": "Расход LLM за сутки ($)",
+      "gridPos": { "x": 0, "y": 30, "w": 8, "h": 6 },
+      "targets": [
+        { "expr": "sum(increase(astrobot_llm_cost_usd_total[1d]))", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Расход LLM за час ($)",
+      "gridPos": { "x": 8, "y": 30, "w": 8, "h": 6 },
+      "targets": [
+        { "expr": "sum(increase(astrobot_llm_cost_usd_total[1h]))", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 5
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Crisis срабатывания / 24ч",
+      "gridPos": { "x": 16, "y": 30, "w": 8, "h": 6 },
+      "targets": [
+        { "expr": "sum(increase(astrobot_crisis_triggered_total[24h]))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Расход по моделям ($/час)",
+      "gridPos": { "x": 0, "y": 36, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (model) (rate(astrobot_llm_cost_usd_total[5m])) * 3600",
+          "refId": "A",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Расход по типу запроса ($/час)",
+      "gridPos": { "x": 12, "y": 36, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (kind) (rate(astrobot_llm_cost_usd_total[5m])) * 3600",
+          "refId": "A",
+          "legendFormat": "{{kind}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } }
+    },
+    {
+      "type": "stat",
+      "title": "Premium пуши / 24ч",
+      "gridPos": { "x": 0, "y": 44, "w": 8, "h": 6 },
+      "targets": [
+        { "expr": "sum(increase(astrobot_push_sent_total[24h]))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Рефералы / 7д",
+      "gridPos": { "x": 8, "y": 44, "w": 8, "h": 6 },
+      "targets": [
+        { "expr": "sum(increase(astrobot_referrals_registered_total[7d]))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Сохранения в избранное / 7д",
+      "gridPos": { "x": 16, "y": 44, "w": 8, "h": 6 },
+      "targets": [
+        { "expr": "sum(increase(astrobot_favorites_saved_total[7d]))", "refId": "A" }
+      ]
     }
   ]
 }

@@ -41,6 +41,21 @@ async def cmd_start(
     user: User,
 ) -> None:
     await state.clear()
+
+    from astrobot.metrics import REFERRALS_REGISTERED
+    from astrobot.referral import parse_start_arg, try_apply_referral
+
+    ref_code = parse_start_arg(message.text)
+    if ref_code:
+        applied = await try_apply_referral(session, user, ref_code)
+        if applied:
+            await session.commit()
+            REFERRALS_REGISTERED.inc()
+            await message.answer(
+                "🎁 Друг тебя пригласил — я добавила <b>+2 бесплатных вопроса</b>. "
+                "Когда захочешь — приходи спрашивать ✨"
+            )
+
     profile = await session.get(BirthProfile, user.id)
     if profile is not None:
         await message.answer(
@@ -49,13 +64,16 @@ async def cmd_start(
         )
         return
 
+    from astrobot.legal.disclaimer import ONBOARDING_CONSENT
+
     await message.answer(
         "🌙 Здравствуй.\n\n"
         "Меня зовут <b>Астра</b>. Я читаю карты звёзд и расскажу о тебе то, "
         "что записано в небе при твоём рождении.\n\n"
         "Чтобы составить твою карту, мне нужны три вещи: дата, время и место рождения. "
         "Начнём с <b>даты</b> — введи её в формате <code>DD.MM.YYYY</code> "
-        "(например, <code>14.03.1990</code>):"
+        "(например, <code>14.03.1990</code>).\n\n"
+        + ONBOARDING_CONSENT
     )
     await state.set_state(Onboarding.waiting_for_date)
 
@@ -174,6 +192,10 @@ async def on_confirm_save(
     profile.lon = data["lon"]
     profile.tz = data["tz"]
     profile.city_name = data.get("city_input") or data["city_display"]
+    if user.legal_agreed_at is None:
+        from datetime import UTC, datetime as _dt
+
+        user.legal_agreed_at = _dt.now(UTC)
     await session.commit()
 
     await state.clear()

@@ -24,7 +24,9 @@ def build_dispatcher() -> Dispatcher:
     from astrobot.bot.handlers import (
         about,
         fallback,
+        favorites,
         horoscope,
+        legal,
         natal,
         onboarding,
         payment,
@@ -45,6 +47,7 @@ def build_dispatcher() -> Dispatcher:
     dp.update.middleware(UserMiddleware())
 
     dp.include_router(errors.router)
+    dp.include_router(legal.router)
     dp.include_router(onboarding.router)
     dp.include_router(profile.router)
     dp.include_router(natal.router)
@@ -52,6 +55,7 @@ def build_dispatcher() -> Dispatcher:
     dp.include_router(question.router)
     dp.include_router(payment.router)
     dp.include_router(about.router)
+    dp.include_router(favorites.router)
     dp.include_router(response_toggle.router)
     dp.include_router(fallback.router)
     return dp

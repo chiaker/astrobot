@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.types import Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from astrobot.bot.keyboards import MENU_ABOUT
+from astrobot.config import get_settings
+from astrobot.db.models import User
+from astrobot.legal.disclaimer import SHORT_DISCLAIMER
 
 router = Router(name="about")
 
@@ -18,11 +26,42 @@ ABOUT_TEXT = (
     "💬 Отвечаю на вопросы с учётом того, что записано в твоей карте\n\n"
     "<b>Команды</b>\n"
     "/start — пройти знакомство заново\n"
-    "/cancel — отменить текущее действие\n\n"
-    "<i>Карта подсказывает — а решаешь ты.</i>"
+    "/cancel — отменить текущее действие\n"
+    "/privacy — политика конфиденциальности\n"
+    "/terms — пользовательское соглашение\n\n"
+    "<i>Карта подсказывает — а решаешь ты.</i>\n\n"
+    + SHORT_DISCLAIMER
 )
+
+
+def _about_kb() -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(text="📄 Privacy", callback_data="legal:privacy"),
+            InlineKeyboardButton(text="📄 Terms", callback_data="legal:terms"),
+        ],
+        [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @router.message(F.text == MENU_ABOUT)
 async def on_about(message: Message) -> None:
-    await message.answer(ABOUT_TEXT, disable_web_page_preview=True)
+    await message.answer(
+        ABOUT_TEXT, reply_markup=_about_kb(), disable_web_page_preview=True
+    )
+
+
+@router.callback_query(F.data == "referral:show")
+async def on_referral_show(call: CallbackQuery, user: User) -> None:
+    bot_username = get_settings().bot_username or "your_bot"
+    link = f"https://t.me/{bot_username}?start=ref_{user.referral_code}"
+    text = (
+        "🤝 <b>Пригласи друга к Астре</b>\n\n"
+        f"Твоя реферальная ссылка:\n<code>{link}</code>\n\n"
+        "За каждого друга, который зарегистрируется по ней, "
+        "<b>вы оба получите +2 бесплатных вопроса</b> ✨\n\n"
+        "Просто поделись ссылкой в любом мессенджере."
+    )
+    await call.message.answer(text, disable_web_page_preview=True)
+    await call.answer()

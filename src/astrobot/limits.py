@@ -100,10 +100,13 @@ async def check_question(session: AsyncSession, user: User) -> Allowance:
     if t == "free":
         limit = s.question_lifetime or 0
         used = await _count(session, user.id, "question", hours=None)
+        bonus = max(0, user.bonus_questions or 0)
+        # Effective allowance: lifetime quota OR remaining bonus
+        regular_left = max(0, limit - used)
         return Allowance(
-            allowed=used < limit,
+            allowed=regular_left > 0 or bonus > 0,
             used=used,
-            limit=limit,
+            limit=limit + bonus,
             window="lifetime",
             tier=t,
         )
@@ -116,6 +119,16 @@ async def check_question(session: AsyncSession, user: User) -> Allowance:
         window="day",
         tier=t,
     )
+
+
+def consume_question_bonus_if_needed(user: User, used_before_call: int) -> None:
+    """If a free user was already past the lifetime limit at the time of the
+    LLM call, this call consumed a bonus question — decrement the counter."""
+    if is_premium(user):
+        return
+    limit = FREE_LIMITS.question_lifetime or 0
+    if used_before_call >= limit and (user.bonus_questions or 0) > 0:
+        user.bonus_questions = max(0, user.bonus_questions - 1)
 
 
 CHECKS = {

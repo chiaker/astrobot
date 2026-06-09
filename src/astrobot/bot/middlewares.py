@@ -14,8 +14,19 @@ from astrobot.db.models import User
 from astrobot.db.session import get_sessionmaker
 from astrobot.metrics import DUPLICATE_UPDATES_TOTAL
 from astrobot.redis_client import get_redis
+from astrobot.referral import generate_code
 
 log = structlog.get_logger(__name__)
+
+
+async def _unique_code(session: AsyncSession) -> str:
+    """Generate a referral code that's not already in use (retry on collision)."""
+    for _ in range(5):
+        code = generate_code()
+        exists = await session.scalar(select(User.id).where(User.referral_code == code))
+        if exists is None:
+            return code
+    return generate_code()  # vanishingly unlikely after 5 collisions
 
 
 class UpdateDedupeMiddleware(BaseMiddleware):
@@ -80,7 +91,11 @@ class UserMiddleware(BaseMiddleware):
 
         user = await session.scalar(select(User).where(User.tg_user_id == tg_user.id))
         if user is None:
-            user = User(tg_user_id=tg_user.id, lang=tg_user.language_code or "ru")
+            user = User(
+                tg_user_id=tg_user.id,
+                lang=tg_user.language_code or "ru",
+                referral_code=await _unique_code(session),
+            )
             session.add(user)
             await session.commit()
             await session.refresh(user)
