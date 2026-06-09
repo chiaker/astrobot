@@ -1,0 +1,118 @@
+{
+  "title": "Astrobot",
+  "uid": "astrobot",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "LLM calls / 5m",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 6 },
+      "targets": [
+        {
+          "expr": "sum(increase(astrobot_llm_calls_total[5m]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Errors / 5m",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 6 },
+      "targets": [
+        {
+          "expr": "sum(increase(astrobot_errors_total[5m]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Duplicate updates / 1h",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 6 },
+      "targets": [
+        { "expr": "sum(increase(astrobot_duplicate_updates_total[1h]))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Flood retries / 1h",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 6 },
+      "targets": [
+        { "expr": "sum(increase(astrobot_flood_retries_total[1h]))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "LLM duration (p50/p95/p99)",
+      "gridPos": { "x": 0, "y": 6, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(astrobot_llm_duration_seconds_bucket[5m])))",
+          "refId": "p50",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(astrobot_llm_duration_seconds_bucket[5m])))",
+          "refId": "p95",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(astrobot_llm_duration_seconds_bucket[5m])))",
+          "refId": "p99",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "LLM calls by kind",
+      "gridPos": { "x": 0, "y": 14, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (kind) (rate(astrobot_llm_calls_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokens by direction",
+      "gridPos": { "x": 12, "y": 14, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (direction) (rate(astrobot_llm_tokens_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{direction}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Errors by type",
+      "gridPos": { "x": 0, "y": 22, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (error_type) (rate(astrobot_errors_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{error_type}}"
+        }
+      ]
+    }
+  ]
+}

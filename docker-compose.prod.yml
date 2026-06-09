@@ -1,0 +1,33 @@
+services:
+  migrate:
+    image: ${IMAGE_NAME:-astrobot}:${IMAGE_TAG:-latest}
+    build: null
+    volumes: []
+
+  app:
+    image: ${IMAGE_NAME:-astrobot}:${IMAGE_TAG:-latest}
+    build: null
+    command: ["python", "-m", "astrobot.main", "--mode=webhook"]
+    volumes: []
+    ports: []
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      BOT_DOMAIN: ${BOT_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:
+  caddy_config:
