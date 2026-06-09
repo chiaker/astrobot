@@ -68,6 +68,15 @@ def ask_again_kb() -> InlineKeyboardMarkup:
     )
 
 
+def question_entry_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🤔 Не знаю что спросить", callback_data="show_topics")],
+            [InlineKeyboardButton(text="✖️ Отмена", callback_data="cancel")],
+        ]
+    )
+
+
 def suggested_questions_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

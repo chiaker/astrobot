@@ -14,6 +14,7 @@ from astrobot.bot.keyboards import (
     MENU_QUESTION,
     SUGGESTED_QUESTIONS,
     ask_again_kb,
+    question_entry_kb,
     suggested_questions_kb,
 )
 from astrobot.bot.responses import chunk_text, safe_answer
@@ -38,10 +39,8 @@ async def on_question_button(
         return
     await state.set_state(AskingQuestion.waiting_for_text)
     await message.answer(
-        "🌙 Слушаю.\n\n"
-        "Спроси меня одним сообщением — я отвечу через твою карту. "
-        "Если не знаешь с чего начать, выбери одну из тем ниже:",
-        reply_markup=suggested_questions_kb(),
+        "🌙 Слушаю.\n\nСпроси меня одним сообщением — я отвечу через твою карту.",
+        reply_markup=question_entry_kb(),
     )
 
 
@@ -149,11 +148,21 @@ async def on_ask_again(
         pass
     await state.set_state(AskingQuestion.waiting_for_text)
     await call.message.answer(
-        "🌙 Слушаю.\n\n"
-        "Спроси меня одним сообщением — я отвечу через твою карту. "
-        "Если не знаешь с чего начать, выбери одну из тем ниже:",
-        reply_markup=suggested_questions_kb(),
+        "🌙 Слушаю.\n\nСпроси меня одним сообщением — я отвечу через твою карту.",
+        reply_markup=question_entry_kb(),
     )
+
+
+@router.callback_query(AskingQuestion.waiting_for_text, F.data == "show_topics")
+async def on_show_topics(call: CallbackQuery) -> None:
+    try:
+        await call.message.edit_text(
+            "🌙 Выбери тему — или просто спроси что-то своё одним сообщением:",
+            reply_markup=suggested_questions_kb(),
+        )
+    except Exception:
+        pass
+    await call.answer()
 
 
 @router.callback_query(AskingQuestion.waiting_for_text, F.data.startswith("ask:"))
