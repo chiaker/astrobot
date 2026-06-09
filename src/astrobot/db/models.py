@@ -34,16 +34,16 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    profile: Mapped["BirthProfile | None"] = relationship(
+    profile: Mapped[BirthProfile | None] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
-    questions: Mapped[list["QuestionLog"]] = relationship(
+    questions: Mapped[list[QuestionLog]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
-    usage: Mapped[list["LLMUsageLog"]] = relationship(
+    usage: Mapped[list[LLMUsageLog]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
-    responses: Mapped[list["Response"]] = relationship(
+    responses: Mapped[list[Response]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
