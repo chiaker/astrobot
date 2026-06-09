@@ -50,6 +50,44 @@ def cancel_kb() -> InlineKeyboardMarkup:
     )
 
 
+SUGGESTED_QUESTIONS: dict[str, str] = {
+    "purpose": "В чём моё главное призвание по карте?",
+    "strengths": "Какие у меня сильные стороны и где я могу проявиться лучше всего?",
+    "growth": "Что мне сейчас стоит развивать в себе?",
+    "love": "Какие люди мне подходят в отношениях и что я ищу в партнёре?",
+    "work": "Какая работа ближе всего к моей натуре?",
+    "year": "На что мне обратить внимание в этом году?",
+}
+
+
+def ask_again_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Спросить ещё", callback_data="ask_again")]
+        ]
+    )
+
+
+def suggested_questions_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✨ Призвание", callback_data="ask:purpose"),
+                InlineKeyboardButton(text="💪 Сильные стороны", callback_data="ask:strengths"),
+            ],
+            [
+                InlineKeyboardButton(text="🌱 Точки роста", callback_data="ask:growth"),
+                InlineKeyboardButton(text="❤️ Отношения", callback_data="ask:love"),
+            ],
+            [
+                InlineKeyboardButton(text="💼 Работа", callback_data="ask:work"),
+                InlineKeyboardButton(text="🔮 Этот год", callback_data="ask:year"),
+            ],
+            [InlineKeyboardButton(text="✖️ Отмена", callback_data="cancel")],
+        ]
+    )
+
+
 def horoscope_period_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
