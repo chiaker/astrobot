@@ -22,8 +22,8 @@ router = Router(name="onboarding")
 
 
 def _format_summary(data: dict) -> str:
-    d: date = data["birth_date"]
-    t: time = data["birth_time"]
+    d = date.fromisoformat(data["birth_date"])
+    t = time.fromisoformat(data["birth_time"])
     time_str = "неизвестно (солнечная карта)" if data["time_unknown"] else t.strftime("%H:%M")
     return (
         "<b>Проверь данные:</b>\n"
@@ -77,7 +77,7 @@ async def on_date(message: Message, state: FSMContext) -> None:
         await message.answer("Дата должна быть между 1900 годом и сегодняшним днём.")
         return
 
-    await state.update_data(birth_date=birth_date)
+    await state.update_data(birth_date=birth_date.isoformat())
     await message.answer(
         "Теперь введи <b>время рождения</b> в формате <code>HH:MM</code> "
         "(например, <code>14:30</code>).\n\n"
@@ -90,7 +90,7 @@ async def on_date(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(Onboarding.waiting_for_time, F.data == "time:unknown")
 async def on_time_unknown(call: CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(birth_time=time(12, 0), time_unknown=True)
+    await state.update_data(birth_time=time(12, 0).isoformat(), time_unknown=True)
     await call.message.answer(
         "Хорошо, строим солнечную карту. Теперь введи <b>город рождения</b> "
         "(например, <code>Москва</code> или <code>Новосибирск</code>):"
@@ -111,7 +111,7 @@ async def on_time(message: Message, state: FSMContext) -> None:
         )
         return
 
-    await state.update_data(birth_time=birth_time, time_unknown=False)
+    await state.update_data(birth_time=birth_time.isoformat(), time_unknown=False)
     await message.answer(
         "Отлично. Теперь введи <b>город рождения</b> "
         "(например, <code>Москва</code> или <code>Новосибирск</code>):"
@@ -161,8 +161,8 @@ async def on_confirm_save(
     if profile is None:
         profile = BirthProfile(user_id=user.id)
         session.add(profile)
-    profile.birth_date = data["birth_date"]
-    profile.birth_time = data["birth_time"]
+    profile.birth_date = date.fromisoformat(data["birth_date"])
+    profile.birth_time = time.fromisoformat(data["birth_time"])
     profile.time_unknown = data["time_unknown"]
     profile.lat = data["lat"]
     profile.lon = data["lon"]
