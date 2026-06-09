@@ -23,9 +23,12 @@ class Settings(BaseSettings):
     database_url: str = Field(alias="DATABASE_URL")
     redis_url: str = Field(default="redis://redis:6379/0", alias="REDIS_URL")
 
-    llm_base_url: str = Field(default="https://api.anthropic.com", alias="LLM_BASE_URL")
+    llm_base_url: str = Field(default="https://api.deepseek.com/v1", alias="LLM_BASE_URL")
     llm_api_key: str = Field(alias="LLM_API_KEY")
-    llm_model: str = Field(default="claude-opus-4-7", alias="LLM_MODEL")
+    llm_model: str = Field(default="deepseek-v4-flash", alias="LLM_MODEL")
+    llm_model_natal: str | None = Field(default=None, alias="LLM_MODEL_NATAL")
+    llm_model_horoscope: str | None = Field(default=None, alias="LLM_MODEL_HOROSCOPE")
+    llm_model_question: str | None = Field(default=None, alias="LLM_MODEL_QUESTION")
 
     daily_question_limit: int = Field(default=20, alias="DAILY_QUESTION_LIMIT")
 

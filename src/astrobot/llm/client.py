@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 import structlog
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
 from astrobot.config import get_settings
 from astrobot.metrics import LLM_CALLS_TOTAL, LLM_DURATION, LLM_TOKENS_TOTAL
@@ -28,6 +28,7 @@ class LLMResponse:
     input_tokens: int
     cached_input_tokens: int
     output_tokens: int
+    reasoning_tokens: int = 0
 
 
 class LLMClient(Protocol):
@@ -42,16 +43,28 @@ class LLMClient(Protocol):
     ) -> LLMResponse: ...
 
 
-class AnthropicClient:
+def _model_for_kind(kind: str) -> str:
+    settings = get_settings()
+    if kind == "natal" and settings.llm_model_natal:
+        return settings.llm_model_natal
+    if kind.startswith("horoscope") and settings.llm_model_horoscope:
+        return settings.llm_model_horoscope
+    if kind == "question" and settings.llm_model_question:
+        return settings.llm_model_question
+    return settings.llm_model
+
+
+class DeepSeekClient:
+    """OpenAI-compatible client (DeepSeek + any /v1/chat/completions endpoint)."""
+
     def __init__(self) -> None:
         settings = get_settings()
-        self._client = AsyncAnthropic(
+        self._client = AsyncOpenAI(
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url or None,
             timeout=90.0,
             max_retries=2,
         )
-        self._model = settings.llm_model
 
     async def complete(
         self,
@@ -62,69 +75,83 @@ class AnthropicClient:
         max_tokens: int = 1500,
         kind: str = "generic",
     ) -> LLMResponse:
-        system_blocks = [
-            {"type": "text", "text": system},
-            {
-                "type": "text",
-                "text": cached_context,
-                "cache_control": {"type": "ephemeral"},
-            },
-        ]
+        model = _model_for_kind(kind)
+        system_text = system + "\n\n" + cached_context
 
-        messages: list[dict] = []
+        messages: list[dict] = [{"role": "system", "content": system_text}]
         for m in history or []:
             messages.append({"role": m.role, "content": m.content})
         messages.append({"role": "user", "content": user_message})
 
+        text = ""
+        resp = None
         start = time.monotonic()
         try:
-            resp = await self._client.messages.create(
-                model=self._model,
-                max_tokens=max_tokens,
-                system=system_blocks,
-                messages=messages,
-            )
+            for attempt in range(2):
+                budget = max_tokens * (2 if attempt > 0 else 1)
+                resp = await self._client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_tokens=budget,
+                )
+                text = (resp.choices[0].message.content or "").strip()
+                if text:
+                    break
+                log.warning(
+                    "llm_empty_content_retry",
+                    kind=kind,
+                    model=model,
+                    attempt=attempt,
+                    finish_reason=resp.choices[0].finish_reason,
+                )
         except Exception as e:
-            LLM_CALLS_TOTAL.labels(kind=kind, model=self._model, status="error").inc()
+            LLM_CALLS_TOTAL.labels(kind=kind, model=model, status="error").inc()
             log.warning("llm_call_failed", kind=kind, error_type=type(e).__name__)
             raise
         finally:
-            LLM_DURATION.labels(kind=kind, model=self._model).observe(time.monotonic() - start)
+            LLM_DURATION.labels(kind=kind, model=model).observe(time.monotonic() - start)
 
-        text = "".join(block.text for block in resp.content if block.type == "text")
+        assert resp is not None
         usage = resp.usage
-        cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
-        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+        output_tokens = getattr(usage, "completion_tokens", 0) or 0
+        cache_hit = getattr(usage, "prompt_cache_hit_tokens", 0) or 0
+        reasoning = 0
+        details = getattr(usage, "completion_tokens_details", None)
+        if details is not None:
+            reasoning = getattr(details, "reasoning_tokens", 0) or 0
 
-        LLM_CALLS_TOTAL.labels(kind=kind, model=self._model, status="ok").inc()
-        LLM_TOKENS_TOTAL.labels(kind=kind, model=self._model, direction="input").inc(usage.input_tokens)
-        LLM_TOKENS_TOTAL.labels(kind=kind, model=self._model, direction="cache_creation").inc(cache_creation)
-        LLM_TOKENS_TOTAL.labels(kind=kind, model=self._model, direction="cache_read").inc(cache_read)
-        LLM_TOKENS_TOTAL.labels(kind=kind, model=self._model, direction="output").inc(usage.output_tokens)
+        LLM_CALLS_TOTAL.labels(kind=kind, model=model, status="ok").inc()
+        LLM_TOKENS_TOTAL.labels(kind=kind, model=model, direction="input").inc(input_tokens)
+        LLM_TOKENS_TOTAL.labels(kind=kind, model=model, direction="cache_read").inc(cache_hit)
+        LLM_TOKENS_TOTAL.labels(kind=kind, model=model, direction="output").inc(output_tokens)
+        if reasoning:
+            LLM_TOKENS_TOTAL.labels(kind=kind, model=model, direction="reasoning").inc(reasoning)
 
         log.info(
             "llm_complete",
             kind=kind,
-            model=self._model,
-            input=usage.input_tokens,
-            cache_creation=cache_creation,
-            cache_read=cache_read,
-            output=usage.output_tokens,
+            model=model,
+            input=input_tokens,
+            cache_hit=cache_hit,
+            output=output_tokens,
+            reasoning=reasoning,
         )
         return LLMResponse(
             text=text,
-            model=self._model,
-            input_tokens=usage.input_tokens,
-            cached_input_tokens=cache_creation + cache_read,
-            output_tokens=usage.output_tokens,
+            model=model,
+            input_tokens=input_tokens,
+            cached_input_tokens=cache_hit,
+            output_tokens=output_tokens,
+            reasoning_tokens=reasoning,
         )
 
 
-_default: AnthropicClient | None = None
+_default: LLMClient | None = None
 
 
 def get_llm() -> LLMClient:
     global _default
     if _default is None:
-        _default = AnthropicClient()
+        _default = DeepSeekClient()
     return _default

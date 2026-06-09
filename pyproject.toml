@@ -6,12 +6,12 @@ requires-python = ">=3.12"
 dependencies = [
     "aiogram>=3.13",
     "alembic>=1.13",
-    "anthropic>=0.40",
     "asyncpg>=0.29",
     "cairosvg>=2.7",
     "fastapi>=0.115",
     "geopy>=2.4",
     "kerykeion>=4.21",
+    "openai>=1.40",
     "pydantic-settings>=2.5",
     "pillow>=10.0",
     "prometheus-client>=0.21",
@@ -46,7 +46,8 @@ src = ["src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ASYNC", "SIM", "RUF"]
-ignore = ["E501"]
+# RUF001/002/003 — ambiguous unicode chars; we intentionally use Cyrillic.
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
