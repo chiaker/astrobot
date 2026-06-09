@@ -14,6 +14,7 @@ async def need_profile(
     profile = await session.get(BirthProfile, user.id)
     if profile is None:
         await message.answer(
-            "Сначала нужно ввести данные рождения. Нажми /start, чтобы начать."
+            "🌙 Нам надо познакомиться — мне нужны твои дата, время и место рождения. "
+            "Нажми /start, чтобы начать."
         )
     return profile

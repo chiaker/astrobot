@@ -44,15 +44,18 @@ async def cmd_start(
     profile = await session.get(BirthProfile, user.id)
     if profile is not None:
         await message.answer(
-            "С возвращением! Выбери, что тебя интересует:",
+            "🌙 С возвращением. Звёзды ждали тебя — выбирай, что хочешь узнать ✨",
             reply_markup=main_menu(),
         )
         return
 
     await message.answer(
-        "Привет! Я бот-астролог. Для построения натальной карты мне нужны "
-        "дата, время и место твоего рождения.\n\n"
-        "Введи <b>дату рождения</b> в формате <code>DD.MM.YYYY</code> (например, 14.03.1990):"
+        "🌙 Здравствуй.\n\n"
+        "Меня зовут <b>Астра</b>. Я читаю карты звёзд и расскажу о тебе то, "
+        "что записано в небе при твоём рождении.\n\n"
+        "Чтобы составить твою карту, мне нужны три вещи: дата, время и место рождения. "
+        "Начнём с <b>даты</b> — введи её в формате <code>DD.MM.YYYY</code> "
+        "(например, <code>14.03.1990</code>):"
     )
     await state.set_state(Onboarding.waiting_for_date)
 
@@ -60,7 +63,7 @@ async def cmd_start(
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer("Отменено.", reply_markup=main_menu())
+    await message.answer("Хорошо, отложила в сторону ✨", reply_markup=main_menu())
 
 
 @router.message(Onboarding.waiting_for_date)
@@ -78,10 +81,12 @@ async def on_date(message: Message, state: FSMContext) -> None:
 
     await state.update_data(birth_date=birth_date.isoformat())
     await message.answer(
-        "Теперь введи <b>время рождения</b> в формате <code>HH:MM</code> "
+        "Хорошо ✨\n\n"
+        "Теперь <b>время рождения</b> в формате <code>HH:MM</code> "
         "(например, <code>14:30</code>).\n\n"
-        "Если точное время неизвестно — нажми кнопку ниже, я построю солнечную карту "
-        "(без домов и Асцендента).",
+        "Если точное время неизвестно — нажми кнопку ниже. "
+        "Я тогда построю солнечную карту — она расскажет о тебе многое, "
+        "но без домов и Асцендента.",
         reply_markup=time_unknown_kb(),
     )
     await state.set_state(Onboarding.waiting_for_time)
@@ -91,7 +96,8 @@ async def on_date(message: Message, state: FSMContext) -> None:
 async def on_time_unknown(call: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(birth_time=time(12, 0).isoformat(), time_unknown=True)
     await call.message.answer(
-        "Хорошо, строим солнечную карту. Теперь введи <b>город рождения</b> "
+        "Поняла, делаем солнечную карту 🌞\n\n"
+        "Последнее — <b>город рождения</b> "
         "(например, <code>Москва</code> или <code>Новосибирск</code>):"
     )
     await state.set_state(Onboarding.waiting_for_city)
@@ -112,7 +118,8 @@ async def on_time(message: Message, state: FSMContext) -> None:
 
     await state.update_data(birth_time=birth_time.isoformat(), time_unknown=False)
     await message.answer(
-        "Отлично. Теперь введи <b>город рождения</b> "
+        "Отлично ✨\n\n"
+        "Последнее — <b>город рождения</b> "
         "(например, <code>Москва</code> или <code>Новосибирск</code>):"
     )
     await state.set_state(Onboarding.waiting_for_city)
@@ -125,14 +132,14 @@ async def on_city(message: Message, state: FSMContext, session: AsyncSession) ->
         await message.answer("Слишком короткое название. Введи город, например <code>Москва</code>.")
         return
 
-    progress = await message.answer("Ищу город…")
+    progress = await message.answer("🔍 Ищу твой город на карте…")
     result = await geocode_city(session, query)
     await progress.delete()
 
     if result is None:
         await message.answer(
-            "Не нашёл такой город. Попробуй ввести по-другому "
-            "(например, <code>Санкт-Петербург, Россия</code>)."
+            "Не нашла такой город — может, написать по-другому? "
+            "(например, <code>Санкт-Петербург, Россия</code>)"
         )
         return
 
@@ -171,17 +178,17 @@ async def on_confirm_save(
 
     await state.clear()
     await call.message.answer(
-        "Данные сохранены ✨\nВыбери, что тебя интересует:",
+        "🌙 Запомнила. Твоя карта со мной — теперь спрашивай о чём угодно ✨",
         reply_markup=main_menu(),
     )
-    await call.answer("Сохранено")
+    await call.answer("Готово")
 
 
 @router.callback_query(Onboarding.confirming, F.data == "onb:restart")
 async def on_confirm_restart(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(Onboarding.waiting_for_date)
     await call.message.answer(
-        "Хорошо, начнём заново. Введи <b>дату рождения</b> в формате <code>DD.MM.YYYY</code>:"
+        "Хорошо, начнём сначала. <b>Дата рождения</b> в формате <code>DD.MM.YYYY</code>:"
     )
     await call.answer()
 
@@ -189,5 +196,5 @@ async def on_confirm_restart(call: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "cancel")
 async def on_cancel(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await call.message.answer("Отменено.", reply_markup=main_menu())
+    await call.message.answer("Хорошо, отложила ✨", reply_markup=main_menu())
     await call.answer()

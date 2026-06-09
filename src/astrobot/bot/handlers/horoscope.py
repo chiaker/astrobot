@@ -33,7 +33,9 @@ async def on_horoscope_menu(message: Message, session: AsyncSession, user: User)
     profile = await need_profile(message, session, user)
     if profile is None:
         return
-    await message.answer("На какой период?", reply_markup=horoscope_period_kb())
+    await message.answer(
+        "🔮 На какой период посмотрим?", reply_markup=horoscope_period_kb()
+    )
 
 
 @router.callback_query(F.data.startswith("horo:"))
@@ -54,7 +56,7 @@ async def on_horoscope_period(
         return
 
     await call.answer()
-    progress = await call.message.answer("Считаю транзиты…")
+    progress = await call.message.answer("🔮 Смотрю, какие планеты идут к тебе сейчас…")
 
     birth = _profile_to_birth(profile, name=call.from_user.full_name or "User")
     today = midnight_today_in(birth.tz)
@@ -72,7 +74,7 @@ async def on_horoscope_period(
         "month": "Дай гороскоп на ближайший месяц.",
     }[period]
 
-    await progress.edit_text("Готовлю интерпретацию…")
+    await progress.edit_text("✨ Складываю узор периода…")
 
     llm = get_llm()
     response = await llm.complete(

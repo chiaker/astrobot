@@ -136,8 +136,8 @@ class RateLimitMiddleware(BaseMiddleware):
         )
         if used is not None and used >= settings.daily_question_limit:
             await event.answer(
-                f"Дневной лимит запросов исчерпан ({settings.daily_question_limit}). "
-                "Возвращайся завтра."
+                f"🌙 На сегодня хватит — я успела ответить тебе {settings.daily_question_limit} раз. "
+                "Возвращайся завтра, звёзды никуда не денутся ✨"
             )
             return None
 

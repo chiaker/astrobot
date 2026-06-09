@@ -32,8 +32,8 @@ async def on_question_button(
         return
     await state.set_state(AskingQuestion.waiting_for_text)
     await message.answer(
-        "Напиши свой вопрос одним сообщением. "
-        "Я отвечу с учётом твоей натальной карты.",
+        "🌙 Слушаю.\n\n"
+        "Спроси одним сообщением — я отвечу через твою карту.",
         reply_markup=cancel_kb(),
     )
 
@@ -47,17 +47,17 @@ async def on_question_text(
 ) -> None:
     question = (message.text or "").strip()
     if len(question) < 3:
-        await message.answer("Слишком короткий вопрос — опиши подробнее.")
+        await message.answer("Слишком коротко — расскажи подробнее, что тебя волнует.")
         return
 
     profile = await session.get(BirthProfile, user.id)
     if profile is None:
         await state.clear()
-        await message.answer("Сначала пройди онбординг через /start.")
+        await message.answer("Сначала познакомимся — нажми /start.")
         return
 
     await state.clear()
-    progress = await message.answer("Думаю…")
+    progress = await message.answer("🌟 Прикладываю карту к твоему вопросу…")
 
     birth = _profile_to_birth(profile, name=message.from_user.full_name or "User")
     chart = build_natal_chart(birth)

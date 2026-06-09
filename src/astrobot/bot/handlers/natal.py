@@ -47,12 +47,12 @@ async def on_natal(message: Message, session: AsyncSession, user: User) -> None:
         )
         return
 
-    progress = await message.answer("Считаю карту…")
+    progress = await message.answer("🌙 Слушаю, что говорят звёзды о тебе…")
     birth = _profile_to_birth(profile, name=message.from_user.full_name or "User")
     chart = build_natal_chart(birth)
     cached_context = chart_to_markdown(chart)
 
-    await progress.edit_text("Готовлю интерпретацию…")
+    await progress.edit_text("✨ Складываю узор твоей карты…")
 
     llm = get_llm()
     response = await llm.complete(

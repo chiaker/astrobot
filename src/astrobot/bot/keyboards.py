@@ -7,10 +7,10 @@ from aiogram.types import (
 
 MENU_NATAL = "🌟 Натальная карта"
 MENU_HOROSCOPE = "🔮 Гороскоп"
-MENU_QUESTION = "💬 Задать вопрос"
+MENU_QUESTION = "💬 Спросить Астру"
 MENU_PROFILE = "👤 Профиль"
 MENU_PREMIUM = "💎 Премиум"
-MENU_ABOUT = "ℹ️ О боте"
+MENU_ABOUT = "ℹ️ Об Астре"
 
 
 def main_menu() -> ReplyKeyboardMarkup:
