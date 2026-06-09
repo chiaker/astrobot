@@ -1,0 +1,444 @@
+/* Astra — custom skin for SQLAdmin (Tabler-based) */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+    --astra-purple: #7c3aed;
+    --astra-purple-soft: #a78bfa;
+    --astra-purple-deep: #5b21b6;
+    --astra-purple-darker: #4c1d95;
+    --astra-indigo: #1e1b4b;
+    --astra-bg: #f8fafc;
+    --astra-surface: #ffffff;
+    --astra-text: #1e293b;
+    --astra-text-soft: #64748b;
+    --astra-border: #e2e8f0;
+    --astra-border-soft: #f1f5f9;
+    --astra-gold: #fbbf24;
+    --astra-success: #10b981;
+    --astra-danger: #ef4444;
+}
+
+/* ---------- Base ---------- */
+
+body,
+.page,
+.page-wrapper {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: var(--astra-bg) !important;
+    color: var(--astra-text);
+    -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, .page-title {
+    color: var(--astra-text);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+.page-pretitle {
+    color: var(--astra-text-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-weight: 600;
+    font-size: 11px;
+}
+
+a {
+    color: var(--astra-purple);
+    text-decoration: none;
+    transition: color 0.15s ease;
+}
+
+a:hover {
+    color: var(--astra-purple-deep);
+}
+
+/* ---------- Sidebar / Navbar ---------- */
+
+.navbar-vertical {
+    background: linear-gradient(180deg, var(--astra-indigo) 0%, var(--astra-purple-darker) 100%);
+    border-right: none;
+    box-shadow: 4px 0 24px rgba(76, 29, 149, 0.15);
+}
+
+.navbar-vertical .navbar-brand {
+    color: #fff !important;
+    font-weight: 700;
+    font-size: 1.25rem;
+    letter-spacing: 0.5px;
+    padding: 20px 16px;
+}
+
+.navbar-vertical .navbar-brand::before {
+    content: "✨ ";
+}
+
+.navbar-vertical .nav-link {
+    color: rgba(255, 255, 255, 0.72) !important;
+    border-radius: 8px;
+    margin: 2px 12px;
+    padding: 8px 12px;
+    transition: all 0.15s ease;
+    font-weight: 500;
+}
+
+.navbar-vertical .nav-link:hover {
+    color: #fff !important;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.navbar-vertical .nav-link.active,
+.navbar-vertical .nav-link.show {
+    color: #fff !important;
+    background: rgba(167, 139, 250, 0.25);
+    box-shadow: inset 3px 0 0 var(--astra-purple-soft);
+}
+
+.navbar-vertical .nav-link-icon {
+    color: rgba(255, 255, 255, 0.5);
+    margin-right: 10px;
+}
+
+.navbar-vertical .nav-link:hover .nav-link-icon,
+.navbar-vertical .nav-link.active .nav-link-icon {
+    color: var(--astra-gold);
+}
+
+/* Category headers */
+.navbar-vertical h3.h6,
+.navbar-vertical .nav-section h6 {
+    color: rgba(255, 255, 255, 0.45) !important;
+    font-size: 10px;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    font-weight: 700;
+    padding: 20px 24px 8px;
+    margin: 0;
+}
+
+.navbar-vertical .navbar-nav .nav-item {
+    margin: 0;
+}
+
+/* Header (top bar) */
+.navbar-light {
+    background: var(--astra-surface) !important;
+    border-bottom: 1px solid var(--astra-border);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+/* ---------- Cards ---------- */
+
+.card {
+    border-radius: 14px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.03);
+    border: 1px solid var(--astra-border);
+    background: var(--astra-surface);
+    transition: box-shadow 0.2s ease;
+}
+
+.card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+.card-header {
+    border-bottom: 1px solid var(--astra-border);
+    background: transparent;
+    padding: 1.25rem 1.5rem;
+}
+
+.card-header .card-title {
+    margin: 0;
+    color: var(--astra-text);
+    font-weight: 700;
+    font-size: 1.05rem;
+}
+
+/* ---------- Tables ---------- */
+
+.table-responsive {
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.table {
+    margin: 0;
+}
+
+.table thead th {
+    background-color: #f8fafc;
+    color: var(--astra-text-soft);
+    font-weight: 600;
+    font-size: 0.74rem;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    border-bottom: 1px solid var(--astra-border);
+    padding: 0.85rem 1rem;
+    white-space: nowrap;
+}
+
+.table tbody tr {
+    transition: background-color 0.12s ease;
+}
+
+.table tbody tr:hover {
+    background-color: #faf7ff;
+}
+
+.table tbody td {
+    padding: 0.85rem 1rem;
+    vertical-align: middle;
+    border-bottom: 1px solid var(--astra-border-soft);
+    font-size: 0.92rem;
+    color: var(--astra-text);
+}
+
+.table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+/* ---------- Buttons ---------- */
+
+.btn {
+    border-radius: 8px;
+    font-weight: 600;
+    padding: 0.5rem 1rem;
+    transition: all 0.15s ease;
+    border-width: 1px;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, var(--astra-purple) 0%, var(--astra-purple-deep) 100%);
+    border-color: var(--astra-purple-deep);
+    box-shadow: 0 1px 3px rgba(124, 58, 237, 0.25);
+}
+
+.btn-primary:hover,
+.btn-primary:focus {
+    background: linear-gradient(135deg, var(--astra-purple-deep) 0%, var(--astra-purple-darker) 100%);
+    border-color: var(--astra-purple-darker);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(124, 58, 237, 0.35);
+}
+
+.btn-secondary {
+    background: var(--astra-border-soft);
+    color: var(--astra-text);
+    border-color: var(--astra-border);
+}
+
+.btn-secondary:hover {
+    background: var(--astra-border);
+    color: var(--astra-text);
+}
+
+.btn-danger {
+    background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%);
+    border-color: #b91c1c;
+}
+
+.btn-outline-primary {
+    color: var(--astra-purple);
+    border-color: var(--astra-purple);
+}
+
+.btn-outline-primary:hover {
+    background: var(--astra-purple);
+    color: #fff;
+}
+
+/* ---------- Forms ---------- */
+
+.form-control,
+.form-select {
+    border-radius: 8px;
+    border-color: var(--astra-border);
+    padding: 0.55rem 0.85rem;
+    transition: all 0.15s ease;
+}
+
+.form-control:focus,
+.form-select:focus {
+    border-color: var(--astra-purple-soft);
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.12);
+}
+
+.form-label {
+    color: var(--astra-text);
+    font-weight: 600;
+    font-size: 0.9rem;
+    margin-bottom: 0.4rem;
+}
+
+/* ---------- Pagination ---------- */
+
+.pagination .page-link {
+    color: var(--astra-purple);
+    border-color: var(--astra-border);
+    padding: 0.5rem 0.85rem;
+    border-radius: 6px;
+    margin: 0 2px;
+    font-weight: 600;
+}
+
+.pagination .page-link:hover {
+    background: var(--astra-border-soft);
+    color: var(--astra-purple-deep);
+}
+
+.pagination .page-item.active .page-link {
+    background: linear-gradient(135deg, var(--astra-purple) 0%, var(--astra-purple-deep) 100%);
+    border-color: var(--astra-purple-deep);
+    color: #fff;
+}
+
+.pagination .page-item.disabled .page-link {
+    color: var(--astra-text-soft);
+}
+
+/* ---------- Badges ---------- */
+
+.badge {
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+    letter-spacing: 0.2px;
+}
+
+.bg-primary,
+.badge.bg-primary {
+    background: var(--astra-purple) !important;
+}
+
+.bg-success {
+    background: var(--astra-success) !important;
+}
+
+.bg-danger {
+    background: var(--astra-danger) !important;
+}
+
+/* ---------- Login page ---------- */
+
+.page-center {
+    background: linear-gradient(135deg, var(--astra-indigo) 0%, var(--astra-purple-darker) 50%, var(--astra-purple-deep) 100%);
+    min-height: 100vh;
+}
+
+.page-center .card {
+    border-radius: 18px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    border: none;
+    overflow: hidden;
+}
+
+.page-center .card-title {
+    font-size: 1.5rem;
+    text-align: center;
+    color: var(--astra-text);
+}
+
+.page-center .card-title::before {
+    content: "🌙 ";
+}
+
+/* ---------- Alerts ---------- */
+
+.alert {
+    border-radius: 10px;
+    border: 1px solid;
+    border-left-width: 4px;
+}
+
+.alert-success {
+    background: #ecfdf5;
+    border-color: var(--astra-success);
+    color: #065f46;
+}
+
+.alert-danger {
+    background: #fef2f2;
+    border-color: var(--astra-danger);
+    color: #991b1b;
+}
+
+/* ---------- Dropdown ---------- */
+
+.dropdown-menu {
+    border-radius: 10px;
+    border: 1px solid var(--astra-border);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+    padding: 6px;
+}
+
+.dropdown-item {
+    border-radius: 6px;
+    padding: 0.5rem 0.85rem;
+    color: var(--astra-text);
+    font-weight: 500;
+}
+
+.dropdown-item:hover {
+    background: var(--astra-border-soft);
+    color: var(--astra-purple-deep);
+}
+
+/* ---------- Empty state ---------- */
+
+.empty {
+    color: var(--astra-text-soft);
+    padding: 3rem 1rem;
+}
+
+.empty-title {
+    color: var(--astra-text);
+    font-weight: 700;
+}
+
+.empty-img {
+    opacity: 0.5;
+}
+
+/* ---------- Misc tweaks ---------- */
+
+hr {
+    border-color: var(--astra-border);
+    opacity: 1;
+}
+
+code {
+    background: var(--astra-border-soft);
+    color: var(--astra-purple-deep);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.88em;
+}
+
+.text-muted {
+    color: var(--astra-text-soft) !important;
+}
+
+/* Input search icon */
+.input-icon-addon {
+    color: var(--astra-purple);
+}
+
+/* Scrollbar (webkit) */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--astra-border-soft);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--astra-purple-soft);
+    border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--astra-purple);
+}
