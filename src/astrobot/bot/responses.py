@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import html
 
 import structlog
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,7 +55,10 @@ def chunk_text(text: str, limit: int = CHUNK_LIMIT) -> list[str]:
 
 
 async def safe_answer(target: Message, text: str, **kwargs) -> Message:
-    """Send with flood-control retry: on TelegramRetryAfter, sleep then retry once."""
+    """Send with two safety nets:
+    - TelegramRetryAfter: sleep then retry once.
+    - HTML parse error: fall back to plain-text (HTML-escaped) send.
+    """
     for attempt in range(2):
         try:
             return await target.answer(text, **kwargs)
@@ -64,6 +68,14 @@ async def safe_answer(target: Message, text: str, **kwargs) -> Message:
                 raise
             log.warning("flood_retry_after_sleep", seconds=e.retry_after)
             await asyncio.sleep(e.retry_after + 0.5)
+        except TelegramBadRequest as e:
+            msg = str(e).lower()
+            if "can't parse entities" in msg or "unsupported start tag" in msg:
+                log.warning("html_parse_fallback", error=str(e))
+                fallback = html.escape(text)
+                kwargs_plain = {**kwargs, "parse_mode": None}
+                return await target.answer(fallback, **kwargs_plain)
+            raise
     raise RuntimeError("unreachable")
 
 

@@ -81,7 +81,7 @@ async def on_question_text(
         cached_context=natal_md,
         user_message=question,
         history=history_msgs,
-        max_tokens=1500,
+        max_tokens=2500,
         kind="question",
     )
     brief, full = split_brief_full(response.text)

@@ -59,7 +59,7 @@ async def on_natal(message: Message, session: AsyncSession, user: User) -> None:
         system=SYSTEM_NATAL,
         cached_context=cached_context,
         user_message="Дай интерпретацию натальной карты.",
-        max_tokens=2500,
+        max_tokens=4500,
         kind="natal",
     )
     brief, full = split_brief_full(response.text)

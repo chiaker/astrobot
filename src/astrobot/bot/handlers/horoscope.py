@@ -79,7 +79,7 @@ async def on_horoscope_period(
         system=SYSTEM_HOROSCOPE,
         cached_context=cached_context,
         user_message=user_prompt,
-        max_tokens=1800,
+        max_tokens=2800,
         kind=f"horoscope_{period}",
     )
     brief, full = split_brief_full(response.text)
