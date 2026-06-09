@@ -45,9 +45,14 @@ target-version = "py312"
 src = ["src"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "ASYNC", "SIM", "RUF"]
-# RUF001/002/003 — ambiguous unicode chars; we intentionally use Cyrillic.
-ignore = ["E501", "RUF001", "RUF002", "RUF003"]
+# Pragmatic baseline for a FastAPI + aiogram production app.
+# E — syntax & basic style, F — pyflakes (real bugs: unused/undefined),
+# I — import sorting, UP — modernize Python syntax.
+# We avoid B/SIM/ASYNC/RUF families: too many false positives with
+# FastAPI Depends, aiogram middlewares, intentional `try/except/pass`,
+# and Cyrillic string literals.
+select = ["E", "F", "I", "UP"]
+ignore = ["E501", "E402"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
