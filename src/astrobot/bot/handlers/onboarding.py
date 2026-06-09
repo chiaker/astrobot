@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.astrology.geocoding import geocode_city
 from astrobot.bot.keyboards import (
-    cancel_kb,
     confirm_kb,
     main_menu,
     time_unknown_kb,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
@@ -126,7 +126,7 @@ class RateLimitMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         settings = get_settings()
-        since = datetime.now(timezone.utc) - timedelta(days=1)
+        since = datetime.now(UTC) - timedelta(days=1)
         used = await session.scalar(
             select(func.count(LLMUsageLog.id)).where(
                 LLMUsageLog.user_id == user.id,
