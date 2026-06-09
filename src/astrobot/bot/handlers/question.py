@@ -21,6 +21,7 @@ from astrobot.bot.responses import chunk_text, safe_answer
 from astrobot.bot.states import AskingQuestion
 from astrobot.bot.utils import need_profile
 from astrobot.db.models import BirthProfile, LLMUsageLog, QuestionLog, User
+from astrobot.limits import check_question, paywall_text
 from astrobot.llm.client import HistoryMessage, get_llm
 from astrobot.llm.prompts import SYSTEM_QUESTION
 
@@ -36,6 +37,10 @@ async def on_question_button(
 ) -> None:
     profile = await need_profile(message, session, user)
     if profile is None:
+        return
+    allowance = await check_question(session, user)
+    if not allowance.allowed:
+        await message.answer(paywall_text("question", allowance))
         return
     await state.set_state(AskingQuestion.waiting_for_text)
     await message.answer(
@@ -139,6 +144,16 @@ async def on_ask_again(
     profile = await session.get(BirthProfile, user.id)
     if profile is None:
         await call.answer("Сначала пройди /start", show_alert=True)
+        return
+
+    allowance = await check_question(session, user)
+    if not allowance.allowed:
+        await call.answer()
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await call.message.answer(paywall_text("question", allowance))
         return
 
     await call.answer()

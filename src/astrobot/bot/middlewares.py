@@ -1,18 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
 from aiogram import BaseMiddleware
-from aiogram.types import Message, TelegramObject, Update
+from aiogram.types import TelegramObject, Update
 from aiogram.types import User as TgUser
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from astrobot.config import get_settings
-from astrobot.db.models import LLMUsageLog, User
+from astrobot.db.models import User
 from astrobot.db.session import get_sessionmaker
 from astrobot.metrics import DUPLICATE_UPDATES_TOTAL
 from astrobot.redis_client import get_redis
@@ -91,54 +89,3 @@ class UserMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
-class RateLimitMiddleware(BaseMiddleware):
-    """Caps daily LLM-burning actions per user.
-
-    Counts rows in `llm_usage_logs` created in the last 24h. Replies with a
-    polite message when the limit is hit and stops the handler chain. Bound
-    to message router so onboarding /start always passes through.
-    """
-
-    BLOCKED_KINDS = {"question", "horoscope:today", "horoscope:week", "horoscope:month", "natal"}
-
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
-        event: TelegramObject,
-        data: dict[str, Any],
-    ) -> Any:
-        from astrobot.bot.keyboards import (
-            MENU_HOROSCOPE,
-            MENU_NATAL,
-            MENU_QUESTION,
-        )
-
-        if not isinstance(event, Message) or event.text not in {
-            MENU_NATAL,
-            MENU_HOROSCOPE,
-            MENU_QUESTION,
-        }:
-            return await handler(event, data)
-
-        user: User | None = data.get("user")
-        session: AsyncSession = data["session"]
-        if user is None:
-            return await handler(event, data)
-
-        settings = get_settings()
-        since = datetime.now(UTC) - timedelta(days=1)
-        used = await session.scalar(
-            select(func.count(LLMUsageLog.id)).where(
-                LLMUsageLog.user_id == user.id,
-                LLMUsageLog.created_at >= since,
-                LLMUsageLog.kind.in_(self.BLOCKED_KINDS),
-            )
-        )
-        if used is not None and used >= settings.daily_question_limit:
-            await event.answer(
-                f"🌙 На сегодня хватит — я успела ответить тебе {settings.daily_question_limit} раз. "
-                "Возвращайся завтра, звёзды никуда не денутся ✨"
-            )
-            return None
-
-        return await handler(event, data)

@@ -11,6 +11,7 @@ from astrobot.bot.keyboards import MENU_NATAL
 from astrobot.bot.responses import save_and_send_response
 from astrobot.bot.utils import need_profile
 from astrobot.db.models import BirthProfile, LLMUsageLog, User
+from astrobot.limits import check_natal, paywall_text
 from astrobot.llm.client import get_llm
 from astrobot.llm.prompts import SYSTEM_NATAL, split_brief_full
 
@@ -45,6 +46,11 @@ async def on_natal(message: Message, session: AsyncSession, user: User) -> None:
             profile.cached_natal_brief,
             profile.cached_natal_full,
         )
+        return
+
+    allowance = await check_natal(session, user)
+    if not allowance.allowed:
+        await message.answer(paywall_text("natal", allowance))
         return
 
     progress = await message.answer("🌙 Слушаю, что говорят звёзды о тебе…")

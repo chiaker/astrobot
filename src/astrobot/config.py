@@ -30,8 +30,6 @@ class Settings(BaseSettings):
     llm_model_horoscope: str | None = Field(default=None, alias="LLM_MODEL_HOROSCOPE")
     llm_model_question: str | None = Field(default=None, alias="LLM_MODEL_QUESTION")
 
-    daily_question_limit: int = Field(default=20, alias="DAILY_QUESTION_LIMIT")
-
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     admin_user: str = Field(default="admin", alias="ADMIN_USER")

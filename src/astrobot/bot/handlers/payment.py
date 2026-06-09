@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.types import (
@@ -9,8 +10,11 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.keyboards import MENU_PREMIUM
+from astrobot.db.models import User
+from astrobot.limits import is_premium
 
 router = Router(name="payment")
 
@@ -20,6 +24,7 @@ class Plan:
     code: str
     title: str
     price_rub: int
+    duration_days: int
     duration_label: str
     bullets: tuple[str, ...]
 
@@ -29,10 +34,11 @@ PLANS: tuple[Plan, ...] = (
         code="month",
         title="Премиум на месяц",
         price_rub=299,
+        duration_days=30,
         duration_label="30 дней",
         bullets=(
-            "100 вопросов в день",
-            "Безлимитные гороскопы",
+            "До 30 вопросов в день",
+            "До 5 гороскопов в день",
             "Приоритет в очереди",
         ),
     ),
@@ -40,6 +46,7 @@ PLANS: tuple[Plan, ...] = (
         code="half",
         title="Премиум на полгода",
         price_rub=1499,
+        duration_days=180,
         duration_label="180 дней",
         bullets=(
             "Всё из месячного",
@@ -51,6 +58,7 @@ PLANS: tuple[Plan, ...] = (
         code="year",
         title="Премиум на год",
         price_rub=2499,
+        duration_days=365,
         duration_label="365 дней",
         bullets=(
             "Всё из полугодового",
@@ -75,13 +83,21 @@ def _plans_kb() -> InlineKeyboardMarkup:
     )
 
 
-def _intro_text() -> str:
+def _intro_text(user: User) -> str:
+    if is_premium(user) and user.premium_until:
+        until = user.premium_until.strftime("%d.%m.%Y")
+        return (
+            "💎 <b>Премиум активен</b>\n\n"
+            f"Действует до <b>{until}</b>. Звёзды в твоём распоряжении ✨\n\n"
+            "Можно продлить — следующий платёж сложится к текущему сроку."
+        )
+
     lines = [
-        "<b>💎 Премиум-подписка</b>",
+        "💎 <b>Премиум-подписка</b>",
         "",
-        "Сейчас у тебя <b>бесплатный</b> тариф: 20 запросов в день, базовый набор фич.",
+        "Бесплатно у тебя: 1 натальная карта, 1 гороскоп в день, 3 вопроса всего.",
         "",
-        "Премиум открывает больше:",
+        "Премиум открывает Астру по-настоящему:",
     ]
     for p in PLANS:
         lines.append("")
@@ -92,22 +108,32 @@ def _intro_text() -> str:
 
 
 @router.message(F.text == MENU_PREMIUM)
-async def on_premium(message: Message) -> None:
-    await message.answer(_intro_text(), reply_markup=_plans_kb())
+async def on_premium(message: Message, user: User) -> None:
+    await message.answer(_intro_text(user), reply_markup=_plans_kb())
 
 
 @router.callback_query(F.data.startswith("pay:"))
-async def on_pay(call: CallbackQuery) -> None:
+async def on_pay(
+    call: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
     code = call.data.split(":", 1)[1]
     plan = next((p for p in PLANS if p.code == code), None)
     if plan is None:
         await call.answer("План не найден", show_alert=True)
         return
 
+    now = datetime.now(UTC)
+    base = user.premium_until if user.premium_until and user.premium_until > now else now
+    user.premium_until = base + timedelta(days=plan.duration_days)
+    await session.commit()
+
+    until_str = user.premium_until.strftime("%d.%m.%Y")
     await call.message.answer(
-        f"🚧 <b>Это пока заглушка.</b>\n\n"
-        f"План <b>{plan.title}</b> за <b>{plan.price_rub} ₽</b> готов к покупке, "
-        f"но платёжная интеграция (YooKassa / Telegram Stars) ещё не подключена.\n\n"
-        f"Когда заработает — деньги спишутся, премиум активируется автоматически."
+        "🧪 <b>Тестовый режим</b> — реальной оплаты не было.\n\n"
+        f"Активирую <b>{plan.title}</b> до <b>{until_str}</b>. "
+        f"Теперь можешь спрашивать и смотреть гороскопы без жёстких границ ✨\n\n"
+        "<i>Когда подключим YooKassa/Telegram Stars — здесь будет реальная ссылка на оплату.</i>"
     )
-    await call.answer("Платежи скоро")
+    await call.answer("Премиум активирован")

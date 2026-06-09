@@ -5,7 +5,6 @@ from aiogram.fsm.storage.redis import DefaultKeyBuilder, RedisStorage
 
 from astrobot.bot.middlewares import (
     DbSessionMiddleware,
-    RateLimitMiddleware,
     UpdateDedupeMiddleware,
     UserMiddleware,
 )
@@ -44,7 +43,6 @@ def build_dispatcher() -> Dispatcher:
     dp.update.middleware(UpdateDedupeMiddleware())
     dp.update.middleware(DbSessionMiddleware())
     dp.update.middleware(UserMiddleware())
-    dp.message.middleware(RateLimitMiddleware())
 
     dp.include_router(errors.router)
     dp.include_router(onboarding.router)

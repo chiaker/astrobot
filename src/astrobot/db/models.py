@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     Time,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -30,6 +31,9 @@ class User(Base):
     tg_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     lang: Mapped[str] = mapped_column(String(8), default="ru")
     default_response: Mapped[str] = mapped_column(String(8), default="brief")
+    premium_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -112,6 +116,25 @@ class Response(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="responses")
+
+
+class HoroscopeCache(Base):
+    __tablename__ = "horoscope_cache"
+    __table_args__ = (
+        UniqueConstraint("user_id", "period", name="uq_horoscope_cache_user_period"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    period: Mapped[str] = mapped_column(String(16))
+    computed_for: Mapped[date] = mapped_column(Date)
+    brief: Mapped[str] = mapped_column(Text)
+    full: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class LLMUsageLog(Base):

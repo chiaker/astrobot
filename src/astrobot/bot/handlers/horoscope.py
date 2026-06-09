@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date, timedelta
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.astrology.chart import build_natal_chart
@@ -21,11 +23,32 @@ from astrobot.bot.keyboards import (
 )
 from astrobot.bot.responses import save_and_send_response
 from astrobot.bot.utils import need_profile
-from astrobot.db.models import BirthProfile, LLMUsageLog, User
+from astrobot.db.models import BirthProfile, HoroscopeCache, LLMUsageLog, User
+from astrobot.limits import check_horoscope, paywall_text
 from astrobot.llm.client import get_llm
 from astrobot.llm.prompts import SYSTEM_HOROSCOPE, split_brief_full
 
 router = Router(name="horoscope")
+
+
+def _period_label(period: Period, today: date) -> str:
+    if period == "today":
+        return f"📅 <i>Гороскоп на {today.strftime('%d.%m.%Y')}</i>"
+    if period == "week":
+        end = today + timedelta(days=6)
+        return (
+            f"📅 <i>Гороскоп на неделю: {today.strftime('%d.%m')} — "
+            f"{end.strftime('%d.%m.%Y')}</i>"
+        )
+    end = today + timedelta(days=29)
+    return (
+        f"📅 <i>Гороскоп на месяц: {today.strftime('%d.%m')} — "
+        f"{end.strftime('%d.%m.%Y')}</i>"
+    )
+
+
+def _with_label(text: str, label: str) -> str:
+    return f"{label}\n\n{text}"
 
 
 @router.message(F.text == MENU_HOROSCOPE)
@@ -55,11 +78,36 @@ async def on_horoscope_period(
         await call.answer()
         return
 
-    await call.answer()
-    progress = await call.message.answer("🔮 Смотрю, какие планеты идут к тебе сейчас…")
-
     birth = _profile_to_birth(profile, name=call.from_user.full_name or "User")
     today = midnight_today_in(birth.tz)
+    label = _period_label(period, today)
+
+    cached = await session.scalar(
+        select(HoroscopeCache).where(
+            HoroscopeCache.user_id == user.id,
+            HoroscopeCache.period == period,
+        )
+    )
+    if cached and cached.computed_for == today:
+        await call.answer()
+        await save_and_send_response(
+            call.message,
+            session,
+            user,
+            f"horoscope:{period}",
+            _with_label(cached.brief, label),
+            _with_label(cached.full, label),
+        )
+        return
+
+    allowance = await check_horoscope(session, user)
+    if not allowance.allowed:
+        await call.answer()
+        await call.message.answer(paywall_text("horoscope", allowance))
+        return
+
+    await call.answer()
+    progress = await call.message.answer("🔮 Смотрю, какие планеты идут к тебе сейчас…")
 
     chart = await asyncio.to_thread(build_natal_chart, birth)
     natal_md = chart_to_markdown(chart)
@@ -86,6 +134,21 @@ async def on_horoscope_period(
     )
     brief, full = split_brief_full(response.text)
 
+    if cached:
+        cached.computed_for = today
+        cached.brief = brief
+        cached.full = full
+    else:
+        session.add(
+            HoroscopeCache(
+                user_id=user.id,
+                period=period,
+                computed_for=today,
+                brief=brief,
+                full=full,
+            )
+        )
+
     session.add(
         LLMUsageLog(
             user_id=user.id,
@@ -99,5 +162,10 @@ async def on_horoscope_period(
 
     await progress.delete()
     await save_and_send_response(
-        call.message, session, user, f"horoscope:{period}", brief, full
+        call.message,
+        session,
+        user,
+        f"horoscope:{period}",
+        _with_label(brief, label),
+        _with_label(full, label),
     )
