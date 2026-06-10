@@ -28,7 +28,7 @@ from astrobot.limits import (
     paywall_text,
 )
 from astrobot.llm.client import HistoryMessage, get_llm
-from astrobot.llm.prompts import SYSTEM_QUESTION
+from astrobot.llm.prompts import build_system_question
 from astrobot.metrics import CRISIS_TRIGGERED
 from astrobot.safety.crisis import CRISIS_REPLY, is_crisis
 
@@ -70,7 +70,7 @@ async def _answer_question(
     pre_call_allowance = await check_question(session, user)
     pre_call_used = pre_call_allowance.used
 
-    birth = _profile_to_birth(profile, name=user_name or "User")
+    birth = _profile_to_birth(profile, name=user.display_name or user_name or "User")
     chart = build_natal_chart(birth)
     natal_md = chart_to_markdown(chart)
 
@@ -87,7 +87,7 @@ async def _answer_question(
 
     llm = get_llm()
     response = await llm.complete(
-        system=SYSTEM_QUESTION,
+        system=build_system_question(user),
         cached_context=natal_md,
         user_message=question,
         history=history_msgs,

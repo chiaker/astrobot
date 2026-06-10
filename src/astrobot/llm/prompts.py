@@ -1,3 +1,10 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from astrobot.db.models import User
+
 SEPARATOR = "<<<ПОДРОБНО>>>"
 
 ASTRA_PERSONA = (
@@ -46,8 +53,7 @@ _FORMAT_RULES = (
     "3. Заголовки разделов оформляй как <b>Заголовок</b>, не как Markdown."
 )
 
-
-SYSTEM_NATAL = ASTRA_PERSONA + (
+_NATAL_TASK = (
     "Тебе передают натальную карту человека: позиции планет, дома "
     "(если время рождения известно) и аспекты. Дай связную, тёплую "
     "интерпретацию личности на русском языке. Избегай обобщений «все Овны…». "
@@ -66,7 +72,7 @@ SYSTEM_NATAL = ASTRA_PERSONA + (
     + _FORMAT_RULES
 )
 
-SYSTEM_HOROSCOPE = ASTRA_PERSONA + (
+_HOROSCOPE_TASK = (
     "Тебе передают натальную карту и список значимых транзитов на заданный "
     "период. Дай интерпретацию того, как эти транзиты повлияют на человека. "
     "Тон: практичный и конструктивный, без фатализма. "
@@ -81,7 +87,7 @@ SYSTEM_HOROSCOPE = ASTRA_PERSONA + (
     + _FORMAT_RULES
 )
 
-SYSTEM_QUESTION = ASTRA_PERSONA + (
+_QUESTION_TASK = (
     "У тебя есть натальная карта человека (в контексте) и история последних "
     "вопросов и ответов. Отвечай на конкретный вопрос пользователя, опираясь "
     "на карту.\n\n"
@@ -110,8 +116,65 @@ SYSTEM_QUESTION = ASTRA_PERSONA + (
 )
 
 
+def _persona_extra(user: User | None) -> str:
+    if user is None:
+        return ""
+    parts: list[str] = []
+
+    name = user.display_name
+    gender = user.gender
+
+    if name and gender == "m":
+        parts.append(
+            f"Пользователя зовут {name}, это мужчина. "
+            "Обращайся к нему по имени, используй мужской род при согласовании."
+        )
+    elif name and gender == "f":
+        parts.append(
+            f"Пользователя зовут {name}, это женщина. "
+            "Обращайся к ней по имени, используй женский род при согласовании."
+        )
+    elif name:
+        parts.append(f"Пользователя зовут {name}. Обращайся по имени.")
+    elif gender == "m":
+        parts.append("Пользователь — мужчина. Используй мужской род при обращении.")
+    elif gender == "f":
+        parts.append("Пользователь — женщина. Используй женский род при обращении.")
+
+    if not getattr(user, "astro_terms_enabled", True):
+        parts.append(
+            "ВАЖНО: пользователь не знаком с астрологией. "
+            "НЕ используй специальные термины: квадратура, оппозиция, трин, секстиль, "
+            "транзит, прогрессия, синастрия, ингрессия, мутабельный, кардинальный, "
+            "фиксированный, диспозитор, куспид. "
+            "Заменяй простыми словами: «напряжённая связь», «гармоничное соединение», "
+            "«влияние планеты», «смена знака» и т.п."
+        )
+
+    if not parts:
+        return ""
+    return "\n".join(parts) + "\n\n"
+
+
+def build_system_natal(user: User | None = None) -> str:
+    return ASTRA_PERSONA + _persona_extra(user) + _NATAL_TASK
+
+
+def build_system_horoscope(user: User | None = None) -> str:
+    return ASTRA_PERSONA + _persona_extra(user) + _HOROSCOPE_TASK
+
+
+def build_system_question(user: User | None = None) -> str:
+    return ASTRA_PERSONA + _persona_extra(user) + _QUESTION_TASK
+
+
+# Backward-compatible aliases (no user context)
+SYSTEM_NATAL = build_system_natal()
+SYSTEM_HOROSCOPE = build_system_horoscope()
+SYSTEM_QUESTION = build_system_question()
+
+
 def split_brief_full(text: str) -> tuple[str, str]:
-    """Split an LLM response into (brief, full)."""
     if SEPARATOR in text:
         brief, _, full = text.partition(SEPARATOR)
         return brief.strip(), full.strip()

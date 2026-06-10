@@ -7,6 +7,9 @@ class Onboarding(StatesGroup):
     waiting_for_city = State()
     choosing_city = State()
     confirming = State()
+    waiting_for_name = State()
+    choosing_gender = State()
+    choosing_astro_terms = State()
 
 
 class AskingQuestion(StatesGroup):

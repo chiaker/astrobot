@@ -13,7 +13,7 @@ from astrobot.bot.utils import need_profile
 from astrobot.db.models import BirthProfile, LLMUsageLog, User
 from astrobot.limits import check_natal, paywall_text
 from astrobot.llm.client import get_llm
-from astrobot.llm.prompts import SYSTEM_NATAL, split_brief_full
+from astrobot.llm.prompts import build_system_natal, split_brief_full
 
 router = Router(name="natal")
 
@@ -54,7 +54,8 @@ async def on_natal(message: Message, session: AsyncSession, user: User) -> None:
         return
 
     progress = await message.answer("🌙 Слушаю, что говорят звёзды о тебе…")
-    birth = _profile_to_birth(profile, name=message.from_user.full_name or "User")
+    display_name = user.display_name or (message.from_user.full_name if message.from_user else None) or "User"
+    birth = _profile_to_birth(profile, name=display_name)
     chart = build_natal_chart(birth)
     cached_context = chart_to_markdown(chart)
 
@@ -62,7 +63,7 @@ async def on_natal(message: Message, session: AsyncSession, user: User) -> None:
 
     llm = get_llm()
     response = await llm.complete(
-        system=SYSTEM_NATAL,
+        system=build_system_natal(user),
         cached_context=cached_context,
         user_message="Дай интерпретацию натальной карты.",
         max_tokens=4500,

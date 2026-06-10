@@ -55,6 +55,15 @@ def _profile_kb(user: User) -> InlineKeyboardMarkup:
             )
         ]
     )
+    terms_state = "вкл" if user.astro_terms_enabled else "выкл"
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=f"🔭 Астротермины: {terms_state}",
+                callback_data="settings:astro_terms",
+            )
+        ]
+    )
     rows.append(
         [
             InlineKeyboardButton(
@@ -71,8 +80,17 @@ async def _profile_text(profile: BirthProfile, user: User, session: AsyncSession
         if profile.time_unknown
         else profile.birth_time.strftime("%H:%M")
     )
+    name_line = f"👤 Имя: {user.display_name}\n" if user.display_name else ""
+    gender_map = {"m": "мужской", "f": "женский"}
+    gender_line = (
+        f"⚧ Пол: {gender_map.get(user.gender or '', 'не указан')}\n"
+        if user.gender in gender_map
+        else ""
+    )
     base = (
         "<b>Твой профиль</b>\n"
+        f"{name_line}"
+        f"{gender_line}"
         f"📅 Дата: {profile.birth_date.strftime('%d.%m.%Y')}\n"
         f"⏰ Время: {time_str}\n"
         f"📍 Место: {profile.city_name}\n"
@@ -164,6 +182,22 @@ async def on_push_lunar_toggle(
         await call.message.edit_text(text, reply_markup=_profile_kb(user))
     state_label = "включены" if user.push_lunar_enabled else "выключены"
     await call.answer(f"Лунные фазы {state_label}")
+
+
+@router.callback_query(F.data == "settings:astro_terms")
+async def on_astro_terms_toggle(
+    call: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    user.astro_terms_enabled = not user.astro_terms_enabled
+    await session.commit()
+    profile = await session.get(BirthProfile, user.id)
+    if profile is not None:
+        text = await _profile_text(profile, user, session)
+        await call.message.edit_text(text, reply_markup=_profile_kb(user))
+    label = "включены" if user.astro_terms_enabled else "выключены"
+    await call.answer(f"Астрологические термины {label}")
 
 
 @router.callback_query(F.data == "profile:reset")

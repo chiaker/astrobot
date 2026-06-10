@@ -123,6 +123,9 @@ class UserAdmin(ModelView, model=User):
         User.id,
         User.tg_user_id,
         "tier",
+        User.display_name,
+        User.gender,
+        User.astro_terms_enabled,
         User.bonus_questions,
         User.referral_code,
         User.referred_by_user_id,
@@ -133,6 +136,9 @@ class UserAdmin(ModelView, model=User):
     ]
     column_labels = {
         User.tg_user_id: "Telegram ID",
+        User.display_name: "Имя",
+        User.gender: "Пол",
+        User.astro_terms_enabled: "Термины",
         User.bonus_questions: "Бонусные ?",
         User.referral_code: "Реф-код",
         User.referred_by_user_id: "Пригласил",
@@ -147,6 +153,7 @@ class UserAdmin(ModelView, model=User):
     }
     column_formatters = {
         "tier": lambda m, _: _tier_badge(m),
+        User.gender: lambda m, _: {"m": "♂ М", "f": "♀ Ж"}.get(m.gender or "", "—"),
         User.created_at: lambda m, _: _fmt_dt(m.created_at),
         User.premium_until: lambda m, _: _fmt_dt(m.premium_until),
         User.legal_agreed_at: lambda m, _: _fmt_dt(m.legal_agreed_at),

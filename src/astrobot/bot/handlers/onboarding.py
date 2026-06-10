@@ -10,8 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.astrology.geocoding import geocode_city
 from astrobot.bot.keyboards import (
+    astro_terms_kb,
     confirm_kb,
+    gender_kb,
     main_menu,
+    name_skip_kb,
     time_unknown_kb,
 )
 from astrobot.bot.states import Onboarding
@@ -195,13 +198,94 @@ async def on_confirm_save(
     if user.legal_agreed_at is None:
         user.legal_agreed_at = datetime.now(UTC)
     await session.commit()
+    await call.answer("Данные сохранены")
 
+    # First-time onboarding: ask name/gender/terms
+    if user.display_name is None:
+        await state.set_state(Onboarding.waiting_for_name)
+        await call.message.answer(
+            "🌙 Данные сохранила ✨\n\n"
+            "Как мне тебя называть? Напиши своё имя — я буду обращаться к тебе по нему.",
+            reply_markup=name_skip_kb(),
+        )
+    else:
+        # Re-onboarding (profile reset): birth data updated, skip personal prefs
+        await state.clear()
+        await call.message.answer(
+            "🌙 Данные обновлены. Звёзды пересчитаны ✨",
+            reply_markup=main_menu(),
+        )
+
+
+@router.message(Onboarding.waiting_for_name)
+async def on_name(message: Message, state: FSMContext, session: AsyncSession, user: User) -> None:
+    name = (message.text or "").strip()
+    if len(name) < 1 or len(name) > 64:
+        await message.answer("Напиши имя (до 64 символов), или нажми «Пропустить».")
+        return
+    user.display_name = name
+    await session.commit()
+    await _ask_gender(message, state)
+
+
+@router.callback_query(Onboarding.waiting_for_name, F.data == "onb:name:skip")
+async def on_name_skip(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    await _ask_gender(call.message, state)
+
+
+async def _ask_gender(target, state: FSMContext) -> None:
+    await state.set_state(Onboarding.choosing_gender)
+    await target.answer(
+        "Как к тебе обращаться?",
+        reply_markup=gender_kb(),
+    )
+
+
+@router.callback_query(Onboarding.choosing_gender, F.data.startswith("onb:gender:"))
+async def on_gender(
+    call: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    value = call.data.split(":")[-1]
+    if value in ("m", "f"):
+        user.gender = value
+        await session.commit()
+    await call.answer()
+    await _ask_astro_terms(call.message, state)
+
+
+async def _ask_astro_terms(target, state: FSMContext) -> None:
+    await state.set_state(Onboarding.choosing_astro_terms)
+    await target.answer(
+        "Ещё один вопрос — как тебе удобнее читать ответы?\n\n"
+        "<b>С астрологическими терминами</b> (квадратура, транзит, Асцендент…) — "
+        "если ты знаком с астрологией.\n"
+        "<b>Без терминов</b> — простым языком, если термины только мешают.",
+        reply_markup=astro_terms_kb(),
+    )
+
+
+@router.callback_query(Onboarding.choosing_astro_terms, F.data.startswith("onb:terms:"))
+async def on_astro_terms(
+    call: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    enabled = call.data.endswith(":yes")
+    user.astro_terms_enabled = enabled
+    await session.commit()
+    await call.answer()
     await state.clear()
+
+    name_part = f", {user.display_name}" if user.display_name else ""
     await call.message.answer(
-        "🌙 Запомнила. Твоя карта со мной — теперь спрашивай о чём угодно ✨",
+        f"🌙 Запомнила{name_part}. Твоя карта со мной — теперь спрашивай о чём угодно ✨",
         reply_markup=main_menu(),
     )
-    await call.answer("Готово")
 
 
 @router.callback_query(Onboarding.confirming, F.data == "onb:restart")

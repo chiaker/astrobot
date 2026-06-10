@@ -18,7 +18,11 @@ CHUNK_LIMIT = 3800
 INTER_MESSAGE_DELAY = 0.08
 
 
-def response_toggle_kb(response_id: int, current: str) -> InlineKeyboardMarkup:
+def response_toggle_kb(
+    response_id: int,
+    current: str,
+    extra_row: list[InlineKeyboardButton] | None = None,
+) -> InlineKeyboardMarkup:
     if current == "brief":
         toggle = InlineKeyboardButton(
             text="📖 Подробнее", callback_data=f"resp:{response_id}:full"
@@ -28,7 +32,10 @@ def response_toggle_kb(response_id: int, current: str) -> InlineKeyboardMarkup:
             text="📝 Кратко", callback_data=f"resp:{response_id}:brief"
         )
     save = InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{response_id}")
-    return InlineKeyboardMarkup(inline_keyboard=[[save, toggle]])
+    rows: list[list[InlineKeyboardButton]] = [[save, toggle]]
+    if extra_row:
+        rows.append(extra_row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def chunk_text(text: str, limit: int = CHUNK_LIMIT) -> list[str]:
@@ -85,6 +92,7 @@ async def _send_chunks(
     text: str,
     resp_id: int,
     current: str,
+    extra_row: list[InlineKeyboardButton] | None = None,
 ) -> list[int]:
     rendered = md_to_telegram_html(text)
     chunks = chunk_text(rendered)
@@ -92,7 +100,11 @@ async def _send_chunks(
     for i, chunk in enumerate(chunks):
         if i > 0:
             await asyncio.sleep(INTER_MESSAGE_DELAY)
-        kb = response_toggle_kb(resp_id, current) if i == len(chunks) - 1 else None
+        kb = (
+            response_toggle_kb(resp_id, current, extra_row)
+            if i == len(chunks) - 1
+            else None
+        )
         sent = await safe_answer(target, chunk, reply_markup=kb)
         ids.append(sent.message_id)
     return ids
@@ -105,13 +117,16 @@ async def save_and_send_response(
     kind: str,
     brief: str,
     full: str,
+    extra_row: list[InlineKeyboardButton] | None = None,
 ) -> Response:
     resp = Response(user_id=user.id, kind=kind, brief=brief, full=full)
     session.add(resp)
     await session.flush()
 
     text = brief if user.default_response == "brief" else full
-    resp.message_ids = await _send_chunks(message, text, resp.id, user.default_response)
+    resp.message_ids = await _send_chunks(
+        message, text, resp.id, user.default_response, extra_row
+    )
     await session.commit()
     return resp
 

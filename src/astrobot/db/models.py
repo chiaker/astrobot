@@ -47,6 +47,9 @@ class User(Base):
     legal_agreed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    gender: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    astro_terms_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

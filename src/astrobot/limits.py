@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -19,6 +19,7 @@ class LimitSpec:
     horoscope_per_day: int
     question_lifetime: int | None
     question_per_day: int | None
+    question_per_month: int | None = field(default=None)
 
 
 FREE_LIMITS = LimitSpec(
@@ -26,13 +27,16 @@ FREE_LIMITS = LimitSpec(
     horoscope_per_day=1,
     question_lifetime=3,
     question_per_day=None,
+    question_per_month=None,
 )
 
+# Premium: 3 horoscopes/day, 10 questions/month, extra packs via bonus_questions
 PREMIUM_LIMITS = LimitSpec(
     natal_lifetime=99,
-    horoscope_per_day=5,
+    horoscope_per_day=3,
     question_lifetime=None,
-    question_per_day=30,
+    question_per_day=None,
+    question_per_month=10,
 )
 
 
@@ -53,7 +57,7 @@ class Allowance:
     allowed: bool
     used: int
     limit: int
-    window: Literal["day", "lifetime"]
+    window: Literal["day", "lifetime", "month"]
     tier: Tier
 
 
@@ -97,38 +101,43 @@ async def check_horoscope(session: AsyncSession, user: User) -> Allowance:
 async def check_question(session: AsyncSession, user: User) -> Allowance:
     s = spec_of(user)
     t = tier_of(user)
-    if t == "free":
-        limit = s.question_lifetime or 0
-        used = await _count(session, user.id, "question", hours=None)
-        bonus = max(0, user.bonus_questions or 0)
-        # Effective allowance: lifetime quota OR remaining bonus
-        regular_left = max(0, limit - used)
+    bonus = max(0, user.bonus_questions or 0)
+
+    if t == "premium":
+        limit = s.question_per_month or 0
+        used = await _count(session, user.id, "question", hours=24 * 30)
         return Allowance(
-            allowed=regular_left > 0 or bonus > 0,
+            allowed=used < limit or bonus > 0,
             used=used,
             limit=limit + bonus,
-            window="lifetime",
+            window="month",
             tier=t,
         )
-    limit = s.question_per_day or 0
-    used = await _count(session, user.id, "question", hours=24)
+
+    # free tier
+    limit = s.question_lifetime or 0
+    used = await _count(session, user.id, "question", hours=None)
+    regular_left = max(0, limit - used)
     return Allowance(
-        allowed=used < limit,
+        allowed=regular_left > 0 or bonus > 0,
         used=used,
-        limit=limit,
-        window="day",
+        limit=limit + bonus,
+        window="lifetime",
         tier=t,
     )
 
 
 def consume_question_bonus_if_needed(user: User, used_before_call: int) -> None:
-    """If a free user was already past the lifetime limit at the time of the
-    LLM call, this call consumed a bonus question — decrement the counter."""
-    if is_premium(user):
+    """Decrement bonus_questions if the call exhausted the base quota."""
+    bonus = user.bonus_questions or 0
+    if bonus <= 0:
         return
-    limit = FREE_LIMITS.question_lifetime or 0
-    if used_before_call >= limit and (user.bonus_questions or 0) > 0:
-        user.bonus_questions = max(0, user.bonus_questions - 1)
+    if is_premium(user):
+        limit = PREMIUM_LIMITS.question_per_month or 0
+    else:
+        limit = FREE_LIMITS.question_lifetime or 0
+    if used_before_call >= limit:
+        user.bonus_questions = max(0, bonus - 1)
 
 
 CHECKS = {
@@ -140,9 +149,15 @@ CHECKS = {
 
 def paywall_text(kind: Kind, allowance: Allowance) -> str:
     if allowance.tier == "premium":
+        if kind == "horoscope":
+            return (
+                "🌙 На сегодня звёздная карта уже прочитана — вернёмся к ней завтра ✨"
+            )
+        # premium question monthly limit hit
         return (
-            "🌙 На сегодня тебе хватит — звёзды никуда не денутся, "
-            "вернёмся к ним завтра ✨"
+            "🌙 На этот месяц <b>10 вопросов</b> израсходованы. "
+            "Хочешь задать ещё — купи пакет прямо сейчас: "
+            "<b>10 вопросов за 500 ₽</b> ✨"
         )
     if kind == "natal":
         return (
@@ -157,7 +172,8 @@ def paywall_text(kind: Kind, allowance: Allowance) -> str:
             "и сможешь спрашивать чаще ✨"
         )
     return (
-        f"🌙 Ты задал все {allowance.limit} вопроса бесплатного знакомства. "
+        f"🌙 Ты использовал все {allowance.limit} бесплатных вопроса. "
         "Если хочешь, чтобы я отвечала без границ — открой <b>💎 Премиум</b>. "
-        "На месяц всего <b>299 ₽</b> ✨"
+        "Там <b>10 вопросов в месяц</b>, а если понадобится больше — "
+        "пакеты по 10 вопросов за 500 ₽ ✨"
     )

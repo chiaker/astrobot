@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "aiogram>=3.13",
     "alembic>=1.13",
-    "APScheduler>=3.11.2",
+    "APScheduler>=3.10,<4.0",
     "asyncpg>=0.29",
     "cairosvg>=2.7",
     "fastapi>=0.115",

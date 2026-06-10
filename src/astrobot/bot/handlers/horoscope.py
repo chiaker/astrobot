@@ -4,7 +4,7 @@ import asyncio
 from datetime import date, timedelta
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,7 +26,7 @@ from astrobot.bot.utils import need_profile
 from astrobot.db.models import BirthProfile, HoroscopeCache, LLMUsageLog, User
 from astrobot.limits import check_horoscope, paywall_text
 from astrobot.llm.client import get_llm
-from astrobot.llm.prompts import SYSTEM_HOROSCOPE, split_brief_full
+from astrobot.llm.prompts import build_system_horoscope, split_brief_full
 
 router = Router(name="horoscope")
 
@@ -51,6 +51,10 @@ def _with_label(text: str, label: str) -> str:
     return f"{label}\n\n{text}"
 
 
+def _regen_row(period: str) -> list[InlineKeyboardButton]:
+    return [InlineKeyboardButton(text="🔄 Пересчитать заново", callback_data=f"horo:regen:{period}")]
+
+
 @router.message(F.text == MENU_HOROSCOPE)
 async def on_horoscope_menu(message: Message, session: AsyncSession, user: User) -> None:
     profile = await need_profile(message, session, user)
@@ -67,7 +71,18 @@ async def on_horoscope_period(
     session: AsyncSession,
     user: User,
 ) -> None:
-    period: Period = call.data.split(":", 1)[1]  # type: ignore[assignment]
+    parts = call.data.split(":", 2)
+    # horo:<period>  or  horo:regen:<period>
+    if len(parts) == 3 and parts[1] == "regen":
+        period: Period = parts[2]  # type: ignore[assignment]
+        force_regen = True
+    elif len(parts) == 2:
+        period = parts[1]  # type: ignore[assignment]
+        force_regen = False
+    else:
+        await call.answer()
+        return
+
     if period not in {"today", "week", "month"}:
         await call.answer()
         return
@@ -78,28 +93,33 @@ async def on_horoscope_period(
         await call.answer()
         return
 
-    birth = _profile_to_birth(profile, name=call.from_user.full_name or "User")
+    display_name = user.display_name or call.from_user.full_name or "User"
+    birth = _profile_to_birth(profile, name=display_name)
     today = midnight_today_in(birth.tz)
     label = _period_label(period, today)
 
-    cached = await session.scalar(
-        select(HoroscopeCache).where(
-            HoroscopeCache.user_id == user.id,
-            HoroscopeCache.period == period,
+    # Use cached version unless forced regen
+    if not force_regen:
+        cached = await session.scalar(
+            select(HoroscopeCache).where(
+                HoroscopeCache.user_id == user.id,
+                HoroscopeCache.period == period,
+            )
         )
-    )
-    if cached and cached.computed_for == today:
-        await call.answer()
-        await save_and_send_response(
-            call.message,
-            session,
-            user,
-            f"horoscope:{period}",
-            _with_label(cached.brief, label),
-            _with_label(cached.full, label),
-        )
-        return
+        if cached and cached.computed_for == today:
+            await call.answer()
+            await save_and_send_response(
+                call.message,
+                session,
+                user,
+                f"horoscope:{period}",
+                _with_label(cached.brief, label),
+                _with_label(cached.full, label),
+                extra_row=_regen_row(period),
+            )
+            return
 
+    # Check rate limit (applies to both fresh and regen)
     allowance = await check_horoscope(session, user)
     if not allowance.allowed:
         await call.answer()
@@ -126,7 +146,7 @@ async def on_horoscope_period(
 
     llm = get_llm()
     response = await llm.complete(
-        system=SYSTEM_HOROSCOPE,
+        system=build_system_horoscope(user),
         cached_context=cached_context,
         user_message=user_prompt,
         max_tokens=2800,
@@ -134,10 +154,17 @@ async def on_horoscope_period(
     )
     brief, full = split_brief_full(response.text)
 
-    if cached:
-        cached.computed_for = today
-        cached.brief = brief
-        cached.full = full
+    # Update or create cache entry
+    existing = await session.scalar(
+        select(HoroscopeCache).where(
+            HoroscopeCache.user_id == user.id,
+            HoroscopeCache.period == period,
+        )
+    )
+    if existing:
+        existing.computed_for = today
+        existing.brief = brief
+        existing.full = full
     else:
         session.add(
             HoroscopeCache(
@@ -168,4 +195,5 @@ async def on_horoscope_period(
         f"horoscope:{period}",
         _with_label(brief, label),
         _with_label(full, label),
+        extra_row=_regen_row(period),
     )

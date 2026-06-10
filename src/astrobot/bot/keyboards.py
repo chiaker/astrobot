@@ -122,6 +122,43 @@ def horoscope_period_kb() -> InlineKeyboardMarkup:
     )
 
 
+def horoscope_regen_kb(period: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Пересчитать заново", callback_data=f"horo:regen:{period}")]
+        ]
+    )
+
+
+def name_skip_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Пропустить", callback_data="onb:name:skip")]]
+    )
+
+
+def gender_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Мужской", callback_data="onb:gender:m"),
+                InlineKeyboardButton(text="Женский", callback_data="onb:gender:f"),
+            ],
+            [InlineKeyboardButton(text="Не указывать", callback_data="onb:gender:skip")],
+        ]
+    )
+
+
+def astro_terms_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✨ Да, с терминами", callback_data="onb:terms:yes"),
+                InlineKeyboardButton(text="💬 Без терминов", callback_data="onb:terms:no"),
+            ]
+        ]
+    )
+
+
 def city_choice_kb(options: list[tuple[str, str]]) -> InlineKeyboardMarkup:
     """options: list of (label, callback_data)."""
     return InlineKeyboardMarkup(
