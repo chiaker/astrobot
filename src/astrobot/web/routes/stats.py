@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets as _secrets
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -200,7 +201,6 @@ def _layout(title: str, body: str, active: str = "") -> str:
         ("📊 Сводка", "/admin/stats", "stats"),
         ("👥 Юзеры", "/admin/users", "users"),
         ("📋 Логи LLM", "/admin/logs", "logs"),
-        ("🗂 Таблицы", "/admin/user/list", "tables"),
     ]
     nav_html = "".join(
         f'<a href="{url}" class="{"active" if k == active else ""}">{lbl}</a>'
@@ -787,7 +787,74 @@ def _render_logs(logs: list, kind: str, now: datetime) -> str:
     return _layout("Логи LLM", body, active="logs")
 
 
+# ─── login page ──────────────────────────────────────────────────────────────
+
+_LOGIN_PAGE = """<!doctype html><html lang='ru'><head>
+<meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Astra Admin · Вход</title>
+<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap' rel='stylesheet'>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:Inter,-apple-system,sans-serif;background:#1e1b4b;display:flex;align-items:center;justify-content:center;min-height:100vh}}
+.box{{background:#fff;border-radius:14px;padding:36px 40px;width:100%;max-width:360px;box-shadow:0 20px 60px rgba(0,0,0,.35)}}
+.logo{{font-size:34px;text-align:center;margin-bottom:8px}}
+.title{{font-size:20px;font-weight:700;text-align:center;color:#1e293b;margin-bottom:4px}}
+.sub{{font-size:13px;color:#94a3b8;text-align:center;margin-bottom:26px}}
+.fg{{margin-bottom:15px}}
+label{{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#64748b;margin-bottom:5px}}
+input{{width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;outline:none;font-family:inherit}}
+input:focus{{border-color:#7c3aed;box-shadow:0 0 0 3px #ede9fe}}
+.btn{{width:100%;padding:11px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;margin-top:8px;font-family:inherit}}
+.btn:hover{{background:#6d28d9}}
+.err{{background:#fee2e2;color:#991b1b;border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:16px;border:1px solid #fca5a5}}
+</style></head><body>
+<div class='box'>
+  <div class='logo'>✨</div>
+  <div class='title'>Astra Admin</div>
+  <div class='sub'>Панель управления</div>
+  {err}
+  <form method='post' action='/admin/login'>
+    <div class='fg'><label>Логин</label><input name='username' type='text' autocomplete='username' autofocus></div>
+    <div class='fg'><label>Пароль</label><input name='password' type='password' autocomplete='current-password'></div>
+    <button class='btn' type='submit'>Войти →</button>
+  </form>
+</div>
+</body></html>"""
+
+
 # ─── routes ──────────────────────────────────────────────────────────────────
+
+@router.get("/admin/login", include_in_schema=False)
+async def login_page(request: Request, error: str = ""):
+    if request.session.get("authenticated"):
+        return RedirectResponse(url="/admin/stats", status_code=302)
+    err_html = "<div class='err'>Неверный логин или пароль.</div>" if error else ""
+    return HTMLResponse(_LOGIN_PAGE.format(err=err_html))
+
+
+@router.post("/admin/login", include_in_schema=False)
+async def login_submit(
+    request: Request,
+    username: str = Form(default=""),
+    password: str = Form(default=""),
+):
+    settings = get_settings()
+    ok = (
+        bool(settings.admin_password)
+        and _secrets.compare_digest(username.strip(), settings.admin_user)
+        and _secrets.compare_digest(password, settings.admin_password)
+    )
+    if ok:
+        request.session["authenticated"] = True
+        return RedirectResponse(url="/admin/stats", status_code=303)
+    return RedirectResponse(url="/admin/login?error=1", status_code=303)
+
+
+@router.get("/admin/logout", include_in_schema=False)
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/admin/login", status_code=303)
+
 
 @router.get("/admin/", include_in_schema=False)
 async def admin_root(request: Request):

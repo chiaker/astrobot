@@ -6,12 +6,12 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI
+from starlette.middleware.sessions import SessionMiddleware
 
 from astrobot.bot.dispatcher import build_bot, build_dispatcher
 from astrobot.config import get_settings
 from astrobot.logging_setup import configure_logging
 from astrobot.scheduler import build_scheduler
-from astrobot.web.admin import setup_admin
 from astrobot.web.routes import health, metrics, payments, stats, telegram
 
 log = structlog.get_logger(__name__)
@@ -68,14 +68,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="astrobot", lifespan=lifespan)
+    settings = get_settings()
+    if settings.admin_secret:
+        app.add_middleware(SessionMiddleware, secret_key=settings.admin_secret, https_only=False)
     app.include_router(health.router)
     app.include_router(metrics.router)
     app.include_router(telegram.router)
     app.include_router(payments.router)
-    # IMPORTANT: stats router must be registered before setup_admin() so that
-    # the explicit /admin/stats route wins over sqladmin's catch-all at /admin.
     app.include_router(stats.router)
-    setup_admin(app)
     return app
 
 
