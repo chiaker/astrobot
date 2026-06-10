@@ -74,7 +74,7 @@ jobs:
             export IMAGE_TAG="${{ needs.build.outputs.tag }}"
             docker compose -f docker-compose.yml -f docker-compose.prod.yml pull app migrate
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-            docker image prune -f --filter "until=72h"
+            docker image prune -f
         env:
           IMAGE_NAME: ${{ steps.image.outputs.name }}
           IMAGE_TAG: ${{ needs.build.outputs.tag }}
