@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -193,9 +193,7 @@ async def on_confirm_save(
     profile.tz = data["tz"]
     profile.city_name = data.get("city_input") or data["city_display"]
     if user.legal_agreed_at is None:
-        from datetime import UTC, datetime as _dt
-
-        user.legal_agreed_at = _dt.now(UTC)
+        user.legal_agreed_at = datetime.now(UTC)
     await session.commit()
 
     await state.clear()

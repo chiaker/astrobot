@@ -8,9 +8,7 @@ from fastapi import FastAPI
 from markupsafe import Markup
 from sqladmin import Admin, ModelView
 from sqladmin.authentication import AuthenticationBackend
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response as StarletteResponse
 from starlette.staticfiles import StaticFiles
 
 from astrobot.config import get_settings
@@ -29,37 +27,6 @@ from astrobot.db.session import get_engine
 
 _STATIC_DIR = Path(__file__).parent / "admin_static"
 _STATIC_URL_PREFIX = "/admin-static"
-_INJECTED_LINK = (
-    f'<link rel="stylesheet" href="{_STATIC_URL_PREFIX}/astra.css">'
-).encode()
-
-
-class AdminSkinInjector(BaseHTTPMiddleware):
-    """Append our custom <link rel="stylesheet"> to every admin HTML response."""
-
-    async def dispatch(self, request, call_next):
-        response = await call_next(request)
-        if not request.url.path.startswith("/admin"):
-            return response
-        content_type = response.headers.get("content-type", "")
-        if "text/html" not in content_type:
-            return response
-
-        body = b""
-        async for chunk in response.body_iterator:
-            body += chunk
-
-        if b"</head>" in body:
-            body = body.replace(b"</head>", _INJECTED_LINK + b"</head>", 1)
-
-        headers = dict(response.headers)
-        headers.pop("content-length", None)
-        return StarletteResponse(
-            content=body,
-            status_code=response.status_code,
-            headers=headers,
-            media_type=response.media_type,
-        )
 
 
 # ---------- helpers ----------
@@ -476,7 +443,6 @@ def setup_admin(app: FastAPI) -> None:
             StaticFiles(directory=str(_STATIC_DIR)),
             name="admin_skin",
         )
-    app.add_middleware(AdminSkinInjector)
 
     admin = Admin(
         app,

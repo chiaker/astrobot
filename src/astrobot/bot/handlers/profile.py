@@ -8,9 +8,8 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from sqlalchemy import delete
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.keyboards import MENU_PROFILE
 from astrobot.bot.states import Onboarding
