@@ -12,7 +12,7 @@ from astrobot.config import get_settings
 from astrobot.logging_setup import configure_logging
 from astrobot.scheduler import build_scheduler
 from astrobot.web.admin import setup_admin
-from astrobot.web.routes import health, metrics, payments, telegram
+from astrobot.web.routes import health, metrics, payments, stats, telegram
 
 log = structlog.get_logger(__name__)
 
@@ -72,6 +72,9 @@ def create_app() -> FastAPI:
     app.include_router(metrics.router)
     app.include_router(telegram.router)
     app.include_router(payments.router)
+    # IMPORTANT: stats router must be registered before setup_admin() so that
+    # the explicit /admin/stats route wins over sqladmin's catch-all at /admin.
+    app.include_router(stats.router)
     setup_admin(app)
     return app
 
