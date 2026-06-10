@@ -15,3 +15,8 @@ class Onboarding(StatesGroup):
 
 class AskingQuestion(StatesGroup):
     waiting_for_text = State()
+
+
+class PushSetup(StatesGroup):
+    waiting_for_city = State()
+    choosing_hour = State()

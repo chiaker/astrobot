@@ -2,82 +2,721 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.config import get_settings
-from astrobot.db.models import (
-    Favorite,
-    LLMUsageLog,
-    QuestionLog,
-    Response,
-    User,
-)
+from astrobot.db.models import BirthProfile, Favorite, LLMUsageLog, QuestionLog, Response, User
 from astrobot.db.session import get_session
 
-router = APIRouter(tags=["stats"])
+router = APIRouter(tags=["admin"])
 
+PAGE_SIZE = 50
 
-def _cost_of(row: dict, settings) -> float:
+# ─── cost / format helpers ────────────────────────────────────────────────────
+
+def _cost_of(inp, cached, out, s) -> float:
     return (
-        max(0, (row["input_tokens"] or 0) - (row["cached_tokens"] or 0))
-        / 1_000_000
-        * settings.llm_price_input_usd_per_m
-        + (row["cached_tokens"] or 0)
-        / 1_000_000
-        * settings.llm_price_cache_hit_usd_per_m
-        + (row["output_tokens"] or 0)
-        / 1_000_000
-        * settings.llm_price_output_usd_per_m
+        max(0, (inp or 0) - (cached or 0)) / 1_000_000 * s.llm_price_input_usd_per_m
+        + (cached or 0) / 1_000_000 * s.llm_price_cache_hit_usd_per_m
+        + (out or 0) / 1_000_000 * s.llm_price_output_usd_per_m
+    )
+
+def _money(v: float) -> str:
+    if v >= 100: return f"${v:.0f}"
+    if v >= 1: return f"${v:.2f}"
+    return f"${v:.5f}"
+
+def _is_prem(pu, now: datetime) -> bool:
+    return pu is not None and pu > now
+
+def _fmt_dt(dt) -> str:
+    return dt.strftime("%d.%m.%Y %H:%M") if dt else "—"
+
+def _fmt_date(d) -> str:
+    return d.strftime("%d.%m.%Y") if d else "—"
+
+def _trunc(s, n: int = 80) -> str:
+    if not s: return ""
+    s = str(s).replace("\n", " ").strip()
+    return s[:n-1] + "…" if len(s) > n else s
+
+def _tier_badge(pu, now) -> str:
+    if _is_prem(pu, now):
+        return f'<span class="badge b-prem">💎 {pu.strftime("%d.%m.%y")}</span>'
+    return '<span class="badge b-free">Free</span>'
+
+def _kind_badge(k: str) -> str:
+    cls = {"natal": "b-natal", "horoscope": "b-horo", "question": "b-q"}.get(k, "b-free")
+    return f'<span class="badge {cls}">{k}</span>'
+
+def _sparkline(vals: list[float], w: int = 120, h: int = 36, color: str = "#7c3aed") -> str:
+    if not vals or max(vals) == 0:
+        return f'<svg width="{w}" height="{h}"></svg>'
+    mx = max(vals)
+    n = len(vals)
+    step = w / max(n - 1, 1)
+    pts = " ".join(
+        f"{i * step:.0f},{h - max(2, v / mx * (h - 4) + 2):.0f}"
+        for i, v in enumerate(vals)
+    )
+    return (
+        f'<svg width="{w}" height="{h}" style="overflow:visible;display:block">'
+        f'<polyline fill="none" stroke="{color}" stroke-width="2" '
+        f'stroke-linejoin="round" points="{pts}"/>'
+        '</svg>'
+    )
+
+def _hbars(items: dict[str, int]) -> str:
+    if not items:
+        return '<p class="muted small">Нет данных.</p>'
+    mx = max(items.values()) or 1
+    colors = {"natal": "#8b5cf6", "horoscope": "#3b82f6", "question": "#10b981"}
+    out = []
+    for name, val in items.items():
+        w = int(val / mx * 180)
+        c = colors.get(name, "#94a3b8")
+        out.append(
+            f'<div class="bar-row">'
+            f'<div class="bar-name">{name}</div>'
+            f'<div class="bar-track"><div class="bar-fill" style="width:{w}px;background:{c}"></div></div>'
+            f'<div class="bar-val">{val}</div>'
+            f'</div>'
+        )
+    return "".join(out)
+
+
+# ─── CSS ─────────────────────────────────────────────────────────────────────
+
+_CSS = """
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f2f5;color:#1e293b;font-size:14px}
+a{color:#7c3aed;text-decoration:none}a:hover{color:#5b21b6;text-decoration:underline}
+
+.topnav{background:#1e1b4b;display:flex;align-items:center;padding:0 20px;height:52px;gap:6px;position:sticky;top:0;z-index:100}
+.topnav .brand{font-weight:700;font-size:16px;color:#a5b4fc;margin-right:20px;white-space:nowrap}
+.topnav nav{display:flex;gap:2px;flex:1}
+.topnav nav a{color:#94a3b8;padding:6px 11px;border-radius:6px;font-size:13px;font-weight:500;white-space:nowrap}
+.topnav nav a:hover{color:#fff;background:rgba(255,255,255,.08);text-decoration:none}
+.topnav nav a.active{color:#fff;background:rgba(255,255,255,.13)}
+.topnav .out{color:#64748b;font-size:13px;padding:6px 11px;border-radius:6px}
+.topnav .out:hover{color:#94a3b8;text-decoration:none;background:rgba(255,255,255,.06)}
+
+.page{max-width:1360px;margin:0 auto;padding:24px 24px 60px}
+
+h1.ph{font-size:22px;font-weight:700;margin-bottom:4px}
+.ph-sub{color:#64748b;font-size:13px;margin-bottom:20px}
+
+h2.sec{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#94a3b8;margin:28px 0 10px}
+
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px}
+.kpi{background:#fff;border-radius:10px;padding:15px 17px;border:1px solid #e2e8f0}
+.kpi-label{font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.8px}
+.kpi-value{font-size:26px;font-weight:700;color:#1e293b;margin:5px 0 2px;line-height:1}
+.kpi-sub{font-size:11px;color:#94a3b8}
+.kpi-spark{margin-top:8px}
+.kpi.accent .kpi-value{color:#7c3aed}
+.kpi.green .kpi-value{color:#059669}
+
+.card{background:#fff;border-radius:10px;border:1px solid #e2e8f0;padding:18px 20px;margin-bottom:14px}
+.card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.card-title{font-size:13px;font-weight:600;color:#475569}
+
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+@media(max-width:900px){.g2,.g3{grid-template-columns:1fr}}
+
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px 12px;color:#64748b;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;border-bottom:2px solid #e2e8f0;white-space:nowrap;background:#fff}
+td{padding:9px 12px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:#faf7ff}
+.r{text-align:right}
+
+.badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:8px;font-size:11px;font-weight:600;color:#fff;white-space:nowrap}
+.b-prem{background:#7c3aed}
+.b-free{background:#94a3b8}
+.b-natal{background:#8b5cf6}
+.b-horo{background:#3b82f6}
+.b-q{background:#10b981}
+.b-ok{background:#059669}
+.b-warn{background:#d97706}
+
+.search-row{display:flex;gap:8px;margin-bottom:16px;align-items:center}
+.search-row input{flex:1;padding:8px 12px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;background:#fff}
+.search-row input:focus{outline:none;border-color:#7c3aed;box-shadow:0 0 0 2px #ede9fe}
+
+.btn{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;border:none;text-decoration:none;line-height:1}
+.btn:hover{text-decoration:none;opacity:.9}
+.btn-p{background:#7c3aed;color:#fff}
+.btn-g{background:#059669;color:#fff}
+.btn-ghost{background:#f1f5f9;color:#475569}
+.btn-ghost:hover{background:#e2e8f0}
+.btn-danger{background:#dc2626;color:#fff}
+.btn-sm{padding:4px 9px;font-size:12px}
+
+.fg{display:flex;flex-direction:column;gap:4px;margin-bottom:14px}
+.fg label{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px}
+.fg input[type=text],.fg input[type=number],.fg input[type=datetime-local]{padding:8px 11px;border:1px solid #e2e8f0;border-radius:6px;font-size:14px;width:100%}
+.fg input:focus{outline:none;border-color:#7c3aed;box-shadow:0 0 0 2px #ede9fe}
+.fg .note{font-size:11px;color:#94a3b8}
+.fa{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding-top:4px}
+
+.alert{padding:10px 16px;border-radius:8px;font-size:13px;margin-bottom:14px}
+.alert-ok{background:#dcfce7;color:#166534;border:1px solid #86efac}
+.alert-err{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
+
+code{font-family:monospace;font-size:12px;background:#f1f5f9;padding:1px 5px;border-radius:3px}
+.muted{color:#94a3b8}
+.small{font-size:12px}
+.mono{font-family:monospace}
+
+.dg{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:700px){.dg{grid-template-columns:1fr}}
+.di .dl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#94a3b8;margin-bottom:2px}
+.di .dv{font-size:14px;color:#1e293b;font-weight:500}
+
+.bar-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.bar-name{font-size:12px;color:#475569;width:90px;flex-shrink:0;text-align:right}
+.bar-track{flex:1;background:#f1f5f9;border-radius:3px;height:14px}
+.bar-fill{height:14px;border-radius:3px;background:#7c3aed;min-width:2px}
+.bar-val{font-size:12px;color:#64748b;width:42px}
+
+.pager{display:flex;gap:6px;justify-content:center;padding-top:16px;flex-wrap:wrap}
+.pager a,.pager span{padding:5px 10px;border-radius:5px;border:1px solid #e2e8f0;font-size:13px;color:#475569}
+.pager a:hover{background:#f1f5f9;text-decoration:none}
+.pager .cur{background:#7c3aed;color:#fff;border-color:#7c3aed}
+
+.sep{height:1px;background:#e2e8f0;margin:20px 0}
+"""
+
+# ─── layout ──────────────────────────────────────────────────────────────────
+
+def _layout(title: str, body: str, active: str = "") -> str:
+    nav = [
+        ("📊 Сводка", "/admin/stats", "stats"),
+        ("👥 Юзеры", "/admin/users", "users"),
+        ("📋 Логи LLM", "/admin/logs", "logs"),
+        ("🗂 Таблицы", "/admin/user/list", "tables"),
+    ]
+    nav_html = "".join(
+        f'<a href="{url}" class="{"active" if k == active else ""}">{lbl}</a>'
+        for lbl, url, k in nav
+    )
+    return (
+        "<!doctype html><html lang='ru'><head>"
+        "<meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        f"<title>{title} · Astra Admin</title>"
+        "<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap' rel='stylesheet'>"
+        f"<style>{_CSS}</style></head><body>"
+        f"<div class='topnav'>"
+        f"  <a href='/admin/stats' class='brand'>✨ Astra Admin</a>"
+        f"  <nav>{nav_html}</nav>"
+        f"  <a href='/admin/logout' class='out'>Выйти</a>"
+        f"</div>"
+        f"<div class='page'>{body}</div>"
+        "</body></html>"
     )
 
 
-def _money(value: float) -> str:
-    if value >= 100:
-        return f"${value:.0f}"
-    if value >= 1:
-        return f"${value:.2f}"
-    return f"${value:.4f}"
+# ─── stats page ──────────────────────────────────────────────────────────────
 
-
-def _is_premium(premium_until, now) -> bool:
-    return premium_until is not None and premium_until > now
-
-
-async def _gather(session: AsyncSession) -> dict:
+async def _gather_stats(session: AsyncSession) -> dict:
     settings = get_settings()
     now = datetime.now(UTC)
-    day = now - timedelta(days=1)
-    week = now - timedelta(days=7)
-    month = now - timedelta(days=30)
+    h24 = now - timedelta(hours=24)
+    d7 = now - timedelta(days=7)
+    d30 = now - timedelta(days=30)
 
-    total_users = (await session.scalar(select(func.count(User.id)))) or 0
-    premium_users = (
+    total = (await session.scalar(select(func.count(User.id)))) or 0
+    premium = (
         await session.scalar(
             select(func.count(User.id)).where(
                 User.premium_until.isnot(None), User.premium_until > now
             )
         )
     ) or 0
-    free_users = total_users - premium_users
-
-    new_users_7d = (
-        await session.scalar(
-            select(func.count(User.id)).where(User.created_at >= week)
-        )
-    ) or 0
-
-    referred_users = (
+    new_24h = (await session.scalar(select(func.count(User.id)).where(User.created_at >= h24))) or 0
+    new_7d = (await session.scalar(select(func.count(User.id)).where(User.created_at >= d7))) or 0
+    referred = (
         await session.scalar(
             select(func.count(User.id)).where(User.referred_by_user_id.isnot(None))
         )
     ) or 0
 
-    # LLM usage with tier breakdown
-    usage_stmt = (
+    # LLM usage last 30 days
+    rows = (
+        await session.execute(
+            select(
+                LLMUsageLog.user_id,
+                LLMUsageLog.kind,
+                LLMUsageLog.input_tokens,
+                LLMUsageLog.cached_tokens,
+                LLMUsageLog.output_tokens,
+                LLMUsageLog.created_at,
+                User.premium_until,
+                User.tg_user_id,
+            )
+            .join(User, User.id == LLMUsageLog.user_id)
+            .where(LLMUsageLog.created_at >= d30)
+        )
+    ).mappings().all()
+
+    windows = {"24h": h24, "7d": d7, "30d": d30}
+    cost_tier: dict[str, dict[str, float]] = {w: {"free": 0.0, "premium": 0.0} for w in windows}
+    cnt_tier: dict[str, dict[str, int]] = {w: {"free": 0, "premium": 0} for w in windows}
+    kind_7d: dict[str, int] = {}
+    by_user: dict[int, dict] = {}
+    daily_cost: dict[str, float] = {}
+
+    for r in rows:
+        prem = _is_prem(r["premium_until"], now)
+        tier = "premium" if prem else "free"
+        cost = _cost_of(r["input_tokens"], r["cached_tokens"], r["output_tokens"], settings)
+        for w, since in windows.items():
+            if r["created_at"] >= since:
+                cost_tier[w][tier] += cost
+                cnt_tier[w][tier] += 1
+        if r["created_at"] >= d7:
+            kind_7d[r["kind"]] = kind_7d.get(r["kind"], 0) + 1
+        dk = r["created_at"].strftime("%d.%m")
+        daily_cost[dk] = daily_cost.get(dk, 0.0) + cost
+        u = by_user.setdefault(
+            r["user_id"],
+            {"uid": r["user_id"], "tg": r["tg_user_id"], "tier": tier, "cost": 0.0, "calls": 0},
+        )
+        u["cost"] += cost
+        u["calls"] += 1
+
+    top10 = sorted(by_user.values(), key=lambda x: x["cost"], reverse=True)[:10]
+
+    # Daily new users last 14 days
+    daily_users_rows = (
+        await session.execute(
+            select(
+                func.date_trunc("day", User.created_at).label("d"),
+                func.count(User.id).label("n"),
+            )
+            .where(User.created_at >= now - timedelta(days=14))
+            .group_by("d")
+            .order_by("d")
+        )
+    ).all()
+    daily_users = {r.d.strftime("%d.%m"): r.n for r in daily_users_rows}
+
+    questions_7d = (
+        await session.scalar(
+            select(func.count(QuestionLog.id)).where(QuestionLog.created_at >= d7)
+        )
+    ) or 0
+    favorites_total = (await session.scalar(select(func.count(Favorite.id)))) or 0
+
+    days14 = [(now - timedelta(days=i)).strftime("%d.%m") for i in range(13, -1, -1)]
+
+    return {
+        "now": now,
+        "settings": settings,
+        "total": total,
+        "premium": premium,
+        "free": total - premium,
+        "new_24h": new_24h,
+        "new_7d": new_7d,
+        "referred": referred,
+        "cost_tier": cost_tier,
+        "cnt_tier": cnt_tier,
+        "kind_7d": dict(sorted(kind_7d.items(), key=lambda kv: -kv[1])),
+        "top10": top10,
+        "daily_cost": daily_cost,
+        "daily_users": daily_users,
+        "days14": days14,
+        "questions_7d": questions_7d,
+        "favorites_total": favorites_total,
+    }
+
+
+def _render_stats(d: dict) -> str:
+    ct = d["cost_tier"]
+    cn = d["cnt_tier"]
+    s = d["settings"]
+
+    def total_cost(w):
+        return ct[w]["free"] + ct[w]["premium"]
+
+    def total_cnt(w):
+        return cn[w]["free"] + cn[w]["premium"]
+
+    # sparklines
+    cost_vals = [d["daily_cost"].get(day, 0.0) for day in d["days14"]]
+    user_vals = [d["daily_users"].get(day, 0) for day in d["days14"]]
+    spark_cost = _sparkline(cost_vals, color="#7c3aed")
+    spark_users = _sparkline([float(v) for v in user_vals], color="#059669")
+
+    # top-10 table
+    top_rows = "".join(
+        f"<tr><td><a href='/admin/users/{u['uid']}'>{u['uid']}</a></td>"
+        f"<td class='mono'>{u['tg']}</td>"
+        f"<td>{'<span class=\"badge b-prem\">💎</span>' if u['tier']=='premium' else '<span class=\"badge b-free\">Free</span>'}</td>"
+        f"<td class='r'>{u['calls']}</td>"
+        f"<td class='r'><b>{_money(u['cost'])}</b></td></tr>"
+        for u in d["top10"]
+    ) or "<tr><td colspan='5' class='muted'>Нет данных.</td></tr>"
+
+    pct_prem = f"{d['premium']/d['total']*100:.0f}%" if d["total"] else "0%"
+
+    body = f"""
+<h1 class='ph'>Сводка</h1>
+<p class='ph-sub'>Обновлено: {_fmt_dt(d['now'])}</p>
+
+<h2 class='sec'>Пользователи</h2>
+<div class='kpis'>
+  <div class='kpi'>
+    <div class='kpi-label'>Всего</div>
+    <div class='kpi-value'>{d['total']}</div>
+    <div class='kpi-sub'>+{d['new_7d']} за 7д</div>
+    <div class='kpi-spark'>{spark_users}</div>
+  </div>
+  <div class='kpi accent'>
+    <div class='kpi-label'>Премиум</div>
+    <div class='kpi-value'>{d['premium']}</div>
+    <div class='kpi-sub'>{pct_prem} от базы</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>Free</div>
+    <div class='kpi-value'>{d['free']}</div>
+    <div class='kpi-sub'>{100 - int(d['premium']/d['total']*100) if d['total'] else 100}% от базы</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>Новых (24ч)</div>
+    <div class='kpi-value green'>{d['new_24h']}</div>
+    <div class='kpi-sub'>+{d['new_7d']} за 7д</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>По рефералам</div>
+    <div class='kpi-value'>{d['referred']}</div>
+    <div class='kpi-sub'>всего привлечено</div>
+  </div>
+</div>
+
+<h2 class='sec'>Расходы LLM</h2>
+<div class='kpis'>
+  <div class='kpi'>
+    <div class='kpi-label'>Сутки</div>
+    <div class='kpi-value accent'>{_money(total_cost('24h'))}</div>
+    <div class='kpi-sub'>free {_money(ct['24h']['free'])} · prem {_money(ct['24h']['premium'])}</div>
+    <div class='kpi-spark'>{spark_cost}</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>7 дней</div>
+    <div class='kpi-value'>{_money(total_cost('7d'))}</div>
+    <div class='kpi-sub'>free {_money(ct['7d']['free'])} · prem {_money(ct['7d']['premium'])}</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>30 дней</div>
+    <div class='kpi-value'>{_money(total_cost('30d'))}</div>
+    <div class='kpi-sub'>free {_money(ct['30d']['free'])} · prem {_money(ct['30d']['premium'])}</div>
+  </div>
+</div>
+
+<h2 class='sec'>Объём запросов</h2>
+<div class='kpis'>
+  <div class='kpi'>
+    <div class='kpi-label'>LLM (24ч)</div>
+    <div class='kpi-value'>{total_cnt('24h')}</div>
+    <div class='kpi-sub'>free {cn['24h']['free']} · prem {cn['24h']['premium']}</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>LLM (7д)</div>
+    <div class='kpi-value'>{total_cnt('7d')}</div>
+    <div class='kpi-sub'>free {cn['7d']['free']} · prem {cn['7d']['premium']}</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>Вопросы (7д)</div>
+    <div class='kpi-value'>{d['questions_7d']}</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>Избранное</div>
+    <div class='kpi-value'>{d['favorites_total']}</div>
+    <div class='kpi-sub'>всего сохранено</div>
+  </div>
+</div>
+
+<div class='g2' style='margin-top:14px'>
+  <div class='card'>
+    <div class='card-head'><span class='card-title'>Топ-10 по расходам (30д)</span></div>
+    <div class='tbl-wrap'>
+      <table>
+        <thead><tr><th>ID</th><th>TG ID</th><th>Тариф</th><th class='r'>Вызовов</th><th class='r'>Стоимость</th></tr></thead>
+        <tbody>{top_rows}</tbody>
+      </table>
+    </div>
+  </div>
+  <div class='card'>
+    <div class='card-head'><span class='card-title'>По типам запросов (7д)</span></div>
+    {_hbars(d['kind_7d'])}
+    <div class='sep'></div>
+    <p class='small muted'>Цены: in <code>${s.llm_price_input_usd_per_m}/M</code> · out <code>${s.llm_price_output_usd_per_m}/M</code> · cache <code>${s.llm_price_cache_hit_usd_per_m}/M</code></p>
+  </div>
+</div>
+"""
+    return _layout("Сводка", body, active="stats")
+
+
+# ─── users page ──────────────────────────────────────────────────────────────
+
+async def _gather_users(
+    session: AsyncSession, search: str, page: int
+) -> tuple[list, int]:
+    base = select(User).order_by(desc(User.created_at))
+    cnt_q = select(func.count(User.id))
+    if search:
+        term = f"%{search}%"
+        flt = or_(
+            User.tg_user_id.cast(type_=None).like(term),  # cast via ilike workaround
+            User.display_name.ilike(term),
+            User.referral_code.ilike(term),
+        )
+        # simpler: use text search on tg_user_id string
+        from sqlalchemy import cast, BigInteger, String as SAStr
+        flt = or_(
+            cast(User.tg_user_id, SAStr).like(term),
+            User.display_name.ilike(term),
+            User.referral_code.ilike(term),
+        )
+        base = base.where(flt)
+        cnt_q = cnt_q.where(flt)
+
+    total = (await session.scalar(cnt_q)) or 0
+    users = (
+        await session.execute(base.limit(PAGE_SIZE).offset((page - 1) * PAGE_SIZE))
+    ).scalars().all()
+    return list(users), total
+
+
+def _render_users(users: list, total: int, page: int, search: str, now: datetime) -> str:
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+
+    def page_url(p: int) -> str:
+        s = f"&search={search}" if search else ""
+        return f"/admin/users?page={p}{s}"
+
+    pager_html = ""
+    if total_pages > 1:
+        pages = []
+        for p in range(1, total_pages + 1):
+            if p == page:
+                pages.append(f"<span class='cur'>{p}</span>")
+            elif abs(p - page) <= 2 or p in (1, total_pages):
+                pages.append(f"<a href='{page_url(p)}'>{p}</a>")
+            elif abs(p - page) == 3:
+                pages.append("<span class='muted'>…</span>")
+        pager_html = f"<div class='pager'>{''.join(pages)}</div>"
+
+    rows = []
+    for u in users:
+        tier = _tier_badge(u.premium_until, now)
+        name = u.display_name or '<span class="muted">—</span>'
+        gender_icon = {"m": "♂", "f": "♀"}.get(u.gender or "", "—")
+        bonus_natal = (
+            f'<span class="badge b-warn">∞</span>' if (u.natal_regens_bonus or 0) == -1
+            else str(u.natal_regens_bonus or 0)
+        )
+        rows.append(
+            f"<tr>"
+            f"<td><a href='/admin/users/{u.id}'>{u.id}</a></td>"
+            f"<td class='mono small'>{u.tg_user_id}</td>"
+            f"<td>{name}</td>"
+            f"<td>{gender_icon}</td>"
+            f"<td>{tier}</td>"
+            f"<td class='r'>{u.bonus_questions or 0}</td>"
+            f"<td class='r'>{bonus_natal}</td>"
+            f"<td class='small muted'>{u.created_at.strftime('%d.%m.%Y') if u.created_at else '—'}</td>"
+            f"<td><a href='/admin/users/{u.id}' class='btn btn-ghost btn-sm'>→</a></td>"
+            f"</tr>"
+        )
+
+    table = f"""
+<div class='tbl-wrap'>
+<table>
+<thead><tr>
+  <th>ID</th><th>TG ID</th><th>Имя</th><th>Пол</th><th>Тариф</th>
+  <th class='r'>Бонус?</th><th class='r'>Регенов Н.</th><th>Создан</th><th></th>
+</tr></thead>
+<tbody>{''.join(rows) or "<tr><td colspan='9' class='muted'>Нет пользователей.</td></tr>"}</tbody>
+</table>
+</div>
+{pager_html}
+"""
+    body = f"""
+<h1 class='ph'>Пользователи</h1>
+<p class='ph-sub'>Всего: {total}</p>
+<form method='get' action='/admin/users'>
+  <div class='search-row'>
+    <input name='search' placeholder='TG ID, имя или реф-код…' value='{search}'>
+    <button type='submit' class='btn btn-p'>Найти</button>
+    <a href='/admin/users' class='btn btn-ghost'>Сброс</a>
+  </div>
+</form>
+{table}
+"""
+    return _layout("Юзеры", body, active="users")
+
+
+# ─── user detail ─────────────────────────────────────────────────────────────
+
+async def _gather_user_detail(session: AsyncSession, user_id: int):
+    user = await session.get(User, user_id)
+    if user is None:
+        return None, None, {}
+    profile = await session.get(BirthProfile, user_id)
+
+    # LLM usage last 30 days
+    now = datetime.now(UTC)
+    d30 = now - timedelta(days=30)
+    settings = get_settings()
+    llm_rows = (
+        await session.execute(
+            select(LLMUsageLog.kind, LLMUsageLog.input_tokens, LLMUsageLog.cached_tokens, LLMUsageLog.output_tokens)
+            .where(LLMUsageLog.user_id == user_id, LLMUsageLog.created_at >= d30)
+        )
+    ).all()
+    llm_by_kind: dict[str, dict] = {}
+    for r in llm_rows:
+        e = llm_by_kind.setdefault(r.kind, {"calls": 0, "cost": 0.0})
+        e["calls"] += 1
+        e["cost"] += _cost_of(r.input_tokens, r.cached_tokens, r.output_tokens, settings)
+
+    fav_count = (
+        await session.scalar(select(func.count(Favorite.id)).where(Favorite.user_id == user_id))
+    ) or 0
+    q_count = (
+        await session.scalar(select(func.count(QuestionLog.id)).where(QuestionLog.user_id == user_id))
+    ) or 0
+
+    stats = {"llm": llm_by_kind, "favorites": fav_count, "questions": q_count}
+    return user, profile, stats
+
+
+def _render_user_detail(user, profile, stats: dict, now: datetime, msg: str = "", err: str = "") -> str:
+    prem_val = (
+        user.premium_until.strftime("%Y-%m-%dT%H:%M") if user.premium_until else ""
+    )
+    alert = ""
+    if msg:
+        alert = f"<div class='alert alert-ok'>✓ {msg}</div>"
+    if err:
+        alert = f"<div class='alert alert-err'>✗ {err}</div>"
+
+    gender_str = {"m": "♂ Мужской", "f": "♀ Женский"}.get(user.gender or "", "—")
+    natal_bonus = (
+        "∞ безлимит (тест)" if (user.natal_regens_bonus or 0) == -1
+        else str(user.natal_regens_bonus or 0)
+    )
+
+    llm_rows = "".join(
+        f"<tr><td>{_kind_badge(k)}</td><td class='r'>{v['calls']}</td><td class='r'>{_money(v['cost'])}</td></tr>"
+        for k, v in stats["llm"].items()
+    ) or "<tr><td colspan='3' class='muted small'>Нет активности за 30д.</td></tr>"
+
+    profile_section = "<p class='muted small'>Нет профиля рождения.</p>"
+    if profile:
+        time_str = (
+            "не указано"
+            if profile.time_unknown
+            else (profile.birth_time.strftime("%H:%M") if profile.birth_time else "—")
+        )
+        profile_section = f"""
+<div class='dg'>
+  <div class='di'><div class='dl'>Дата рождения</div><div class='dv'>{_fmt_date(profile.birth_date)}</div></div>
+  <div class='di'><div class='dl'>Время</div><div class='dv'>{time_str}</div></div>
+  <div class='di'><div class='dl'>Город</div><div class='dv'>{profile.city_name or '—'}</div></div>
+  <div class='di'><div class='dl'>Часовой пояс</div><div class='dv'><code>{profile.tz or '—'}</code></div></div>
+  <div class='di'><div class='dl'>Обновлён</div><div class='dv small muted'>{_fmt_dt(profile.updated_at)}</div></div>
+</div>
+"""
+
+    body = f"""
+<p style='margin-bottom:12px'><a href='/admin/users'>← Все юзеры</a></p>
+{alert}
+<div class='g2'>
+  <div class='card'>
+    <div class='card-head'><span class='card-title'>Пользователь #{user.id}</span>
+      {'<span class="badge b-prem">💎 Премиум</span>' if _is_prem(user.premium_until, now) else '<span class="badge b-free">Free</span>'}
+    </div>
+    <div class='dg'>
+      <div class='di'><div class='dl'>TG ID</div><div class='dv mono'>{user.tg_user_id}</div></div>
+      <div class='di'><div class='dl'>Имя</div><div class='dv'>{user.display_name or '—'}</div></div>
+      <div class='di'><div class='dl'>Пол</div><div class='dv'>{gender_str}</div></div>
+      <div class='di'><div class='dl'>Астротермины</div><div class='dv'>{'Вкл' if user.astro_terms_enabled else 'Выкл'}</div></div>
+      <div class='di'><div class='dl'>Реф-код</div><div class='dv mono'>{user.referral_code or '—'}</div></div>
+      <div class='di'><div class='dl'>Премиум до</div><div class='dv'>{_fmt_dt(user.premium_until)}</div></div>
+      <div class='di'><div class='dl'>Бонус вопросов</div><div class='dv'>{user.bonus_questions or 0}</div></div>
+      <div class='di'><div class='dl'>Регенов натала</div><div class='dv'>{natal_bonus}</div></div>
+      <div class='di'><div class='dl'>Согласие</div><div class='dv small muted'>{_fmt_dt(user.legal_agreed_at)}</div></div>
+      <div class='di'><div class='dl'>Создан</div><div class='dv small muted'>{_fmt_dt(user.created_at)}</div></div>
+    </div>
+  </div>
+  <div class='card'>
+    <div class='card-head'><span class='card-title'>Активность (30д)</span></div>
+    <div class='tbl-wrap'>
+      <table>
+        <thead><tr><th>Тип</th><th class='r'>Вызовов</th><th class='r'>Расход</th></tr></thead>
+        <tbody>{llm_rows}</tbody>
+      </table>
+    </div>
+    <div class='sep'></div>
+    <div class='dg' style='margin-top:8px'>
+      <div class='di'><div class='dl'>Вопросов всего</div><div class='dv'>{stats['questions']}</div></div>
+      <div class='di'><div class='dl'>Избранных</div><div class='dv'>{stats['favorites']}</div></div>
+    </div>
+  </div>
+</div>
+
+<div class='card' style='margin-top:0'>
+  <div class='card-head'><span class='card-title'>Профиль рождения</span></div>
+  {profile_section}
+</div>
+
+<div class='card'>
+  <div class='card-head'><span class='card-title'>Редактировать</span></div>
+  <form method='post' action='/admin/users/{user.id}'>
+    <div class='g3'>
+      <div class='fg'>
+        <label>Премиум до (дата/время UTC)</label>
+        <input type='datetime-local' name='premium_until' value='{prem_val}'>
+        <div class='note'>Оставь пустым — сбросит премиум. Или используй быстрые кнопки ниже.</div>
+      </div>
+      <div class='fg'>
+        <label>Бонус вопросов</label>
+        <input type='number' name='bonus_questions' value='{user.bonus_questions or 0}' min='0'>
+      </div>
+      <div class='fg'>
+        <label>Регенов натала (−1 = безлимит)</label>
+        <input type='number' name='natal_regens_bonus' value='{user.natal_regens_bonus or 0}' min='-1'>
+        <div class='note'>−1 даёт бесконечные генерации для теста.</div>
+      </div>
+    </div>
+    <div class='fa'>
+      <button type='submit' class='btn btn-p'>Сохранить</button>
+      <button type='submit' name='quick' value='prem30' class='btn btn-g'>+30 дней премиум</button>
+      <button type='submit' name='quick' value='prem365' class='btn btn-g'>+365 дней</button>
+      <button type='submit' name='quick' value='reset_prem' class='btn btn-danger btn-sm'>Сбросить премиум</button>
+      <button type='submit' name='quick' value='unlimited_natal' class='btn btn-ghost btn-sm'>∞ Natal (тест)</button>
+    </div>
+  </form>
+</div>
+"""
+    return _layout(f"Юзер #{user.id}", body, active="users")
+
+
+# ─── logs page ───────────────────────────────────────────────────────────────
+
+async def _gather_logs(session: AsyncSession, kind: str) -> list:
+    q = (
         select(
+            LLMUsageLog.id,
             LLMUsageLog.user_id,
             LLMUsageLog.kind,
             LLMUsageLog.model,
@@ -85,302 +724,76 @@ async def _gather(session: AsyncSession) -> dict:
             LLMUsageLog.cached_tokens,
             LLMUsageLog.output_tokens,
             LLMUsageLog.created_at,
-            User.premium_until,
             User.tg_user_id,
+            User.premium_until,
         )
         .join(User, User.id == LLMUsageLog.user_id)
-        .where(LLMUsageLog.created_at >= month)
+        .order_by(desc(LLMUsageLog.created_at))
+        .limit(200)
     )
-    usage_rows = (await session.execute(usage_stmt)).mappings().all()
-
-    windows = {"day": day, "week": week, "month": month}
-    cost_by_window_tier: dict[str, dict[str, float]] = {
-        w: {"free": 0.0, "premium": 0.0} for w in windows
-    }
-    count_by_window_tier: dict[str, dict[str, int]] = {
-        w: {"free": 0, "premium": 0} for w in windows
-    }
-    kind_counts_7d: dict[str, int] = {}
-    by_user_30d: dict[int, dict] = {}
-
-    for row in usage_rows:
-        is_prem = _is_premium(row["premium_until"], now)
-        tier = "premium" if is_prem else "free"
-        cost = _cost_of(dict(row), settings)
-        for name, since in windows.items():
-            if row["created_at"] >= since:
-                cost_by_window_tier[name][tier] += cost
-                count_by_window_tier[name][tier] += 1
-        if row["created_at"] >= week:
-            kind_counts_7d[row["kind"]] = kind_counts_7d.get(row["kind"], 0) + 1
-
-        u = by_user_30d.setdefault(
-            row["user_id"],
-            {
-                "user_id": row["user_id"],
-                "tg_user_id": row["tg_user_id"],
-                "tier": tier,
-                "cost": 0.0,
-                "calls": 0,
-            },
-        )
-        u["cost"] += cost
-        u["calls"] += 1
-
-    top_users = sorted(by_user_30d.values(), key=lambda r: r["cost"], reverse=True)[:10]
-
-    questions_7d = (
-        await session.scalar(
-            select(func.count(QuestionLog.id)).where(QuestionLog.created_at >= week)
-        )
-    ) or 0
-    responses_7d = (
-        await session.scalar(
-            select(func.count(Response.id)).where(Response.created_at >= week)
-        )
-    ) or 0
-    favorites_total = (await session.scalar(select(func.count(Favorite.id)))) or 0
-
-    return {
-        "now": now,
-        "total_users": total_users,
-        "premium_users": premium_users,
-        "free_users": free_users,
-        "new_users_7d": new_users_7d,
-        "referred_users": referred_users,
-        "cost_by_window_tier": cost_by_window_tier,
-        "count_by_window_tier": count_by_window_tier,
-        "kind_counts_7d": dict(
-            sorted(kind_counts_7d.items(), key=lambda kv: -kv[1])
-        ),
-        "top_users": top_users,
-        "questions_7d": questions_7d,
-        "responses_7d": responses_7d,
-        "favorites_total": favorites_total,
-    }
+    if kind:
+        q = q.where(LLMUsageLog.kind == kind)
+    return (await session.execute(q)).mappings().all()
 
 
-_CSS = """
-* { box-sizing: border-box; }
-body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: #f8fafc;
-    color: #1e293b;
-    margin: 0;
-    padding: 24px;
-    line-height: 1.5;
-}
-.wrap { max-width: 1200px; margin: 0 auto; }
-.header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 24px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid #e2e8f0;
-}
-.brand { font-size: 20px; font-weight: 700; color: #5b21b6; }
-.nav a {
-    color: #7c3aed; text-decoration: none; font-weight: 600;
-    margin-left: 16px; font-size: 14px;
-}
-.nav a:hover { color: #4c1d95; }
-h2 {
-    margin: 32px 0 12px;
-    font-size: 16px; font-weight: 700;
-    color: #475569;
-    text-transform: uppercase; letter-spacing: 0.5px;
-}
-.kpis {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 16px;
-}
-.kpi {
-    background: white;
-    border-radius: 12px;
-    padding: 18px 20px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    border: 1px solid #e2e8f0;
-}
-.kpi-label {
-    font-size: 12px; color: #64748b;
-    text-transform: uppercase; letter-spacing: 0.5px;
-    font-weight: 600;
-}
-.kpi-value {
-    font-size: 28px; font-weight: 700; color: #1e293b;
-    margin-top: 4px;
-}
-.kpi-sub { font-size: 12px; color: #64748b; margin-top: 4px; }
-.kpi.premium .kpi-value { color: #7c3aed; }
-.kpi.free .kpi-value { color: #475569; }
-.card {
-    background: white;
-    border-radius: 12px;
-    padding: 20px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    border: 1px solid #e2e8f0;
-    margin-bottom: 16px;
-}
-.card h3 {
-    margin: 0 0 14px;
-    font-size: 15px; font-weight: 700;
-}
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th {
-    text-align: left; padding: 10px 12px;
-    color: #64748b; font-size: 11px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.5px;
-    border-bottom: 1px solid #e2e8f0;
-}
-td {
-    padding: 10px 12px;
-    border-bottom: 1px solid #f1f5f9;
-}
-tr:last-child td { border-bottom: none; }
-tr:hover td { background: #faf7ff; }
-.badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-size: 11px;
-    font-weight: 600;
-    color: white;
-}
-.badge-premium { background: #7c3aed; }
-.badge-free { background: #94a3b8; }
-.cost-strong { font-weight: 700; color: #5b21b6; }
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 700px) { .grid-2 { grid-template-columns: 1fr; } }
-.muted { color: #94a3b8; }
-.right { text-align: right; }
-"""
-
-
-def _render(data: dict) -> str:
+def _render_logs(logs: list, kind: str, now: datetime) -> str:
     settings = get_settings()
-    cw = data["cost_by_window_tier"]
-    cn = data["count_by_window_tier"]
-
-    def total(w):
-        return cw[w]["free"] + cw[w]["premium"]
-
-    rows_html = []
-    for u in data["top_users"]:
-        tier_badge = (
-            '<span class="badge badge-premium">Premium</span>'
-            if u["tier"] == "premium"
-            else '<span class="badge badge-free">Free</span>'
-        )
-        rows_html.append(
-            f"<tr><td>{u['user_id']}</td><td>{u['tg_user_id']}</td>"
-            f"<td>{tier_badge}</td><td>{u['calls']}</td>"
-            f"<td class='right cost-strong'>{_money(u['cost'])}</td></tr>"
-        )
-    top_users_table = "".join(rows_html) or (
-        "<tr><td colspan='5' class='muted'>Пока никто не делал запросов.</td></tr>"
+    total_cost = sum(
+        _cost_of(r["input_tokens"], r["cached_tokens"], r["output_tokens"], settings)
+        for r in logs
     )
 
-    kind_rows = "".join(
-        f"<tr><td>{k}</td><td class='right'>{v}</td></tr>"
-        for k, v in data["kind_counts_7d"].items()
-    ) or "<tr><td colspan='2' class='muted'>Тишина.</td></tr>"
+    rows = "".join(
+        f"<tr>"
+        f"<td class='small muted'>{r['id']}</td>"
+        f"<td><a href='/admin/users/{r['user_id']}'>{r['user_id']}</a></td>"
+        f"<td class='mono small'>{r['tg_user_id']}</td>"
+        f"<td>{_kind_badge(r['kind'])}</td>"
+        f"<td class='small muted'>{_trunc(r['model'], 30)}</td>"
+        f"<td class='r small'>{r['input_tokens'] or 0}</td>"
+        f"<td class='r small'>{r['cached_tokens'] or 0}</td>"
+        f"<td class='r small'>{r['output_tokens'] or 0}</td>"
+        f"<td class='r'><b>{_money(_cost_of(r['input_tokens'], r['cached_tokens'], r['output_tokens'], settings))}</b></td>"
+        f"<td class='small muted'>{r['created_at'].strftime('%d.%m %H:%M') if r['created_at'] else '—'}</td>"
+        f"</tr>"
+        for r in logs
+    ) or "<tr><td colspan='10' class='muted'>Нет данных.</td></tr>"
 
-    return f"""<!doctype html>
-<html lang="ru">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Astra · Сводка</title>
-<link rel="icon" href="/admin-static/logo.svg">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>{_CSS}</style>
-</head>
-<body>
-<div class="wrap">
+    filter_html = " ".join(
+        f"<a href='/admin/logs?kind={k}' class='btn btn-sm {'btn-p' if kind == k else 'btn-ghost'}'>{k}</a>"
+        for k in ("natal", "horoscope", "question")
+    )
 
-  <div class="header">
-    <div class="brand">✨ Astra · Сводка</div>
-    <div class="nav">
-      <a href="/admin/stats">Сводка</a>
-      <a href="/admin/">Таблицы</a>
-      <a href="/admin/logout">Logout</a>
-    </div>
-  </div>
-
-  <h2>Юзеры</h2>
-  <div class="kpis">
-    <div class="kpi"><div class="kpi-label">Всего</div>
-      <div class="kpi-value">{data['total_users']}</div>
-      <div class="kpi-sub">+{data['new_users_7d']} за 7 дней</div></div>
-    <div class="kpi premium"><div class="kpi-label">Премиум</div>
-      <div class="kpi-value">{data['premium_users']}</div>
-      <div class="kpi-sub">из {data['total_users']}</div></div>
-    <div class="kpi free"><div class="kpi-label">Free</div>
-      <div class="kpi-value">{data['free_users']}</div>
-      <div class="kpi-sub">{(data['free_users']/data['total_users']*100):.0f}% если есть</div></div>
-    <div class="kpi"><div class="kpi-label">По рефералам</div>
-      <div class="kpi-value">{data['referred_users']}</div>
-      <div class="kpi-sub">всего привлечено</div></div>
-  </div>
-
-  <h2>Расходы на LLM по тарифу</h2>
-  <div class="kpis">
-    <div class="kpi"><div class="kpi-label">Сегодня</div>
-      <div class="kpi-value">{_money(total('day'))}</div>
-      <div class="kpi-sub">free {_money(cw['day']['free'])} · prem {_money(cw['day']['premium'])}</div></div>
-    <div class="kpi"><div class="kpi-label">7 дней</div>
-      <div class="kpi-value">{_money(total('week'))}</div>
-      <div class="kpi-sub">free {_money(cw['week']['free'])} · prem {_money(cw['week']['premium'])}</div></div>
-    <div class="kpi"><div class="kpi-label">30 дней</div>
-      <div class="kpi-value">{_money(total('month'))}</div>
-      <div class="kpi-sub">free {_money(cw['month']['free'])} · prem {_money(cw['month']['premium'])}</div></div>
-  </div>
-
-  <h2>Объём запросов (7д)</h2>
-  <div class="kpis">
-    <div class="kpi free"><div class="kpi-label">Free</div>
-      <div class="kpi-value">{cn['week']['free']}</div></div>
-    <div class="kpi premium"><div class="kpi-label">Premium</div>
-      <div class="kpi-value">{cn['week']['premium']}</div></div>
-    <div class="kpi"><div class="kpi-label">Вопросы</div>
-      <div class="kpi-value">{data['questions_7d']}</div></div>
-    <div class="kpi"><div class="kpi-label">Ответы Астры</div>
-      <div class="kpi-value">{data['responses_7d']}</div></div>
-  </div>
-
-  <div class="grid-2">
-    <div class="card">
-      <h3>Топ-10 юзеров по расходам (30д)</h3>
-      <table>
-        <thead><tr><th>ID</th><th>TG ID</th><th>Тариф</th><th>Вызовов</th><th class="right">Стоимость</th></tr></thead>
-        <tbody>{top_users_table}</tbody>
-      </table>
-    </div>
-
-    <div class="card">
-      <h3>Запросы по типу (7д)</h3>
-      <table>
-        <thead><tr><th>Тип</th><th class="right">Кол-во</th></tr></thead>
-        <tbody>{kind_rows}</tbody>
-      </table>
-    </div>
-  </div>
-
-  <div class="card">
-    <h3>Прочее</h3>
-    <p style="margin: 0; color: #64748b; font-size: 14px;">
-      ⭐ Избранного: <b>{data['favorites_total']}</b> &nbsp;·&nbsp;
-      Цены LLM: in <code>${settings.llm_price_input_usd_per_m}</code>,
-      out <code>${settings.llm_price_output_usd_per_m}</code>,
-      cache hit <code>${settings.llm_price_cache_hit_usd_per_m}</code> за 1M
-    </p>
-  </div>
-
+    body = f"""
+<h1 class='ph'>Логи LLM</h1>
+<p class='ph-sub'>Последние 200 записей · Сумма: <b>{_money(total_cost)}</b></p>
+<div style='display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap'>
+  {filter_html}
+  <a href='/admin/logs' class='btn btn-sm btn-ghost'>Все типы</a>
 </div>
-</body>
-</html>"""
+<div class='card'>
+  <div class='tbl-wrap'>
+    <table>
+      <thead><tr>
+        <th>#</th><th>ID</th><th>TG ID</th><th>Тип</th><th>Модель</th>
+        <th class='r'>in</th><th class='r'>cache</th><th class='r'>out</th>
+        <th class='r'>≈$</th><th>Время</th>
+      </tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+  </div>
+</div>
+"""
+    return _layout("Логи LLM", body, active="logs")
+
+
+# ─── routes ──────────────────────────────────────────────────────────────────
+
+@router.get("/admin/", include_in_schema=False)
+async def admin_root(request: Request):
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/admin/login", status_code=303)
+    return RedirectResponse(url="/admin/stats", status_code=302)
 
 
 @router.get("/admin/stats", response_class=HTMLResponse)
@@ -390,5 +803,103 @@ async def stats_page(
 ):
     if not request.session.get("authenticated"):
         return RedirectResponse(url="/admin/login", status_code=303)
-    data = await _gather(session)
-    return HTMLResponse(_render(data))
+    data = await _gather_stats(session)
+    return HTMLResponse(_render_stats(data))
+
+
+@router.get("/admin/users", response_class=HTMLResponse)
+async def users_page(
+    request: Request,
+    search: str = "",
+    page: int = 1,
+    session: AsyncSession = Depends(get_session),
+):
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/admin/login", status_code=303)
+    page = max(1, page)
+    users, total = await _gather_users(session, search.strip(), page)
+    now = datetime.now(UTC)
+    return HTMLResponse(_render_users(users, total, page, search, now))
+
+
+@router.get("/admin/users/{user_id}", response_class=HTMLResponse)
+async def user_detail(
+    request: Request,
+    user_id: int,
+    msg: str = "",
+    session: AsyncSession = Depends(get_session),
+):
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/admin/login", status_code=303)
+    user, profile, stats = await _gather_user_detail(session, user_id)
+    if user is None:
+        return HTMLResponse(_layout("404", "<p>Пользователь не найден.</p>"), status_code=404)
+    now = datetime.now(UTC)
+    return HTMLResponse(_render_user_detail(user, profile, stats, now, msg=msg))
+
+
+@router.post("/admin/users/{user_id}", response_class=HTMLResponse)
+async def user_edit(
+    request: Request,
+    user_id: int,
+    quick: str = Form(default=""),
+    premium_until: str = Form(default=""),
+    bonus_questions: int = Form(default=0),
+    natal_regens_bonus: int = Form(default=0),
+    session: AsyncSession = Depends(get_session),
+):
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    user = await session.get(User, user_id)
+    if user is None:
+        return RedirectResponse(url="/admin/users", status_code=303)
+
+    now = datetime.now(UTC)
+    msg = ""
+
+    if quick == "prem30":
+        base = user.premium_until if user.premium_until and user.premium_until > now else now
+        user.premium_until = base + timedelta(days=30)
+        msg = "Добавлено 30 дней премиум."
+    elif quick == "prem365":
+        base = user.premium_until if user.premium_until and user.premium_until > now else now
+        user.premium_until = base + timedelta(days=365)
+        msg = "Добавлено 365 дней премиум."
+    elif quick == "reset_prem":
+        user.premium_until = None
+        msg = "Премиум сброшен."
+    elif quick == "unlimited_natal":
+        user.natal_regens_bonus = -1
+        msg = "Натал: безлимит (−1)."
+    else:
+        # Manual form submission
+        if premium_until.strip():
+            try:
+                dt = datetime.fromisoformat(premium_until.strip())
+                user.premium_until = dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
+            except ValueError:
+                pass
+        else:
+            user.premium_until = None
+        user.bonus_questions = max(0, bonus_questions)
+        user.natal_regens_bonus = natal_regens_bonus  # allow -1
+        msg = "Сохранено."
+
+    await session.commit()
+    return RedirectResponse(
+        url=f"/admin/users/{user_id}?msg={msg}", status_code=303
+    )
+
+
+@router.get("/admin/logs", response_class=HTMLResponse)
+async def logs_page(
+    request: Request,
+    kind: str = "",
+    session: AsyncSession = Depends(get_session),
+):
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/admin/login", status_code=303)
+    now = datetime.now(UTC)
+    logs = await _gather_logs(session, kind.strip())
+    return HTMLResponse(_render_logs(logs, kind, now))

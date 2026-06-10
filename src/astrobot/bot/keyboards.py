@@ -197,6 +197,14 @@ def natal_paywall_kb() -> InlineKeyboardMarkup:
     )
 
 
+def push_hour_kb() -> InlineKeyboardMarkup:
+    row1 = [InlineKeyboardButton(text=f"{h}:00", callback_data=f"push:hour:{h}") for h in range(6, 10)]
+    row2 = [InlineKeyboardButton(text=f"{h}:00", callback_data=f"push:hour:{h}") for h in range(10, 14)]
+    return InlineKeyboardMarkup(
+        inline_keyboard=[row1, row2, [InlineKeyboardButton(text="Отмена", callback_data="push:cancel")]]
+    )
+
+
 def city_choice_kb(options: list[tuple[str, str]]) -> InlineKeyboardMarkup:
     """options: list of (label, callback_data)."""
     return InlineKeyboardMarkup(

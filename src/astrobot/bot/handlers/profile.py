@@ -13,8 +13,9 @@ from aiogram.types import (
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from astrobot.bot.keyboards import MENU_PROFILE, reset_confirm_kb
-from astrobot.bot.states import Onboarding
+from astrobot.astrology.geocoding import geocode_city
+from astrobot.bot.keyboards import MENU_PROFILE, name_skip_kb, push_hour_kb, reset_confirm_kb
+from astrobot.bot.states import Onboarding, PushSetup
 from astrobot.db.models import BirthProfile, Favorite, HoroscopeCache, LLMUsageLog, User
 from astrobot.limits import NATAL_REGEN_PRICE_RUB, check_horoscope, check_question, is_premium
 
@@ -26,52 +27,35 @@ def _profile_kb(user: User) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                text=f"📏 Ответы по умолчанию: {mode}",
+                text=f"📏 Ответы: {mode}",
                 callback_data="settings:response_toggle",
             )
         ],
     ]
     if is_premium(user):
-        horo_state = "вкл" if user.push_horoscope_enabled else "выкл"
+        if user.push_horoscope_enabled:
+            hour = f"{user.push_hour}:00" if user.push_hour is not None else "9:00"
+            city = f" · {user.push_city_name}" if user.push_city_name else ""
+            horo_label = f"🌅 Утренний гороскоп: вкл · {hour}{city}"
+        else:
+            horo_label = "🌅 Утренний гороскоп: выкл"
+
         lunar_state = "вкл" if user.push_lunar_enabled else "выкл"
         rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"🌅 Утренний гороскоп: {horo_state}",
-                    callback_data="settings:push_horoscope",
-                )
-            ]
+            [InlineKeyboardButton(text=horo_label, callback_data="settings:push_horoscope")]
         )
         rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"🌑 Лунные фазы: {lunar_state}",
-                    callback_data="settings:push_lunar",
-                )
-            ]
+            [InlineKeyboardButton(text=f"🌑 Лунные фазы: {lunar_state}", callback_data="settings:push_lunar")]
         )
     rows.append(
-        [
-            InlineKeyboardButton(
-                text="🤝 Пригласить друга", callback_data="referral:show"
-            )
-        ]
+        [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show")]
     )
     terms_state = "вкл" if user.astro_terms_enabled else "выкл"
     rows.append(
-        [
-            InlineKeyboardButton(
-                text=f"🔭 Астротермины: {terms_state}",
-                callback_data="settings:astro_terms",
-            )
-        ]
+        [InlineKeyboardButton(text=f"🔭 Астротермины: {terms_state}", callback_data="settings:astro_terms")]
     )
     rows.append(
-        [
-            InlineKeyboardButton(
-                text="🔄 Ввести данные заново", callback_data="profile:reset"
-            )
-        ]
+        [InlineKeyboardButton(text="🔄 Ввести данные заново", callback_data="profile:reset")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -131,11 +115,7 @@ async def on_profile(message: Message, session: AsyncSession, user: User) -> Non
 
 
 @router.callback_query(F.data == "settings:response_toggle")
-async def on_response_toggle(
-    call: CallbackQuery,
-    session: AsyncSession,
-    user: User,
-) -> None:
+async def on_response_toggle(call: CallbackQuery, session: AsyncSession, user: User) -> None:
     user.default_response = "full" if user.default_response == "brief" else "brief"
     await session.commit()
     profile = await session.get(BirthProfile, user.id)
@@ -148,31 +128,118 @@ async def on_response_toggle(
     await call.answer(f"Теперь по умолчанию — {mode_label}")
 
 
+# ─── Push horoscope setup ─────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "settings:push_horoscope")
 async def on_push_horoscope_toggle(
     call: CallbackQuery,
+    state: FSMContext,
     session: AsyncSession,
     user: User,
 ) -> None:
     if not is_premium(user):
         await call.answer("Доступно только в Премиуме", show_alert=True)
         return
-    user.push_horoscope_enabled = not user.push_horoscope_enabled
-    await session.commit()
-    profile = await session.get(BirthProfile, user.id)
-    if profile is not None:
-        text = await _profile_text(profile, user, session)
-        await call.message.edit_text(text, reply_markup=_profile_kb(user))
-    state_label = "включён" if user.push_horoscope_enabled else "выключен"
-    await call.answer(f"Утренний гороскоп {state_label}")
+
+    if user.push_horoscope_enabled:
+        # Disable immediately
+        user.push_horoscope_enabled = False
+        await session.commit()
+        profile = await session.get(BirthProfile, user.id)
+        if profile is not None:
+            text = await _profile_text(profile, user, session)
+            await call.message.edit_text(text, reply_markup=_profile_kb(user))
+        await call.answer("Утренний гороскоп выключен")
+        return
+
+    # Enabling — check if already has push settings
+    if user.push_tz and user.push_city_name:
+        hour = user.push_hour if user.push_hour is not None else 9
+        user.push_horoscope_enabled = True
+        await session.commit()
+        profile = await session.get(BirthProfile, user.id)
+        if profile is not None:
+            text = await _profile_text(profile, user, session)
+            await call.message.edit_text(text, reply_markup=_profile_kb(user))
+        await call.answer(f"Включён · {hour}:00 · {user.push_city_name}")
+        return
+
+    # No push settings yet — start setup
+    await call.answer()
+    await state.set_state(PushSetup.waiting_for_city)
+    await call.message.answer(
+        "🌅 Настраиваем утренний гороскоп.\n\n"
+        "Напиши, в каком городе ты сейчас живёшь — "
+        "это нужно для точного определения часового пояса. "
+        "Место рождения может не совпадать с текущим.\n\n"
+        "<i>Например: Москва, Санкт-Петербург, Алматы</i>"
+    )
 
 
-@router.callback_query(F.data == "settings:push_lunar")
-async def on_push_lunar_toggle(
+@router.message(PushSetup.waiting_for_city)
+async def on_push_city(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    query = (message.text or "").strip()
+    if len(query) < 2:
+        await message.answer("Напиши название города, например <code>Москва</code>.")
+        return
+
+    progress = await message.answer("🔍 Ищу город…")
+    result = await geocode_city(session, query)
+    await progress.delete()
+
+    if result is None:
+        await message.answer(
+            "Не нашла такой город. Попробуй иначе, "
+            "например <code>Санкт-Петербург, Россия</code>."
+        )
+        return
+
+    await state.update_data(push_tz=result.tz, push_city_name=result.display_name)
+    await state.set_state(PushSetup.choosing_hour)
+    await message.answer(
+        f"📍 Нашла: <b>{result.display_name}</b> (часовой пояс <code>{result.tz}</code>)\n\n"
+        "В какое время тебе присылать утренний гороскоп?\n"
+        "<i>Время указывается по твоему текущему городу.</i>",
+        reply_markup=push_hour_kb(),
+    )
+
+
+@router.callback_query(PushSetup.choosing_hour, F.data.startswith("push:hour:"))
+async def on_push_hour(
     call: CallbackQuery,
+    state: FSMContext,
     session: AsyncSession,
     user: User,
 ) -> None:
+    hour = int(call.data.split(":")[-1])
+    data = await state.get_data()
+    user.push_tz = data["push_tz"]
+    user.push_city_name = data["push_city_name"]
+    user.push_hour = hour
+    user.push_horoscope_enabled = True
+    await session.commit()
+    await state.clear()
+
+    await call.message.edit_text(
+        f"✅ Готово! Буду присылать утренний гороскоп в <b>{hour}:00</b> "
+        f"по времени <b>{user.push_city_name}</b>.\n\n"
+        "Можешь изменить настройки в профиле."
+    )
+    await call.answer("Настроено")
+
+
+@router.callback_query(PushSetup.choosing_hour, F.data == "push:cancel")
+@router.callback_query(PushSetup.waiting_for_city, F.data == "push:cancel")
+async def on_push_cancel(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await call.message.edit_text("Настройка отменена.")
+    await call.answer()
+
+
+# ─── Push lunar toggle ────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "settings:push_lunar")
+async def on_push_lunar_toggle(call: CallbackQuery, session: AsyncSession, user: User) -> None:
     if not is_premium(user):
         await call.answer("Доступно только в Премиуме", show_alert=True)
         return
@@ -182,16 +249,14 @@ async def on_push_lunar_toggle(
     if profile is not None:
         text = await _profile_text(profile, user, session)
         await call.message.edit_text(text, reply_markup=_profile_kb(user))
-    state_label = "включены" if user.push_lunar_enabled else "выключены"
-    await call.answer(f"Лунные фазы {state_label}")
+    label = "включены" if user.push_lunar_enabled else "выключены"
+    await call.answer(f"Лунные фазы {label}")
 
+
+# ─── Astro terms toggle ───────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "settings:astro_terms")
-async def on_astro_terms_toggle(
-    call: CallbackQuery,
-    session: AsyncSession,
-    user: User,
-) -> None:
+async def on_astro_terms_toggle(call: CallbackQuery, session: AsyncSession, user: User) -> None:
     user.astro_terms_enabled = not user.astro_terms_enabled
     await session.commit()
     profile = await session.get(BirthProfile, user.id)
@@ -202,13 +267,10 @@ async def on_astro_terms_toggle(
     await call.answer(f"Астрологические термины {label}")
 
 
+# ─── Profile reset ────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "profile:reset")
-async def on_profile_reset_warn(
-    call: CallbackQuery,
-    session: AsyncSession,
-    user: User,
-) -> None:
-    """Show warnings before reset — natal limit, favorites count."""
+async def on_profile_reset_warn(call: CallbackQuery, session: AsyncSession, user: User) -> None:
     natal_this_month = (
         await session.scalar(
             select(func.count(LLMUsageLog.id)).where(
@@ -220,13 +282,10 @@ async def on_profile_reset_warn(
     ) or 0
 
     fav_count = (
-        await session.scalar(
-            select(func.count(Favorite.id)).where(Favorite.user_id == user.id)
-        )
+        await session.scalar(select(func.count(Favorite.id)).where(Favorite.user_id == user.id))
     ) or 0
 
     lines = ["⚠️ <b>Сброс профиля</b>\n", "Это удалит твои данные рождения и настройки."]
-
     if natal_this_month > 0:
         lines.append(
             f"\n🌟 <b>Внимание:</b> натальная карта уже была рассчитана в этом месяце. "
@@ -235,7 +294,6 @@ async def on_profile_reset_warn(
         )
     if fav_count > 0:
         lines.append(f"\n⭐ Будет удалено <b>{fav_count}</b> записей из Избранного.")
-
     lines.append("\nПродолжить?")
 
     await call.message.answer("\n".join(lines), reply_markup=reset_confirm_kb())
@@ -252,13 +310,19 @@ async def on_profile_reset_confirm(
     profile = await session.get(BirthProfile, user.id)
     if profile is not None:
         await session.delete(profile)
-    await session.execute(
-        delete(HoroscopeCache).where(HoroscopeCache.user_id == user.id)
-    )
+    await session.execute(delete(HoroscopeCache).where(HoroscopeCache.user_id == user.id))
     await session.commit()
-    await state.set_state(Onboarding.waiting_for_date)
+
+    # Pre-fill existing prefs so the user doesn't re-enter name/gender/terms
+    await state.update_data(
+        display_name=user.display_name,
+        gender=user.gender,
+        astro_terms=user.astro_terms_enabled,
+    )
+    await state.set_state(Onboarding.waiting_for_name)
+    hint = f" Сейчас: <b>{user.display_name}</b>." if user.display_name else ""
     await call.message.answer(
-        "Прежние данные удалены. Введи <b>дату рождения</b> в формате "
-        "<code>DD.MM.YYYY</code>:"
+        f"Прежние данные удалены. Как тебя зовут?{hint}",
+        reply_markup=name_skip_kb(),
     )
     await call.answer()

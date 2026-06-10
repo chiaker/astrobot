@@ -48,6 +48,8 @@ def md_to_telegram_html(text: str) -> str:
     s = _ITALIC_STAR_RE.sub(r"<i>\1</i>", s)
     s = _ITALIC_UNDER_RE.sub(r"<i>\1</i>", s)
     s = _BULLET_RE.sub("• ", s)
+    # Telegram HTML doesn't support <br> — replace with newline before sending
+    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)
     s = _TRAILING_BLANKS.sub("\n\n", s)
 
     for i, code in enumerate(inline_codes):

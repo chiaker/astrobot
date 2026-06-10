@@ -444,6 +444,20 @@ def setup_admin(app: FastAPI) -> None:
     if not (settings.admin_password and settings.admin_secret):
         return
 
+    # Fix: mount sqladmin's own statics explicitly BEFORE sqladmin's catch-all
+    # mount at /admin, so FastAPI serves them directly (avoids 404 from sqladmin ASGI)
+    try:
+        import sqladmin as _sqla_pkg
+        _sqla_statics = Path(_sqla_pkg.__file__).parent / "statics"
+        if _sqla_statics.exists():
+            app.mount(
+                "/admin/statics",
+                StaticFiles(directory=str(_sqla_statics)),
+                name="sqladmin_statics",
+            )
+    except Exception:
+        pass
+
     if _STATIC_DIR.exists():
         app.mount(
             _STATIC_URL_PREFIX,
@@ -455,7 +469,7 @@ def setup_admin(app: FastAPI) -> None:
         app,
         engine=get_engine(),
         authentication_backend=AdminAuth(secret_key=settings.admin_secret),
-        title="Astra · Админка",
+        title="Astra · Таблицы",
         logo_url=f"{_STATIC_URL_PREFIX}/logo.svg",
         favicon_url=f"{_STATIC_URL_PREFIX}/logo.svg",
         base_url="/admin",

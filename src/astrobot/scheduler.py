@@ -107,6 +107,16 @@ def _user_local_date(tz: str):
     return datetime.now(ZoneInfo(tz)).date()
 
 
+def _push_tz(user: User, profile: BirthProfile) -> str:
+    """Timezone to use for push timing: user's current city first, birth city as fallback."""
+    return user.push_tz or profile.tz
+
+
+def _push_hour(user: User, settings) -> int:
+    """Push hour in user's local time."""
+    return user.push_hour if user.push_hour is not None else settings.push_horoscope_hour
+
+
 async def morning_horoscope_job(bot: Bot) -> None:
     """Runs every minute. Finds premium opted-in users whose local time hit
     the push hour, hasn't been pushed today, sends their daily horoscope."""
@@ -131,22 +141,21 @@ async def morning_horoscope_job(bot: Bot) -> None:
             if profile is None or not profile.tz:
                 continue
 
+            tz = _push_tz(user, profile)
+            target = _push_hour(user, settings)
             try:
-                if _user_local_hour(profile.tz) != target_hour:
+                if _user_local_hour(tz) != target:
                     continue
-                today_local = _user_local_date(profile.tz)
+                today_local = _user_local_date(tz)
             except Exception as e:
                 log.warning("tz_check_failed", user_id=user.id, error=str(e))
                 continue
 
             if user.last_horoscope_push_at is not None:
-                # Convert last push to user's local date
                 try:
                     from zoneinfo import ZoneInfo
 
-                    last_local = user.last_horoscope_push_at.astimezone(
-                        ZoneInfo(profile.tz)
-                    ).date()
+                    last_local = user.last_horoscope_push_at.astimezone(ZoneInfo(tz)).date()
                     if last_local >= today_local:
                         continue
                 except Exception:
@@ -168,6 +177,7 @@ async def morning_horoscope_job(bot: Bot) -> None:
                 await bot.send_message(
                     chat_id=user.tg_user_id,
                     text=text[:4000],
+                    parse_mode="HTML",
                     disable_web_page_preview=True,
                 )
                 user.last_horoscope_push_at = now_utc
@@ -226,10 +236,12 @@ async def lunar_push_job(bot: Bot) -> None:
             profile = await session.get(BirthProfile, user.id)
             if profile is None or not profile.tz:
                 continue
+            tz = _push_tz(user, profile)
+            target = _push_hour(user, settings)
             try:
-                if _user_local_hour(profile.tz) != target_hour:
+                if _user_local_hour(tz) != target:
                     continue
-                today_local = _user_local_date(profile.tz)
+                today_local = _user_local_date(tz)
             except Exception:
                 continue
 
@@ -243,6 +255,7 @@ async def lunar_push_job(bot: Bot) -> None:
                 await bot.send_message(
                     chat_id=user.tg_user_id,
                     text=phase_text(event.kind),
+                    parse_mode="HTML",
                     disable_web_page_preview=True,
                 )
                 PUSH_SENT.labels(kind="lunar", result="ok").inc()

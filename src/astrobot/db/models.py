@@ -51,6 +51,9 @@ class User(Base):
     gender: Mapped[str | None] = mapped_column(String(4), nullable=True)
     astro_terms_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     natal_regens_bonus: Mapped[int] = mapped_column(Integer, default=0)
+    push_tz: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    push_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    push_city_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
