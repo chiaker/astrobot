@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import html
 
 import structlog
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from astrobot.bot.formatting import md_to_telegram_html
+from astrobot.bot.formatting import md_to_telegram_html, strip_html
 from astrobot.db.models import Response, User
 from astrobot.metrics import FLOOD_RETRIES_TOTAL
 
@@ -80,9 +79,9 @@ async def safe_answer(target: Message, text: str, **kwargs) -> Message:
             msg = str(e).lower()
             if "can't parse entities" in msg or "unsupported start tag" in msg:
                 log.warning("html_parse_fallback", error=str(e))
-                fallback = html.escape(text)
+                # Strip all tags → readable plain text (html.escape shows &lt;b&gt; literally)
                 kwargs_plain = {**kwargs, "parse_mode": None}
-                return await target.answer(fallback, **kwargs_plain)
+                return await target.answer(strip_html(text), **kwargs_plain)
             raise
     raise RuntimeError("unreachable")
 

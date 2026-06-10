@@ -15,12 +15,45 @@ _HRULE_RE = re.compile(r"^\s{0,3}[-*_]{3,}\s*$", re.MULTILINE)
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 _TRAILING_BLANKS = re.compile(r"\n{3,}")
 
+# Tags Telegram HTML mode actually supports
+_TELEGRAM_TAGS = frozenset({"b", "i", "u", "s", "code", "pre", "a", "tg-spoiler"})
+_TAG_RE = re.compile(r"<(/?)(\w[\w-]*)([^>]*)>", re.IGNORECASE)
+_HREF_RE = re.compile(r"""href=["']([^"']+)["']""", re.IGNORECASE)
+
+
+def _sanitize_html(s: str) -> str:
+    """Strip or normalize any HTML tags that Telegram doesn't support.
+
+    Keeps <b>, <i>, <u>, <s>, <code>, <pre>, <a href="...">.
+    Converts <strong> → <b>, <em> → <i>.
+    Removes empty/unsupported tags entirely (content is preserved).
+    """
+    # Common aliases the LLM uses instead of the allowed tags
+    s = re.sub(r"<(/?)strong>", r"<\1b>", s, flags=re.IGNORECASE)
+    s = re.sub(r"<(/?)em>", r"<\1i>", s, flags=re.IGNORECASE)
+    # <br> → newline
+    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)
+
+    def _fix(m: re.Match) -> str:
+        slash = m.group(1)       # "/" for closing tags, "" for opening
+        tag = m.group(2).lower()
+        attrs = m.group(3)
+        if tag not in _TELEGRAM_TAGS:
+            return ""            # strip tag, keep inner text
+        if tag == "a" and not slash:
+            href = _HREF_RE.search(attrs)
+            return f'<a href="{href.group(1)}">' if href else ""
+        return f"<{slash}{tag}>"  # strip all other attributes
+
+    return _TAG_RE.sub(_fix, s)
+
 
 def md_to_telegram_html(text: str) -> str:
-    """Convert LLM-style markdown into Telegram-safe HTML.
+    """Convert LLM-style markdown/HTML into Telegram-safe HTML.
 
-    Telegram supports a tiny subset (<b>,<i>,<u>,<s>,<code>,<pre>,<a>),
-    so we strip everything else and turn headings/bullets into bold/•.
+    Telegram supports only <b>, <i>, <u>, <s>, <code>, <pre>, <a>.
+    Everything else is stripped; unsupported tags lose their markup but
+    keep their text content so nothing is lost for the reader.
     """
     if not text:
         return text
@@ -48,8 +81,10 @@ def md_to_telegram_html(text: str) -> str:
     s = _ITALIC_STAR_RE.sub(r"<i>\1</i>", s)
     s = _ITALIC_UNDER_RE.sub(r"<i>\1</i>", s)
     s = _BULLET_RE.sub("• ", s)
-    # Telegram HTML doesn't support <br> — replace with newline before sending
-    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)
+
+    # Sanitize: strip any HTML tags the LLM snuck in that Telegram won't accept
+    s = _sanitize_html(s)
+
     s = _TRAILING_BLANKS.sub("\n\n", s)
 
     for i, code in enumerate(inline_codes):
@@ -58,3 +93,8 @@ def md_to_telegram_html(text: str) -> str:
         s = s.replace(f"\x00CODEBLOCK{i}\x00", f"<pre>{block}</pre>")
 
     return s.strip()
+
+
+def strip_html(text: str) -> str:
+    """Remove all HTML tags, returning plain readable text."""
+    return re.sub(r"<[^>]+>", "", text)
