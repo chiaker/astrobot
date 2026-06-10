@@ -12,6 +12,7 @@ from astrobot.astrology.geocoding import geocode_city
 from astrobot.bot.keyboards import (
     astro_terms_kb,
     confirm_kb,
+    final_confirm_kb,
     gender_kb,
     main_menu,
     name_skip_kb,
@@ -23,16 +24,38 @@ from astrobot.db.models import BirthProfile, User
 router = Router(name="onboarding")
 
 
-def _format_summary(data: dict) -> str:
+def _format_birth_summary(data: dict) -> str:
     d = date.fromisoformat(data["birth_date"])
     t = time.fromisoformat(data["birth_time"])
     time_str = "неизвестно (солнечная карта)" if data["time_unknown"] else t.strftime("%H:%M")
     return (
-        "<b>Проверь данные:</b>\n"
+        "<b>Проверь данные рождения:</b>\n"
         f"📅 Дата: {d.strftime('%d.%m.%Y')}\n"
         f"⏰ Время: {time_str}\n"
         f"📍 Место: {data['city_display']}\n"
         f"🌐 Часовой пояс: {data['tz']}"
+    )
+
+
+def _format_final_summary(data: dict) -> str:
+    d = date.fromisoformat(data["birth_date"])
+    t = time.fromisoformat(data["birth_time"])
+    time_str = "неизвестно (солнечная карта)" if data["time_unknown"] else t.strftime("%H:%M")
+
+    name = data.get("display_name") or "—"
+    gender_map = {"m": "мужской", "f": "женский"}
+    gender_str = gender_map.get(data.get("gender") or "", "не указан")
+    terms = "да, с терминами ✨" if data.get("astro_terms", True) else "без терминов 💬"
+
+    return (
+        "<b>Проверь все данные перед сохранением:</b>\n\n"
+        f"👤 Имя: <b>{name}</b>\n"
+        f"⚧ Обращение: <b>{gender_str}</b>\n"
+        f"🔭 Астротермины: <b>{terms}</b>\n\n"
+        f"📅 Дата рождения: <b>{d.strftime('%d.%m.%Y')}</b>\n"
+        f"⏰ Время: <b>{time_str}</b>\n"
+        f"📍 Место: <b>{data['city_display']}</b>\n"
+        f"🌐 Часовой пояс: <b>{data['tz']}</b>"
     )
 
 
@@ -93,7 +116,9 @@ async def on_date(message: Message, state: FSMContext) -> None:
     try:
         birth_date = datetime.strptime(text, "%d.%m.%Y").date()
     except ValueError:
-        await message.answer("Не понял дату. Нужно <code>DD.MM.YYYY</code>, например <code>14.03.1990</code>.")
+        await message.answer(
+            "Не понял дату. Нужно <code>DD.MM.YYYY</code>, например <code>14.03.1990</code>."
+        )
         return
 
     if birth_date.year < 1900 or birth_date > date.today():
@@ -150,7 +175,9 @@ async def on_time(message: Message, state: FSMContext) -> None:
 async def on_city(message: Message, state: FSMContext, session: AsyncSession) -> None:
     query = (message.text or "").strip()
     if len(query) < 2:
-        await message.answer("Слишком короткое название. Введи город, например <code>Москва</code>.")
+        await message.answer(
+            "Слишком короткое название. Введи город, например <code>Москва</code>."
+        )
         return
 
     progress = await message.answer("🔍 Ищу твой город на карте…")
@@ -172,7 +199,7 @@ async def on_city(message: Message, state: FSMContext, session: AsyncSession) ->
         city_input=query,
     )
     data = await state.get_data()
-    await message.answer(_format_summary(data), reply_markup=confirm_kb())
+    await message.answer(_format_birth_summary(data), reply_markup=confirm_kb())
     await state.set_state(Onboarding.confirming)
 
 
@@ -195,64 +222,53 @@ async def on_confirm_save(
     profile.lon = data["lon"]
     profile.tz = data["tz"]
     profile.city_name = data.get("city_input") or data["city_display"]
-    if user.legal_agreed_at is None:
-        user.legal_agreed_at = datetime.now(UTC)
     await session.commit()
-    await call.answer("Данные сохранены")
+    await call.answer("Данные рождения сохранены")
 
-    # First-time onboarding: ask name/gender/terms
-    if user.display_name is None:
-        await state.set_state(Onboarding.waiting_for_name)
-        await call.message.answer(
-            "🌙 Данные сохранила ✨\n\n"
-            "Как мне тебя называть? Напиши своё имя — я буду обращаться к тебе по нему.",
-            reply_markup=name_skip_kb(),
-        )
-    else:
-        # Re-onboarding (profile reset): birth data updated, skip personal prefs
-        await state.clear()
-        await call.message.answer(
-            "🌙 Данные обновлены. Звёзды пересчитаны ✨",
-            reply_markup=main_menu(),
-        )
+    # Pre-fill existing personal prefs into FSM so user can skip them
+    await state.update_data(
+        display_name=user.display_name,
+        gender=user.gender,
+        astro_terms=user.astro_terms_enabled,
+    )
+
+    hint = f" Сейчас: <b>{user.display_name}</b>." if user.display_name else ""
+    await state.set_state(Onboarding.waiting_for_name)
+    await call.message.answer(
+        f"🌙 Данные сохранила ✨\n\n"
+        f"Как мне тебя называть? Напиши своё имя.{hint}",
+        reply_markup=name_skip_kb(),
+    )
 
 
 @router.message(Onboarding.waiting_for_name)
-async def on_name(message: Message, state: FSMContext, session: AsyncSession, user: User) -> None:
+async def on_name(message: Message, state: FSMContext) -> None:
     name = (message.text or "").strip()
     if len(name) < 1 or len(name) > 64:
         await message.answer("Напиши имя (до 64 символов), или нажми «Пропустить».")
         return
-    user.display_name = name
-    await session.commit()
+    await state.update_data(display_name=name)
     await _ask_gender(message, state)
 
 
 @router.callback_query(Onboarding.waiting_for_name, F.data == "onb:name:skip")
 async def on_name_skip(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
+    # Keep existing display_name already pre-filled in state
     await _ask_gender(call.message, state)
 
 
 async def _ask_gender(target, state: FSMContext) -> None:
     await state.set_state(Onboarding.choosing_gender)
-    await target.answer(
-        "Как к тебе обращаться?",
-        reply_markup=gender_kb(),
-    )
+    await target.answer("Как к тебе обращаться?", reply_markup=gender_kb())
 
 
 @router.callback_query(Onboarding.choosing_gender, F.data.startswith("onb:gender:"))
-async def on_gender(
-    call: CallbackQuery,
-    state: FSMContext,
-    session: AsyncSession,
-    user: User,
-) -> None:
+async def on_gender(call: CallbackQuery, state: FSMContext) -> None:
     value = call.data.split(":")[-1]
     if value in ("m", "f"):
-        user.gender = value
-        await session.commit()
+        await state.update_data(gender=value)
+    # "skip" keeps the pre-filled value from state
     await call.answer()
     await _ask_astro_terms(call.message, state)
 
@@ -263,22 +279,42 @@ async def _ask_astro_terms(target, state: FSMContext) -> None:
         "Ещё один вопрос — как тебе удобнее читать ответы?\n\n"
         "<b>С астрологическими терминами</b> (квадратура, транзит, Асцендент…) — "
         "если ты знаком с астрологией.\n"
-        "<b>Без терминов</b> — простым языком, если термины только мешают.",
+        "<b>Без терминов</b> — простым языком, понятным каждому.",
         reply_markup=astro_terms_kb(),
     )
 
 
 @router.callback_query(Onboarding.choosing_astro_terms, F.data.startswith("onb:terms:"))
-async def on_astro_terms(
+async def on_astro_terms(call: CallbackQuery, state: FSMContext) -> None:
+    enabled = call.data.endswith(":yes")
+    await state.update_data(astro_terms=enabled)
+    await call.answer()
+    await _show_final_confirm(call.message, state)
+
+
+async def _show_final_confirm(target, state: FSMContext) -> None:
+    await state.set_state(Onboarding.final_confirm)
+    data = await state.get_data()
+    await target.answer(
+        _format_final_summary(data) + "\n\n<i>Всё верно?</i>",
+        reply_markup=final_confirm_kb(),
+    )
+
+
+@router.callback_query(Onboarding.final_confirm, F.data == "onb:final:ok")
+async def on_final_ok(
     call: CallbackQuery,
     state: FSMContext,
     session: AsyncSession,
     user: User,
 ) -> None:
-    enabled = call.data.endswith(":yes")
-    user.astro_terms_enabled = enabled
+    data = await state.get_data()
+    user.display_name = data.get("display_name") or None
+    user.gender = data.get("gender") or None
+    user.astro_terms_enabled = bool(data.get("astro_terms", True))
+    if user.legal_agreed_at is None:
+        user.legal_agreed_at = datetime.now(UTC)
     await session.commit()
-    await call.answer()
     await state.clear()
 
     name_part = f", {user.display_name}" if user.display_name else ""
@@ -286,6 +322,29 @@ async def on_astro_terms(
         f"🌙 Запомнила{name_part}. Твоя карта со мной — теперь спрашивай о чём угодно ✨",
         reply_markup=main_menu(),
     )
+    await call.answer("Готово")
+
+
+@router.callback_query(Onboarding.final_confirm, F.data == "onb:final:restart")
+async def on_final_restart(
+    call: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    # Delete birth profile so user re-enters all data fresh
+    profile = await session.get(BirthProfile, user.id)
+    if profile is not None:
+        await session.delete(profile)
+        await session.commit()
+
+    await state.clear()
+    await state.set_state(Onboarding.waiting_for_date)
+    await call.message.answer(
+        "Хорошо, начнём заново. "
+        "<b>Дата рождения</b> в формате <code>DD.MM.YYYY</code>:"
+    )
+    await call.answer()
 
 
 @router.callback_query(Onboarding.confirming, F.data == "onb:restart")

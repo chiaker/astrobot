@@ -12,30 +12,33 @@ from astrobot.db.models import LLMUsageLog, User
 Tier = Literal["free", "premium"]
 Kind = Literal["natal", "horoscope", "question"]
 
+NATAL_PER_MONTH = 1  # same for both tiers; extra via natal_regens_bonus
+NATAL_REGEN_PRICE_RUB = 100
+QUESTION_PACK_PRICE_RUB = 500
+QUESTION_PACK_SIZE = 10
+
 
 @dataclass(frozen=True)
 class LimitSpec:
-    natal_lifetime: int
+    natal_per_month: int
     horoscope_per_day: int
     question_lifetime: int | None
-    question_per_day: int | None
     question_per_month: int | None = field(default=None)
 
 
 FREE_LIMITS = LimitSpec(
-    natal_lifetime=1,
+    natal_per_month=NATAL_PER_MONTH,
     horoscope_per_day=1,
     question_lifetime=3,
-    question_per_day=None,
     question_per_month=None,
 )
 
-# Premium: 3 horoscopes/day, 10 questions/month, extra packs via bonus_questions
+# Premium: 3 horoscopes/day, 10 questions/month
+# Natal: same 1/month as free (buy extra via natal_regens_bonus)
 PREMIUM_LIMITS = LimitSpec(
-    natal_lifetime=99,
+    natal_per_month=NATAL_PER_MONTH,
     horoscope_per_day=3,
     question_lifetime=None,
-    question_per_day=None,
     question_per_month=10,
 )
 
@@ -75,15 +78,21 @@ async def _count(
 
 
 async def check_natal(session: AsyncSession, user: User) -> Allowance:
-    s = spec_of(user)
-    used = await _count(session, user.id, "natal", hours=None)
+    used = await _count(session, user.id, "natal", hours=24 * 30)
+    bonus = max(0, user.natal_regens_bonus or 0)
     return Allowance(
-        allowed=used < s.natal_lifetime,
+        allowed=used < NATAL_PER_MONTH or bonus > 0,
         used=used,
-        limit=s.natal_lifetime,
-        window="lifetime",
+        limit=NATAL_PER_MONTH + bonus,
+        window="month",
         tier=tier_of(user),
     )
+
+
+def consume_natal_bonus_if_needed(user: User, used_before_call: int) -> None:
+    """If the call used a purchased regen (not the monthly quota), decrement it."""
+    if used_before_call >= NATAL_PER_MONTH and (user.natal_regens_bonus or 0) > 0:
+        user.natal_regens_bonus = max(0, user.natal_regens_bonus - 1)
 
 
 async def check_horoscope(session: AsyncSession, user: User) -> Allowance:
@@ -114,7 +123,6 @@ async def check_question(session: AsyncSession, user: User) -> Allowance:
             tier=t,
         )
 
-    # free tier
     limit = s.question_lifetime or 0
     used = await _count(session, user.id, "question", hours=None)
     regular_left = max(0, limit - used)
@@ -128,7 +136,6 @@ async def check_question(session: AsyncSession, user: User) -> Allowance:
 
 
 def consume_question_bonus_if_needed(user: User, used_before_call: int) -> None:
-    """Decrement bonus_questions if the call exhausted the base quota."""
     bonus = user.bonus_questions or 0
     if bonus <= 0:
         return
@@ -148,32 +155,28 @@ CHECKS = {
 
 
 def paywall_text(kind: Kind, allowance: Allowance) -> str:
-    if allowance.tier == "premium":
-        if kind == "horoscope":
-            return (
-                "🌙 На сегодня звёздная карта уже прочитана — вернёмся к ней завтра ✨"
-            )
-        # premium question monthly limit hit
-        return (
-            "🌙 На этот месяц <b>10 вопросов</b> израсходованы. "
-            "Хочешь задать ещё — купи пакет прямо сейчас: "
-            "<b>10 вопросов за 500 ₽</b> ✨"
-        )
     if kind == "natal":
         return (
-            "🌟 У тебя уже есть карта — она навсегда с тобой. "
-            "Если хочешь пересчитать с другими данными — открой "
-            "<b>👤 Профиль → Ввести данные заново</b>."
+            f"🌟 Натальная карта на этот месяц уже была рассчитана.\n\n"
+            f"Новая бесплатная генерация — в следующем месяце. "
+            f"Или купи пересчёт прямо сейчас за <b>{NATAL_REGEN_PRICE_RUB} ₽</b> ✨"
         )
     if kind == "horoscope":
+        if allowance.tier == "premium":
+            return "🌙 На сегодня звёздная карта прочитана — вернёмся завтра ✨"
         return (
-            "🔮 На сегодня я уже посмотрела звёзды для тебя. "
+            "🔮 На сегодня гороскоп уже готов. "
             "Возвращайся завтра — или открой <b>💎 Премиум</b>, "
-            "и сможешь спрашивать чаще ✨"
+            "там 3 гороскопа в день ✨"
+        )
+    # question
+    if allowance.tier == "premium":
+        return (
+            "🌙 На этот месяц <b>10 вопросов</b> израсходованы. "
+            f"Купи пакет — <b>{QUESTION_PACK_SIZE} вопросов за {QUESTION_PACK_PRICE_RUB} ₽</b> ✨"
         )
     return (
         f"🌙 Ты использовал все {allowance.limit} бесплатных вопроса. "
-        "Если хочешь, чтобы я отвечала без границ — открой <b>💎 Премиум</b>. "
-        "Там <b>10 вопросов в месяц</b>, а если понадобится больше — "
-        "пакеты по 10 вопросов за 500 ₽ ✨"
+        "Открой <b>💎 Премиум</b> — там 10 вопросов в месяц, "
+        f"или пакеты по {QUESTION_PACK_SIZE} вопросов за {QUESTION_PACK_PRICE_RUB} ₽ ✨"
     )

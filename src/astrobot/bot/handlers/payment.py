@@ -14,7 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.keyboards import MENU_PREMIUM
 from astrobot.db.models import User
-from astrobot.limits import is_premium
+from astrobot.limits import (
+    NATAL_REGEN_PRICE_RUB,
+    QUESTION_PACK_PRICE_RUB,
+    QUESTION_PACK_SIZE,
+    is_premium,
+)
 
 router = Router(name="payment")
 
@@ -37,9 +42,10 @@ PLANS: tuple[Plan, ...] = (
         duration_days=30,
         duration_label="30 дней",
         bullets=(
-            "До 30 вопросов в день",
-            "До 5 гороскопов в день",
-            "Приоритет в очереди",
+            "3 гороскопа в день (день / неделя / месяц)",
+            "10 вопросов Астре в месяц",
+            "Утренний гороскоп в 9:00 (опционально)",
+            "Уведомления о новолунии и полнолунии",
         ),
     ),
     Plan(
@@ -51,7 +57,6 @@ PLANS: tuple[Plan, ...] = (
         bullets=(
             "Всё из месячного",
             "Экономия ~17%",
-            "Синастрия (когда добавим)",
         ),
     ),
     Plan(
@@ -63,24 +68,38 @@ PLANS: tuple[Plan, ...] = (
         bullets=(
             "Всё из полугодового",
             "Экономия ~30%",
-            "Эксклюзивные транзитные прогнозы",
         ),
     ),
 )
 
 
 def _plans_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"💳 {p.title} — {p.price_rub} ₽",
-                    callback_data=f"pay:{p.code}",
-                )
-            ]
-            for p in PLANS
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"💳 {p.title} — {p.price_rub} ₽",
+                callback_data=f"pay:{p.code}",
+            )
+        ]
+        for p in PLANS
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=f"🔄 Пересчёт натальной карты — {NATAL_REGEN_PRICE_RUB} ₽",
+                callback_data="pay:natal_regen",
+            )
         ]
     )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=f"💬 Пакет {QUESTION_PACK_SIZE} вопросов — {QUESTION_PACK_PRICE_RUB} ₽",
+                callback_data="pay:question_pack",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _intro_text(user: User) -> str:
@@ -95,7 +114,7 @@ def _intro_text(user: User) -> str:
     lines = [
         "💎 <b>Премиум-подписка</b>",
         "",
-        "Бесплатно у тебя: 1 натальная карта, 1 гороскоп в день, 3 вопроса всего.",
+        "Бесплатно: 1 натальная карта/месяц, 1 гороскоп/день, 3 вопроса.",
         "",
         "Премиум открывает Астру по-настоящему:",
     ]
@@ -104,12 +123,26 @@ def _intro_text(user: User) -> str:
         lines.append(f"<b>{p.title}</b> — {p.price_rub} ₽ ({p.duration_label})")
         for b in p.bullets:
             lines.append(f"• {b}")
+    lines += [
+        "",
+        "— — —",
+        "",
+        "<b>Разовые покупки</b> (без подписки):",
+        f"• 🔄 Пересчёт натальной карты — <b>{NATAL_REGEN_PRICE_RUB} ₽</b>",
+        f"• 💬 Пакет {QUESTION_PACK_SIZE} вопросов — <b>{QUESTION_PACK_PRICE_RUB} ₽</b>",
+    ]
     return "\n".join(lines)
 
 
 @router.message(F.text == MENU_PREMIUM)
 async def on_premium(message: Message, user: User) -> None:
     await message.answer(_intro_text(user), reply_markup=_plans_kb())
+
+
+@router.callback_query(F.data == "premium:show")
+async def on_premium_inline(call: CallbackQuery, user: User) -> None:
+    await call.message.answer(_intro_text(user), reply_markup=_plans_kb())
+    await call.answer()
 
 
 @router.callback_query(F.data.startswith("pay:"))
@@ -119,6 +152,31 @@ async def on_pay(
     user: User,
 ) -> None:
     code = call.data.split(":", 1)[1]
+
+    # One-time purchases
+    if code == "natal_regen":
+        user.natal_regens_bonus = (user.natal_regens_bonus or 0) + 1
+        await session.commit()
+        await call.message.answer(
+            "🧪 <b>Тестовый режим</b> — реальной оплаты не было.\n\n"
+            "🔄 Добавила <b>1 пересчёт натальной карты</b>. "
+            "Теперь можешь нажать «🌟 Натальная карта» и получить новый расчёт ✨"
+        )
+        await call.answer("Пересчёт добавлен")
+        return
+
+    if code == "question_pack":
+        user.bonus_questions = (user.bonus_questions or 0) + QUESTION_PACK_SIZE
+        await session.commit()
+        await call.message.answer(
+            "🧪 <b>Тестовый режим</b> — реальной оплаты не было.\n\n"
+            f"💬 Добавила <b>{QUESTION_PACK_SIZE} вопросов</b>. "
+            "Задавай — я отвечу ✨"
+        )
+        await call.answer(f"+{QUESTION_PACK_SIZE} вопросов")
+        return
+
+    # Subscription plans
     plan = next((p for p in PLANS if p.code == code), None)
     if plan is None:
         await call.answer("План не найден", show_alert=True)
@@ -133,7 +191,7 @@ async def on_pay(
     await call.message.answer(
         "🧪 <b>Тестовый режим</b> — реальной оплаты не было.\n\n"
         f"Активирую <b>{plan.title}</b> до <b>{until_str}</b>. "
-        f"Теперь можешь спрашивать и смотреть гороскопы без жёстких границ ✨\n\n"
-        "<i>Когда подключим YooKassa/Telegram Stars — здесь будет реальная ссылка на оплату.</i>"
+        "Звёзды теперь без ограничений ✨\n\n"
+        "<i>Когда подключим YooKassa/Telegram Stars — здесь будет реальная оплата.</i>"
     )
     await call.answer("Премиум активирован")

@@ -159,6 +159,44 @@ def astro_terms_kb() -> InlineKeyboardMarkup:
     )
 
 
+def final_confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Всё верно", callback_data="onb:final:ok"),
+                InlineKeyboardButton(text="↩️ Начать заново", callback_data="onb:final:restart"),
+            ]
+        ]
+    )
+
+
+def reset_confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🗑 Да, сбросить", callback_data="profile:reset:confirm"),
+                InlineKeyboardButton(text="Отмена", callback_data="cancel"),
+            ]
+        ]
+    )
+
+
+def natal_paywall_kb() -> InlineKeyboardMarkup:
+    from astrobot.limits import NATAL_REGEN_PRICE_RUB
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"💳 Купить пересчёт — {NATAL_REGEN_PRICE_RUB} ₽",
+                    callback_data="pay:natal_regen",
+                )
+            ],
+            [InlineKeyboardButton(text="💎 Открыть Премиум", callback_data="premium:show")],
+        ]
+    )
+
+
 def city_choice_kb(options: list[tuple[str, str]]) -> InlineKeyboardMarkup:
     """options: list of (label, callback_data)."""
     return InlineKeyboardMarkup(

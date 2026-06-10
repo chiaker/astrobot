@@ -7,11 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from astrobot.astrology.chart import build_natal_chart
 from astrobot.astrology.serializer import chart_to_markdown
 from astrobot.astrology.types import BirthData
-from astrobot.bot.keyboards import MENU_NATAL
+from astrobot.bot.keyboards import MENU_NATAL, natal_paywall_kb
 from astrobot.bot.responses import save_and_send_response
 from astrobot.bot.utils import need_profile
 from astrobot.db.models import BirthProfile, LLMUsageLog, User
-from astrobot.limits import check_natal, paywall_text
+from astrobot.limits import check_natal, consume_natal_bonus_if_needed, paywall_text
 from astrobot.llm.client import get_llm
 from astrobot.llm.prompts import build_system_natal, split_brief_full
 
@@ -50,9 +50,10 @@ async def on_natal(message: Message, session: AsyncSession, user: User) -> None:
 
     allowance = await check_natal(session, user)
     if not allowance.allowed:
-        await message.answer(paywall_text("natal", allowance))
+        await message.answer(paywall_text("natal", allowance), reply_markup=natal_paywall_kb())
         return
 
+    pre_call_used = allowance.used
     progress = await message.answer("🌙 Слушаю, что говорят звёзды о тебе…")
     display_name = user.display_name or (message.from_user.full_name if message.from_user else None) or "User"
     birth = _profile_to_birth(profile, name=display_name)
@@ -73,6 +74,7 @@ async def on_natal(message: Message, session: AsyncSession, user: User) -> None:
 
     profile.cached_natal_brief = brief
     profile.cached_natal_full = full
+    consume_natal_bonus_if_needed(user, pre_call_used)
 
     session.add(
         LLMUsageLog(

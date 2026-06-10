@@ -10,6 +10,7 @@ class Onboarding(StatesGroup):
     waiting_for_name = State()
     choosing_gender = State()
     choosing_astro_terms = State()
+    final_confirm = State()
 
 
 class AskingQuestion(StatesGroup):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -8,13 +10,13 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from astrobot.bot.keyboards import MENU_PROFILE
+from astrobot.bot.keyboards import MENU_PROFILE, reset_confirm_kb
 from astrobot.bot.states import Onboarding
-from astrobot.db.models import BirthProfile, HoroscopeCache, User
-from astrobot.limits import check_horoscope, check_question, is_premium
+from astrobot.db.models import BirthProfile, Favorite, HoroscopeCache, LLMUsageLog, User
+from astrobot.limits import NATAL_REGEN_PRICE_RUB, check_horoscope, check_question, is_premium
 
 router = Router(name="profile")
 
@@ -201,7 +203,47 @@ async def on_astro_terms_toggle(
 
 
 @router.callback_query(F.data == "profile:reset")
-async def on_profile_reset(
+async def on_profile_reset_warn(
+    call: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    """Show warnings before reset — natal limit, favorites count."""
+    natal_this_month = (
+        await session.scalar(
+            select(func.count(LLMUsageLog.id)).where(
+                LLMUsageLog.user_id == user.id,
+                LLMUsageLog.kind == "natal",
+                LLMUsageLog.created_at >= datetime.now(UTC) - timedelta(days=30),
+            )
+        )
+    ) or 0
+
+    fav_count = (
+        await session.scalar(
+            select(func.count(Favorite.id)).where(Favorite.user_id == user.id)
+        )
+    ) or 0
+
+    lines = ["⚠️ <b>Сброс профиля</b>\n", "Это удалит твои данные рождения и настройки."]
+
+    if natal_this_month > 0:
+        lines.append(
+            f"\n🌟 <b>Внимание:</b> натальная карта уже была рассчитана в этом месяце. "
+            f"После сброса — новая генерация только через 30 дней "
+            f"или за <b>{NATAL_REGEN_PRICE_RUB} ₽</b>."
+        )
+    if fav_count > 0:
+        lines.append(f"\n⭐ Будет удалено <b>{fav_count}</b> записей из Избранного.")
+
+    lines.append("\nПродолжить?")
+
+    await call.message.answer("\n".join(lines), reply_markup=reset_confirm_kb())
+    await call.answer()
+
+
+@router.callback_query(F.data == "profile:reset:confirm")
+async def on_profile_reset_confirm(
     call: CallbackQuery,
     state: FSMContext,
     session: AsyncSession,
