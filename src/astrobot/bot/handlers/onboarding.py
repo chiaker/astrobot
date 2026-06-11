@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, time
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.astrology.geocoding import geocode_city
@@ -19,7 +20,7 @@ from astrobot.bot.keyboards import (
     time_unknown_kb,
 )
 from astrobot.bot.states import Onboarding
-from astrobot.db.models import BirthProfile, User
+from astrobot.db.models import BirthProfile, HoroscopeCache, User
 
 router = Router(name="onboarding")
 
@@ -67,6 +68,8 @@ async def cmd_start(
     state: FSMContext,
     session: AsyncSession,
     user: User,
+    bot: Bot,
+    is_new_user: bool = False,
 ) -> None:
     await state.clear()
 
@@ -74,15 +77,23 @@ async def cmd_start(
     from astrobot.referral import parse_start_arg, try_apply_referral
 
     ref_code = parse_start_arg(message.text)
-    if ref_code:
-        applied = await try_apply_referral(session, user, ref_code)
-        if applied:
+    if ref_code and is_new_user:
+        inviter = await try_apply_referral(session, user, ref_code)
+        if inviter is not None:
             await session.commit()
             REFERRALS_REGISTERED.inc()
             await message.answer(
                 "🎁 Друг тебя пригласил — я добавила <b>+2 бесплатных вопроса</b>. "
                 "Когда захочешь — приходи спрашивать ✨"
             )
+            try:
+                await bot.send_message(
+                    inviter.tg_user_id,
+                    "🎁 По твоей реферальной ссылке зарегистрировался новый пользователь — "
+                    "тебе <b>+2 бесплатных вопроса</b>! ✨",
+                )
+            except Exception:
+                pass
 
     profile = await session.get(BirthProfile, user.id)
     if profile is not None:
@@ -336,11 +347,25 @@ async def on_final_ok(
     user: User,
 ) -> None:
     data = await state.get_data()
-    user.display_name = data.get("display_name") or None
+    new_name = data.get("display_name") or None
+    new_terms = bool(data.get("astro_terms", True))
+
+    name_changed = new_name != user.display_name
+    terms_changed = new_terms != user.astro_terms_enabled
+
+    user.display_name = new_name
     user.gender = data.get("gender") or None
-    user.astro_terms_enabled = bool(data.get("astro_terms", True))
+    user.astro_terms_enabled = new_terms
     if user.legal_agreed_at is None:
         user.legal_agreed_at = datetime.now(UTC)
+
+    if name_changed or terms_changed:
+        profile = await session.get(BirthProfile, user.id)
+        if profile is not None:
+            profile.cached_natal_brief = None
+            profile.cached_natal_full = None
+        await session.execute(delete(HoroscopeCache).where(HoroscopeCache.user_id == user.id))
+
     await session.commit()
     await state.clear()
 

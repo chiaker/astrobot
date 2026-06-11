@@ -37,21 +37,21 @@ async def try_apply_referral(
     session: AsyncSession,
     invitee: User,
     code: str,
-) -> bool:
-    """Apply referral code to invitee. Returns True on success."""
+) -> "User | None":
+    """Apply referral code to invitee. Returns the inviter on success, None otherwise."""
     if invitee.referred_by_user_id is not None:
-        return False
+        return None
     if invitee.referral_code == code:
-        return False
+        return None
 
     inviter = await session.scalar(select(User).where(User.referral_code == code))
     if inviter is None or inviter.id == invitee.id:
-        return False
+        return None
 
     invitee.referred_by_user_id = inviter.id
     invitee.bonus_questions = (invitee.bonus_questions or 0) + BONUS_QUESTIONS
     inviter.bonus_questions = (inviter.bonus_questions or 0) + BONUS_QUESTIONS
-    return True
+    return inviter
 
 
 async def build_share_link(bot_username: str, code: str) -> str:

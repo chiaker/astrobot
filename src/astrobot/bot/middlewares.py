@@ -90,7 +90,8 @@ class UserMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         user = await session.scalar(select(User).where(User.tg_user_id == tg_user.id))
-        if user is None:
+        is_new_user = user is None
+        if is_new_user:
             user = User(
                 tg_user_id=tg_user.id,
                 lang=tg_user.language_code or "ru",
@@ -101,6 +102,7 @@ class UserMiddleware(BaseMiddleware):
             await session.refresh(user)
 
         data["user"] = user
+        data["is_new_user"] = is_new_user
         return await handler(event, data)
 
 

@@ -258,8 +258,12 @@ async def on_push_lunar_toggle(call: CallbackQuery, session: AsyncSession, user:
 @router.callback_query(F.data == "settings:astro_terms")
 async def on_astro_terms_toggle(call: CallbackQuery, session: AsyncSession, user: User) -> None:
     user.astro_terms_enabled = not user.astro_terms_enabled
-    await session.commit()
     profile = await session.get(BirthProfile, user.id)
+    if profile is not None:
+        profile.cached_natal_brief = None
+        profile.cached_natal_full = None
+    await session.execute(delete(HoroscopeCache).where(HoroscopeCache.user_id == user.id))
+    await session.commit()
     if profile is not None:
         text = await _profile_text(profile, user, session)
         await call.message.edit_text(text, reply_markup=_profile_kb(user))
