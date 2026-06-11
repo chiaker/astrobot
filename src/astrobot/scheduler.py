@@ -24,7 +24,7 @@ from astrobot.db.models import BirthProfile, HoroscopeCache, LLMUsageLog, LunarE
 from astrobot.db.session import get_sessionmaker
 from astrobot.limits import is_premium
 from astrobot.llm.client import get_llm
-from astrobot.llm.prompts import SYSTEM_HOROSCOPE, split_brief_full
+from astrobot.llm.prompts import build_system_horoscope, split_brief_full
 from astrobot.lunar import compute_phases, horizon_dates, phase_text
 from astrobot.metrics import PUSH_SENT
 
@@ -59,7 +59,7 @@ async def _get_or_generate_horoscope(
 
     llm = get_llm()
     response = await llm.complete(
-        system=SYSTEM_HOROSCOPE,
+        system=build_system_horoscope(user),
         cached_context=natal_md + "\n\n" + transits_md,
         user_message="Дай гороскоп на сегодня.",
         max_tokens=2800,
