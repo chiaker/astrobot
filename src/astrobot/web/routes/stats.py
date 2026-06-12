@@ -15,7 +15,6 @@ from astrobot.db.models import (
     LLMUsageLog,
     Payment,
     QuestionLog,
-    Response,
     User,
 )
 from astrobot.db.session import get_session
@@ -36,8 +35,10 @@ def _cost_of(inp, cached, out, s) -> float:
     )
 
 def _money(v: float) -> str:
-    if v >= 100: return f"${v:.0f}"
-    if v >= 1: return f"${v:.2f}"
+    if v >= 100:
+        return f"${v:.0f}"
+    if v >= 1:
+        return f"${v:.2f}"
     return f"${v:.5f}"
 
 def _is_prem(pu, now: datetime) -> bool:
@@ -50,7 +51,8 @@ def _fmt_date(d) -> str:
     return d.strftime("%d.%m.%Y") if d else "—"
 
 def _trunc(s, n: int = 80) -> str:
-    if not s: return ""
+    if not s:
+        return ""
     s = str(s).replace("\n", " ").strip()
     return s[:n-1] + "…" if len(s) > n else s
 
@@ -490,7 +492,8 @@ async def _gather_users(
             User.referral_code.ilike(term),
         )
         # simpler: use text search on tg_user_id string
-        from sqlalchemy import cast, BigInteger, String as SAStr
+        from sqlalchemy import String as SAStr
+        from sqlalchemy import cast
         flt = or_(
             cast(User.tg_user_id, SAStr).like(term),
             User.display_name.ilike(term),
@@ -531,7 +534,7 @@ def _render_users(users: list, total: int, page: int, search: str, now: datetime
         name = u.display_name or '<span class="muted">—</span>'
         gender_icon = {"m": "♂", "f": "♀"}.get(u.gender or "", "—")
         bonus_natal = (
-            f'<span class="badge b-warn">∞</span>' if (u.natal_regens_bonus or 0) == -1
+            '<span class="badge b-warn">∞</span>' if (u.natal_regens_bonus or 0) == -1
             else str(u.natal_regens_bonus or 0)
         )
         rows.append(

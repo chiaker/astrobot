@@ -37,7 +37,7 @@ async def try_apply_referral(
     session: AsyncSession,
     invitee: User,
     code: str,
-) -> "User | None":
+) -> User | None:
     """Apply referral code to invitee. Returns the inviter on success, None otherwise."""
     if invitee.referred_by_user_id is not None:
         return None

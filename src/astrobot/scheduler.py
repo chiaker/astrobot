@@ -129,7 +129,6 @@ async def morning_horoscope_job(bot: Bot) -> None:
     """Runs every minute. Finds premium opted-in users whose local time hit
     the push hour, hasn't been pushed today, sends their daily horoscope."""
     settings = get_settings()
-    target_hour = settings.push_horoscope_hour
     now_utc = datetime.now(UTC)
 
     sessionmaker = get_sessionmaker()
@@ -225,7 +224,6 @@ async def lunar_push_job(bot: Bot) -> None:
     """Per-minute: if today is a lunar event, push to opted-in premium
     users at their local push hour."""
     settings = get_settings()
-    target_hour = settings.push_horoscope_hour
     now_utc = datetime.now(UTC)
 
     sessionmaker = get_sessionmaker()

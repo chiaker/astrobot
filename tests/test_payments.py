@@ -8,7 +8,6 @@ from astrobot.db.models import Payment, User
 from astrobot.payments import service
 from astrobot.payments.catalog import QUESTION_PACK_SIZE, get_item
 
-
 # ─── catalog: grant / revoke are exact inverses (pure, no DB) ──────────────────
 
 def test_grant_revoke_question_pack():
