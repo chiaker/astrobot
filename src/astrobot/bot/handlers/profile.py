@@ -13,12 +13,15 @@ from aiogram.types import (
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from astrobot.alerts import notify_ops
 from astrobot.astrology.geocoding import geocode_city
 from astrobot.bot.keyboards import MENU_PROFILE, name_skip_kb, push_hour_kb, reset_confirm_kb
 from astrobot.bot.states import Onboarding, PushSetup
 from astrobot.db.models import BirthProfile, Favorite, HoroscopeCache, LLMUsageLog, Payment, User
 from astrobot.limits import NATAL_REGEN_PRICE_RUB, check_horoscope, check_question, is_premium
+from astrobot.payments import service as payment_service
 from astrobot.payments.catalog import get_item
+from astrobot.redis_client import get_redis
 
 router = Router(name="profile")
 
@@ -52,7 +55,7 @@ def _profile_kb(user: User) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show")]
     )
     rows.append(
-        [InlineKeyboardButton(text="🧾 Мои платежи", callback_data="payments:mine")]
+        [InlineKeyboardButton(text="🧾 История операций", callback_data="payments:mine")]
     )
     terms_state = "вкл" if user.astro_terms_enabled else "выкл"
     rows.append(
@@ -121,12 +124,21 @@ async def on_profile(message: Message, session: AsyncSession, user: User) -> Non
     await message.answer(text, reply_markup=_profile_kb(user))
 
 
-_PAY_STATUS = {
-    "pending": "⏳ ожидает",
-    "succeeded": "✅ оплачен",
-    "canceled": "✖️ отменён",
-    "refunded": "↩️ возврат",
-}
+def _fmt_op(p: Payment) -> str:
+    item = get_item(p.item_code)
+    title = item.title if item else p.item_code
+    amount = int(p.amount)
+    if p.status == "succeeded":
+        d = (p.paid_at or p.created_at).strftime("%d.%m.%Y")
+        return f"✅ {d} · {title} · <b>{amount} ₽</b> — оплачен"
+    if p.status == "refunded":
+        d = (p.refunded_at or p.created_at).strftime("%d.%m.%Y")
+        return f"↩️ {d} · {title} · {amount} ₽ — возврат"
+    if p.status == "pending":
+        d = p.created_at.strftime("%d.%m.%Y")
+        return f"⏳ {d} · {title} · {amount} ₽ — ожидает оплаты"
+    d = p.created_at.strftime("%d.%m.%Y")
+    return f"✖️ {d} · {title} · {amount} ₽ — отменён"
 
 
 @router.callback_query(F.data == "payments:mine")
@@ -136,24 +148,87 @@ async def on_my_payments(call: CallbackQuery, session: AsyncSession, user: User)
             select(Payment)
             .where(Payment.user_id == user.id)
             .order_by(desc(Payment.created_at))
-            .limit(20)
+            .limit(30)
         )
     )
     if not payments:
-        await call.message.answer("🧾 У тебя пока нет платежей.")
+        await call.message.answer("🧾 У тебя пока нет операций.")
         await call.answer()
         return
 
-    lines = ["🧾 <b>Твои платежи</b>", ""]
+    lines = ["🧾 <b>История операций</b>", ""]
+    refund_buttons: list[list[InlineKeyboardButton]] = []
     for p in payments:
-        item = get_item(p.item_code)
-        title = item.title if item else p.item_code
-        d = p.created_at.strftime("%d.%m.%Y") if p.created_at else "—"
-        status = _PAY_STATUS.get(p.status, p.status)
-        lines.append(f"• {d} · {title} · <b>{int(p.amount)} ₽</b> · {status}")
-    lines += ["", "<i>Фискальный чек по каждому платежу приходит на указанный email.</i>"]
-    await call.message.answer("\n".join(lines))
+        lines.append(_fmt_op(p))
+        if p.status == "succeeded" and len(refund_buttons) < 5:
+            item = get_item(p.item_code)
+            title = item.title if item else p.item_code
+            d = (p.paid_at or p.created_at).strftime("%d.%m")
+            refund_buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"↩️ Запросить возврат: {title} ({d})",
+                        callback_data=f"refund:req:{p.id}",
+                    )
+                ]
+            )
+    lines += [
+        "",
+        "<i>Фискальный чек по каждому оплаченному платежу приходит на email. "
+        "Чтобы оформить возврат — нажми кнопку ниже, мы рассмотрим заявку.</i>",
+    ]
+    kb = InlineKeyboardMarkup(inline_keyboard=refund_buttons) if refund_buttons else None
+    await call.message.answer("\n".join(lines), reply_markup=kb)
     await call.answer()
+
+
+@router.callback_query(F.data.startswith("refund:req:"))
+async def on_refund_request(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+    try:
+        payment_id = int(call.data.split(":")[2])
+    except (IndexError, ValueError):
+        await call.answer()
+        return
+
+    payment = await session.get(Payment, payment_id)
+    if payment is None or payment.user_id != user.id:
+        await call.answer("Платёж не найден", show_alert=True)
+        return
+    if payment.status != "succeeded":
+        await call.answer("По этому платежу возврат недоступен", show_alert=True)
+        return
+
+    # Dedupe: one open request per payment per day
+    redis = get_redis()
+    try:
+        fresh = await redis.set(f"refundreq:{payment_id}", "1", ex=86400, nx=True)
+    except Exception:
+        fresh = True
+    if not fresh:
+        await call.answer("Заявка уже отправлена — мы свяжемся с тобой.", show_alert=True)
+        return
+
+    allowed, reason = await payment_service.refund_eligibility(session, payment)
+    item = get_item(payment.item_code)
+    title = item.title if item else payment.item_code
+    elig = "✅ по политике положен" if allowed else f"⚠️ вне политики ({reason})"
+    paid_d = (payment.paid_at or payment.created_at).strftime("%d.%m.%Y")
+    name = user.display_name or "—"
+
+    await notify_ops(
+        call.bot,
+        f"↩️ <b>Запрос возврата</b>\n"
+        f"Платёж #{payment.id}: {title} · {int(payment.amount)} ₽\n"
+        f"Юзер: {name} (id={user.id}, tg=<code>{user.tg_user_id}</code>)\n"
+        f"Оплачен: {paid_d}\n"
+        f"Право: {elig}\n"
+        f"→ /admin → 💳 Платежи → «Вернуть»",
+    )
+
+    await call.message.answer(
+        "📨 Заявка на возврат отправлена. Мы рассмотрим её и свяжемся с тобой ✨"
+    )
+    await call.answer("Заявка отправлена")
 
 
 @router.callback_query(F.data == "settings:response_toggle")
