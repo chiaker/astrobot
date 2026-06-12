@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     yookassa_secret_key: str = Field(default="", alias="YOOKASSA_SECRET_KEY")
     yookassa_return_url: str = Field(default="", alias="YOOKASSA_RETURN_URL")
     yookassa_webhook_ips: str = Field(default="", alias="YOOKASSA_WEBHOOK_IPS")
+    # Required by YooKassa on each receipt item: 1=без НДС (НПД/УСН), 4=НДС 20% (ОСН)
+    yookassa_vat_code: int = Field(default=1, alias="YOOKASSA_VAT_CODE")
 
     # Refund policy
     refund_window_days: int = Field(default=14, alias="REFUND_WINDOW_DAYS")

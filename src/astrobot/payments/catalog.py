@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from astrobot.config import get_settings
 from astrobot.db.models import User
 from astrobot.limits import (
     NATAL_REGEN_PRICE_RUB,
@@ -157,9 +158,10 @@ def get_item(code: str) -> Item | None:
 def build_receipt(email: str, item: Item) -> dict:
     """54-ФЗ fiscal receipt object for YooKassa.
 
-    vat_code is intentionally NOT sent — the VAT rate and tax system are taken
-    from the shop's fiscalization defaults configured in the YooKassa cabinet.
+    vat_code is REQUIRED by YooKassa on every receipt item, so we always send it
+    from settings (YOOKASSA_VAT_CODE: 1=без НДС for НПД/УСН, 4=НДС 20% for ОСН).
     """
+    vat_code = get_settings().yookassa_vat_code
     return {
         "customer": {"email": email},
         "items": [
@@ -167,6 +169,7 @@ def build_receipt(email: str, item: Item) -> dict:
                 "description": item.title[:128],
                 "quantity": "1.00",
                 "amount": {"value": f"{item.amount_rub:.2f}", "currency": "RUB"},
+                "vat_code": vat_code,
                 "payment_mode": "full_payment",
                 "payment_subject": "service",
             }
