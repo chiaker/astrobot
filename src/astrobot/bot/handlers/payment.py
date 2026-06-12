@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+import re
 
+import structlog
 from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -13,64 +14,23 @@ from aiogram.types import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.keyboards import MENU_PREMIUM
-from astrobot.db.models import User
+from astrobot.bot.states import PaymentFlow
+from astrobot.config import get_settings
+from astrobot.db.models import Payment, User
 from astrobot.limits import (
     NATAL_REGEN_PRICE_RUB,
     QUESTION_PACK_PRICE_RUB,
     QUESTION_PACK_SIZE,
     is_premium,
 )
+from astrobot.metrics import PAYMENTS_CREATED, PAYMENTS_FAILED
+from astrobot.payments import yookassa
+from astrobot.payments.catalog import PLANS, build_receipt, get_item
 
+log = structlog.get_logger(__name__)
 router = Router(name="payment")
 
-
-@dataclass
-class Plan:
-    code: str
-    title: str
-    price_rub: int
-    duration_days: int
-    duration_label: str
-    bullets: tuple[str, ...]
-
-
-PLANS: tuple[Plan, ...] = (
-    Plan(
-        code="month",
-        title="Премиум на месяц",
-        price_rub=299,
-        duration_days=30,
-        duration_label="30 дней",
-        bullets=(
-            "3 гороскопа в день (день / неделя / месяц)",
-            "10 вопросов Астре в месяц",
-            "Утренний гороскоп в 9:00 (опционально)",
-            "Уведомления о новолунии и полнолунии",
-        ),
-    ),
-    Plan(
-        code="half",
-        title="Премиум на полгода",
-        price_rub=1499,
-        duration_days=180,
-        duration_label="180 дней",
-        bullets=(
-            "Всё из месячного",
-            "Экономия ~17%",
-        ),
-    ),
-    Plan(
-        code="year",
-        title="Премиум на год",
-        price_rub=2499,
-        duration_days=365,
-        duration_label="365 дней",
-        bullets=(
-            "Всё из полугодового",
-            "Экономия ~30%",
-        ),
-    ),
-)
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _plans_kb() -> InlineKeyboardMarkup:
@@ -150,48 +110,132 @@ async def on_pay(
     call: CallbackQuery,
     session: AsyncSession,
     user: User,
+    state: FSMContext,
 ) -> None:
     code = call.data.split(":", 1)[1]
+    item = get_item(code)
+    if item is None:
+        await call.answer("Товар не найден", show_alert=True)
+        return
 
-    # One-time purchases
-    if code == "natal_regen":
-        user.natal_regens_bonus = (user.natal_regens_bonus or 0) + 1
-        await session.commit()
+    await call.answer()
+
+    # Need an email for the 54-ФЗ receipt — ask once, then reuse.
+    if not user.email:
+        await state.set_state(PaymentFlow.waiting_for_email)
+        await state.update_data(pay_code=code)
         await call.message.answer(
-            "🧪 <b>Тестовый режим</b> — реальной оплаты не было.\n\n"
-            "🔄 Добавила <b>1 пересчёт натальной карты</b>. "
-            "Теперь можешь нажать «🌟 Натальная карта» и получить новый расчёт ✨"
+            "📧 Для чека об оплате нужен <b>email</b> — отправь его одним сообщением.\n\n"
+            "<i>На него придёт фискальный чек. Спрошу только один раз.</i>"
         )
-        await call.answer("Пересчёт добавлен")
         return
 
-    if code == "question_pack":
-        user.bonus_questions = (user.bonus_questions or 0) + QUESTION_PACK_SIZE
-        await session.commit()
-        await call.message.answer(
-            "🧪 <b>Тестовый режим</b> — реальной оплаты не было.\n\n"
-            f"💬 Добавила <b>{QUESTION_PACK_SIZE} вопросов</b>. "
-            "Задавай — я отвечу ✨"
+    await _start_payment(call.message, session, user, code)
+
+
+@router.message(PaymentFlow.waiting_for_email)
+async def on_payment_email(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    email = (message.text or "").strip()
+    if not _EMAIL_RE.fullmatch(email) or len(email) > 255:
+        await message.answer(
+            "Хм, это не похоже на email. Пришли в формате <code>name@example.com</code>."
         )
-        await call.answer(f"+{QUESTION_PACK_SIZE} вопросов")
         return
 
-    # Subscription plans
-    plan = next((p for p in PLANS if p.code == code), None)
-    if plan is None:
-        await call.answer("План не найден", show_alert=True)
-        return
+    data = await state.get_data()
+    code = data.get("pay_code")
+    await state.clear()
 
-    now = datetime.now(UTC)
-    base = user.premium_until if user.premium_until and user.premium_until > now else now
-    user.premium_until = base + timedelta(days=plan.duration_days)
+    user.email = email
     await session.commit()
 
-    until_str = user.premium_until.strftime("%d.%m.%Y")
-    await call.message.answer(
-        "🧪 <b>Тестовый режим</b> — реальной оплаты не было.\n\n"
-        f"Активирую <b>{plan.title}</b> до <b>{until_str}</b>. "
-        "Звёзды теперь без ограничений ✨\n\n"
-        "<i>Когда подключим YooKassa/Telegram Stars — здесь будет реальная оплата.</i>"
+    if not code or get_item(code) is None:
+        await message.answer("Что-то сбилось — открой <b>💎 Премиум</b> и выбери ещё раз.")
+        return
+
+    await _start_payment(message, session, user, code)
+
+
+async def _start_payment(
+    target: Message,
+    session: AsyncSession,
+    user: User,
+    code: str,
+) -> None:
+    item = get_item(code)
+    if item is None:
+        await target.answer("Товар не найден.")
+        return
+
+    settings = get_settings()
+    if not settings.yookassa_shop_id or not settings.yookassa_secret_key:
+        await target.answer(
+            "⚙️ Оплата пока не настроена. Загляни позже — звёзды уже на подходе ✨"
+        )
+        return
+
+    payment = Payment(
+        user_id=user.id,
+        provider="yookassa",
+        item_code=item.code,
+        kind=item.kind,
+        amount=item.amount_rub,
+        currency="RUB",
+        status="pending",
+        email=user.email,
     )
-    await call.answer("Премиум активирован")
+    session.add(payment)
+    await session.flush()
+
+    try:
+        resp = await yookassa.create_payment(
+            amount_rub=item.amount_rub,
+            description=f"{item.title} — Астра",
+            metadata={
+                "payment_id": str(payment.id),
+                "tg_user_id": str(user.tg_user_id),
+                "item_code": item.code,
+            },
+            receipt=build_receipt(user.email or "", item),
+            return_url=settings.yookassa_return_url_effective,
+        )
+    except Exception as e:
+        payment.status = "canceled"
+        await session.commit()
+        PAYMENTS_FAILED.labels(stage="create").inc()
+        log.warning("payment_create_failed", item=item.code, error=str(e))
+        await target.answer(
+            "🌧 Не получилось создать платёж — попробуй ещё раз чуть позже."
+        )
+        return
+
+    payment.yookassa_payment_id = resp.get("id")
+    confirmation_url = (resp.get("confirmation") or {}).get("confirmation_url")
+    payment.metadata_json = {"confirmation_url": confirmation_url}
+    await session.commit()
+
+    if not confirmation_url:
+        PAYMENTS_FAILED.labels(stage="create").inc()
+        log.warning("payment_no_confirmation_url", item=item.code, resp=str(resp)[:300])
+        await target.answer(
+            "🌧 Не получилось создать платёж — попробуй ещё раз чуть позже."
+        )
+        return
+
+    PAYMENTS_CREATED.labels(item=item.code).inc()
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"💳 Оплатить — {item.amount_rub} ₽", url=confirmation_url)]
+        ]
+    )
+    await target.answer(
+        f"<b>{item.title}</b> — {item.amount_rub} ₽\n\n"
+        "Нажми кнопку ниже, чтобы перейти к безопасной оплате через ЮKassa. "
+        "После оплаты вернись в бот — я подтвержу начисление ✨",
+        reply_markup=kb,
+    )

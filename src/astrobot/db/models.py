@@ -11,6 +11,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     Time,
@@ -49,6 +50,7 @@ class User(Base):
     )
     display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     gender: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     astro_terms_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     natal_regens_bonus: Mapped[int] = mapped_column(Integer, default=0)
     push_tz: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -71,6 +73,9 @@ class User(Base):
         back_populates="user", cascade="all, delete-orphan"
     )
     favorites: Mapped[list[Favorite]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    payments: Mapped[list[Payment]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -185,6 +190,35 @@ class LunarEvent(Base):
     event_date: Mapped[date] = mapped_column(Date, unique=True, index=True)
     kind: Mapped[str] = mapped_column(String(8))
     notified: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), default="yookassa")
+    # Set after the provider responds; unique → idempotency key for the webhook
+    yookassa_payment_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True, nullable=True
+    )
+    item_code: Mapped[str] = mapped_column(String(32))
+    kind: Mapped[str] = mapped_column(String(32))
+    amount: Mapped[float] = mapped_column(Numeric(10, 2))
+    currency: Mapped[str] = mapped_column(String(8), default="RUB")
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    paid_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    user: Mapped[User] = relationship(back_populates="payments")
 
 
 class LLMUsageLog(Base):

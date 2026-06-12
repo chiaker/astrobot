@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     bot_username: str = Field(default="", alias="BOT_USERNAME")
     ops_chat_id: int | None = Field(default=None, alias="OPS_CHAT_ID")
 
+    # YooKassa (direct REST API)
+    yookassa_shop_id: str = Field(default="", alias="YOOKASSA_SHOP_ID")
+    yookassa_secret_key: str = Field(default="", alias="YOOKASSA_SECRET_KEY")
+    yookassa_return_url: str = Field(default="", alias="YOOKASSA_RETURN_URL")
+    yookassa_webhook_ips: str = Field(default="", alias="YOOKASSA_WEBHOOK_IPS")
+    yookassa_vat_code: int = Field(default=1, alias="YOOKASSA_VAT_CODE")
+
     push_horoscope_hour: int = Field(default=9, alias="PUSH_HOROSCOPE_HOUR")
 
     llm_price_input_usd_per_m: float = Field(
@@ -58,6 +65,14 @@ class Settings(BaseSettings):
     @property
     def webhook_url(self) -> str:
         return f"{self.webhook_base_url.rstrip('/')}{self.webhook_path}"
+
+    @property
+    def yookassa_return_url_effective(self) -> str:
+        if self.yookassa_return_url:
+            return self.yookassa_return_url
+        if self.bot_username:
+            return f"https://t.me/{self.bot_username}"
+        return "https://t.me"
 
 
 @lru_cache

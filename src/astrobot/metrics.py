@@ -75,3 +75,21 @@ FAVORITES_SAVED = Counter(
     "astrobot_favorites_saved_total",
     "Items added to favorites",
 )
+
+PAYMENTS_CREATED = Counter(
+    "astrobot_payments_created_total",
+    "Payment links created (pending)",
+    ["item"],
+)
+
+PAYMENTS_SUCCEEDED = Counter(
+    "astrobot_payments_succeeded_total",
+    "Payments confirmed and granted",
+    ["item"],
+)
+
+PAYMENTS_FAILED = Counter(
+    "astrobot_payments_failed_total",
+    "Payment creation or webhook processing failures",
+    ["stage"],
+)

@@ -20,3 +20,7 @@ class AskingQuestion(StatesGroup):
 class PushSetup(StatesGroup):
     waiting_for_city = State()
     choosing_hour = State()
+
+
+class PaymentFlow(StatesGroup):
+    waiting_for_email = State()

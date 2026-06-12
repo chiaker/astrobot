@@ -347,25 +347,11 @@ async def on_final_ok(
     user: User,
 ) -> None:
     data = await state.get_data()
-    new_name = data.get("display_name") or None
-    new_terms = bool(data.get("astro_terms", True))
-
-    name_changed = new_name != user.display_name
-    terms_changed = new_terms != user.astro_terms_enabled
-
-    user.display_name = new_name
+    user.display_name = data.get("display_name") or None
     user.gender = data.get("gender") or None
-    user.astro_terms_enabled = new_terms
+    user.astro_terms_enabled = bool(data.get("astro_terms", True))
     if user.legal_agreed_at is None:
         user.legal_agreed_at = datetime.now(UTC)
-
-    if name_changed or terms_changed:
-        profile = await session.get(BirthProfile, user.id)
-        if profile is not None:
-            profile.cached_natal_brief = None
-            profile.cached_natal_full = None
-        await session.execute(delete(HoroscopeCache).where(HoroscopeCache.user_id == user.id))
-
     await session.commit()
     await state.clear()
 
@@ -384,11 +370,12 @@ async def on_final_restart(
     session: AsyncSession,
     user: User,
 ) -> None:
-    # Delete birth profile saved at step 6
+    # Delete birth profile saved at step 6 + stale horoscope cache
     profile = await session.get(BirthProfile, user.id)
     if profile is not None:
         await session.delete(profile)
-        await session.commit()
+    await session.execute(delete(HoroscopeCache).where(HoroscopeCache.user_id == user.id))
+    await session.commit()
 
     # Clear and restart from the very beginning (name first)
     await state.clear()
