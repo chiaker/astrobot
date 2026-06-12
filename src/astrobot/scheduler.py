@@ -279,6 +279,7 @@ async def reconcile_payments_job(bot: Bot) -> None:
     than 2h that still can't be resolved are marked canceled (abandoned)."""
     now = datetime.now(UTC)
     stale_before = now - timedelta(hours=2)
+    orphan_before = now - timedelta(minutes=30)
 
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as session:
@@ -301,6 +302,73 @@ async def reconcile_payments_job(bot: Bot) -> None:
                 payment.status = "canceled"
                 await session.commit()
                 log.info("payment_marked_abandoned", payment_id=payment.id)
+
+        # Orphans: created but YooKassa payment id never persisted (crash between
+        # create and save) — they can never be reconciled. Cancel old ones.
+        orphans = list(
+            await session.scalars(
+                select(Payment).where(
+                    Payment.status == "pending",
+                    Payment.yookassa_payment_id.is_(None),
+                    Payment.created_at < orphan_before,
+                )
+            )
+        )
+        for payment in orphans:
+            payment.status = "canceled"
+        if orphans:
+            await session.commit()
+            log.info("orphan_pendings_canceled", count=len(orphans))
+
+
+async def premium_expiry_reminder_job(bot: Bot) -> None:
+    """Hourly: remind premium users whose subscription ends within N days.
+    Deduped via premium_reminded_until so each expiry is reminded once; a
+    renewal (new premium_until) re-arms the reminder."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    settings = get_settings()
+    now = datetime.now(UTC)
+    horizon = now + timedelta(days=settings.premium_reminder_days_before)
+
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        users = list(
+            await session.scalars(
+                select(User)
+                .where(User.premium_until.isnot(None))
+                .where(User.premium_until > now)
+                .where(User.premium_until <= horizon)
+            )
+        )
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="💎 Продлить премиум", callback_data="premium:show")]
+            ]
+        )
+        for user in users:
+            if user.premium_reminded_until == user.premium_until:
+                continue  # already reminded for this expiry
+            until = user.premium_until.strftime("%d.%m.%Y") if user.premium_until else ""
+            try:
+                await bot.send_message(
+                    chat_id=user.tg_user_id,
+                    text=(
+                        f"💎 Твой премиум заканчивается <b>{until}</b>.\n\n"
+                        "Продли, чтобы не потерять 3 гороскопа в день, 10 вопросов в месяц "
+                        "и утренние пуши ✨"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=kb,
+                )
+                user.premium_reminded_until = user.premium_until
+                await session.commit()
+                PUSH_SENT.labels(kind="premium_expiry", result="ok").inc()
+                log.info("premium_reminder_sent", user_id=user.id)
+            except Exception as e:
+                await session.rollback()
+                log.warning("premium_reminder_failed", user_id=user.id, error=str(e))
+                PUSH_SENT.labels(kind="premium_expiry", result="fail").inc()
 
 
 def build_scheduler(bot: Bot) -> AsyncIOScheduler:
@@ -348,6 +416,16 @@ def build_scheduler(bot: Bot) -> AsyncIOScheduler:
         minute="*/5",
         args=[bot],
         id="reconcile_payments",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    sched.add_job(
+        premium_expiry_reminder_job,
+        trigger="cron",
+        minute=0,
+        args=[bot],
+        id="premium_expiry_reminder",
         replace_existing=True,
         coalesce=True,
         max_instances=1,

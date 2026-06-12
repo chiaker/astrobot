@@ -44,6 +44,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         polling_task = asyncio.create_task(dp.start_polling(bot), name="aiogram_polling")
         log.info("polling_started")
 
+    # Startup ping doubles as an ops-alert health check (confirms OPS_CHAT_ID works)
+    try:
+        from astrobot.alerts import notify_ops
+
+        await notify_ops(bot, f"🟢 Astrobot запущен (mode={settings.run_mode}).")
+    except Exception as e:
+        log.warning("startup_ping_failed", error=str(e))
+
     try:
         yield
     finally:

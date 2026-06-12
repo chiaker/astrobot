@@ -75,5 +75,12 @@ async def yookassa_webhook(request: Request) -> dict[str, bool]:
         except Exception as e:
             PAYMENTS_FAILED.labels(stage="webhook").inc()
             log.warning("yookassa_webhook_apply_failed", payment_id=target_id, error=str(e))
+            from astrobot.alerts import notify_ops
+
+            await notify_ops(
+                bot,
+                f"🚨 Сбой обработки платёжного вебхука\n"
+                f"event={event}, yk_id={target_id}\nОшибка: {type(e).__name__}: {e}",
+            )
 
     return {"ok": True}

@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     refund_window_days: int = Field(default=14, alias="REFUND_WINDOW_DAYS")
     refund_max_consumed_pct: int = Field(default=25, alias="REFUND_MAX_CONSUMED_PCT")
 
+    # Premium-expiry reminder
+    premium_reminder_days_before: int = Field(
+        default=3, alias="PREMIUM_REMINDER_DAYS_BEFORE"
+    )
+
     push_horoscope_hour: int = Field(default=9, alias="PUSH_HOROSCOPE_HOUR")
 
     llm_price_input_usd_per_m: float = Field(

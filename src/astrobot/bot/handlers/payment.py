@@ -26,6 +26,7 @@ from astrobot.limits import (
 from astrobot.metrics import PAYMENTS_CREATED, PAYMENTS_FAILED
 from astrobot.payments import yookassa
 from astrobot.payments.catalog import PLANS, build_receipt, get_item
+from astrobot.redis_client import get_redis
 
 log = structlog.get_logger(__name__)
 router = Router(name="payment")
@@ -179,6 +180,18 @@ async def _start_payment(
         )
         return
 
+    # Anti-spam: one payment creation per 15s per user (Redis cooldown).
+    redis = get_redis()
+    try:
+        allowed = await redis.set(f"pay:cd:{user.id}", "1", ex=15, nx=True)
+    except Exception:
+        allowed = True  # Redis down → don't block real purchases
+    if not allowed:
+        await target.answer(
+            "⏳ Секунду — предыдущий платёж ещё оформляется. Попробуй через несколько секунд."
+        )
+        return
+
     payment = Payment(
         user_id=user.id,
         provider="yookassa",
@@ -209,6 +222,13 @@ async def _start_payment(
         await session.commit()
         PAYMENTS_FAILED.labels(stage="create").inc()
         log.warning("payment_create_failed", item=item.code, error=str(e))
+        from astrobot.alerts import notify_ops
+
+        await notify_ops(
+            target.bot,
+            f"🚨 Не удалось создать платёж в YooKassa\n"
+            f"item={item.code}, user_id={user.id}\nОшибка: {type(e).__name__}: {e}",
+        )
         await target.answer(
             "🌧 Не получилось создать платёж — попробуй ещё раз чуть позже."
         )

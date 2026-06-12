@@ -61,45 +61,71 @@ async def _push(bot: Bot | None, chat_id: int, text: str) -> None:
 
 
 async def grant_payment(session: AsyncSession, payment: Payment, bot: Bot | None) -> bool:
-    """Idempotently grant the purchased item and notify. True if newly granted."""
-    if payment.status == "succeeded":
+    """Idempotently grant the purchased item and notify. True if newly granted.
+
+    Uses SELECT ... FOR UPDATE to serialize concurrent callers (webhook +
+    reconciliation job) so the benefit is granted exactly once.
+    """
+    row = (
+        await session.execute(
+            select(Payment).where(Payment.id == payment.id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if row is None or row.status == "succeeded":
+        await session.commit()  # release the row lock
         return False
-    item = get_item(payment.item_code)
-    user = await session.get(User, payment.user_id)
+
+    now = datetime.now(UTC)
+    item = get_item(row.item_code)
+    user = await session.get(User, row.user_id)
     if item is None or user is None:
-        log.warning("grant_missing_item_or_user", payment_id=payment.id, item=payment.item_code)
+        # Money was paid — flip status anyway so it doesn't loop; flag it.
+        row.status = "succeeded"
+        row.paid_at = now
+        await session.commit()
+        log.warning("grant_missing_item_or_user", payment_id=row.id, item=row.item_code)
         return False
 
     item.grant(user)
-    payment.status = "succeeded"
-    payment.paid_at = datetime.now(UTC)
+    row.status = "succeeded"
+    row.paid_at = now
     await session.commit()
-    PAYMENTS_SUCCEEDED.labels(item=payment.item_code).inc()
-    log.info("payment_granted", payment_id=payment.id, item=payment.item_code)
+    PAYMENTS_SUCCEEDED.labels(item=row.item_code).inc()
+    log.info("payment_granted", payment_id=row.id, item=row.item_code)
 
-    await _push(bot, user.tg_user_id, _confirmation_text(payment, user))
+    await _push(bot, user.tg_user_id, _confirmation_text(row, user))
     return True
 
 
 async def refund_payment(session: AsyncSession, payment: Payment, bot: Bot | None) -> bool:
     """Idempotently mark a payment refunded and revoke its benefit — but only
     revoke/notify if the benefit was actually granted (status was succeeded).
-    A refund of a never-granted payment just flips the status."""
-    if payment.status == "refunded":
+
+    SELECT ... FOR UPDATE serializes concurrent refunds (admin button +
+    refund.succeeded webhook) so revoke happens at most once.
+    """
+    row = (
+        await session.execute(
+            select(Payment).where(Payment.id == payment.id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if row is None or row.status == "refunded":
+        await session.commit()  # release the row lock
         return False
-    was_granted = payment.status == "succeeded"
-    item = get_item(payment.item_code)
-    user = await session.get(User, payment.user_id)
+
+    was_granted = row.status == "succeeded"
+    item = get_item(row.item_code)
+    user = await session.get(User, row.user_id)
     if was_granted and user is not None and item is not None:
         item.revoke(user)
-    payment.status = "refunded"
-    payment.refunded_at = datetime.now(UTC)
+    row.status = "refunded"
+    row.refunded_at = datetime.now(UTC)
     await session.commit()
-    PAYMENTS_REFUNDED.labels(item=payment.item_code).inc()
-    log.info("payment_refunded", payment_id=payment.id, item=payment.item_code, revoked=was_granted)
+    PAYMENTS_REFUNDED.labels(item=row.item_code).inc()
+    log.info("payment_refunded", payment_id=row.id, item=row.item_code, revoked=was_granted)
 
     if was_granted and user is not None:
-        await _push(bot, user.tg_user_id, _refund_text(payment))
+        await _push(bot, user.tg_user_id, _refund_text(row))
     return True
 
 

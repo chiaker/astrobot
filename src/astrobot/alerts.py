@@ -77,3 +77,21 @@ async def record_error(error_type: str) -> None:
 async def send_critical(message: str) -> None:
     """Send an arbitrary critical message to ops (no rate-limit)."""
     await _send(f"🚨 <b>Astrobot critical</b>\n\n{message}")
+
+
+async def notify_ops(bot, text: str) -> None:
+    """Send a message to the ops chat using an already-built bot (no new client).
+
+    Safe to call with bot=None or no OPS_CHAT_ID configured — it just no-ops.
+    """
+    settings = get_settings()
+    if not settings.ops_chat_id or bot is None:
+        return
+    try:
+        await bot.send_message(
+            chat_id=settings.ops_chat_id,
+            text=text,
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        log.warning("notify_ops_failed", error=str(e))

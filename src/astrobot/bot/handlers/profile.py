@@ -10,14 +10,15 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.astrology.geocoding import geocode_city
 from astrobot.bot.keyboards import MENU_PROFILE, name_skip_kb, push_hour_kb, reset_confirm_kb
 from astrobot.bot.states import Onboarding, PushSetup
-from astrobot.db.models import BirthProfile, Favorite, HoroscopeCache, LLMUsageLog, User
+from astrobot.db.models import BirthProfile, Favorite, HoroscopeCache, LLMUsageLog, Payment, User
 from astrobot.limits import NATAL_REGEN_PRICE_RUB, check_horoscope, check_question, is_premium
+from astrobot.payments.catalog import get_item
 
 router = Router(name="profile")
 
@@ -49,6 +50,9 @@ def _profile_kb(user: User) -> InlineKeyboardMarkup:
         )
     rows.append(
         [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show")]
+    )
+    rows.append(
+        [InlineKeyboardButton(text="🧾 Мои платежи", callback_data="payments:mine")]
     )
     terms_state = "вкл" if user.astro_terms_enabled else "выкл"
     rows.append(
@@ -115,6 +119,41 @@ async def on_profile(message: Message, session: AsyncSession, user: User) -> Non
         return
     text = await _profile_text(profile, user, session)
     await message.answer(text, reply_markup=_profile_kb(user))
+
+
+_PAY_STATUS = {
+    "pending": "⏳ ожидает",
+    "succeeded": "✅ оплачен",
+    "canceled": "✖️ отменён",
+    "refunded": "↩️ возврат",
+}
+
+
+@router.callback_query(F.data == "payments:mine")
+async def on_my_payments(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+    payments = list(
+        await session.scalars(
+            select(Payment)
+            .where(Payment.user_id == user.id)
+            .order_by(desc(Payment.created_at))
+            .limit(20)
+        )
+    )
+    if not payments:
+        await call.message.answer("🧾 У тебя пока нет платежей.")
+        await call.answer()
+        return
+
+    lines = ["🧾 <b>Твои платежи</b>", ""]
+    for p in payments:
+        item = get_item(p.item_code)
+        title = item.title if item else p.item_code
+        d = p.created_at.strftime("%d.%m.%Y") if p.created_at else "—"
+        status = _PAY_STATUS.get(p.status, p.status)
+        lines.append(f"• {d} · {title} · <b>{int(p.amount)} ₽</b> · {status}")
+    lines += ["", "<i>Фискальный чек по каждому платежу приходит на указанный email.</i>"]
+    await call.message.answer("\n".join(lines))
+    await call.answer()
 
 
 @router.callback_query(F.data == "settings:response_toggle")

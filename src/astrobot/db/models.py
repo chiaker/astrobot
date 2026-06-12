@@ -35,6 +35,11 @@ class User(Base):
     premium_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+    # The premium_until value we've already sent an expiry reminder for, so a
+    # renewal (new premium_until) re-arms the reminder.
+    premium_reminded_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     referral_code: Mapped[str] = mapped_column(String(16), unique=True)
     referred_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
