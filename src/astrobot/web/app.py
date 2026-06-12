@@ -78,7 +78,16 @@ def create_app() -> FastAPI:
     app = FastAPI(title="astrobot", lifespan=lifespan)
     settings = get_settings()
     if settings.admin_secret:
-        app.add_middleware(SessionMiddleware, secret_key=settings.admin_secret, https_only=False)
+        # In prod (webhook mode behind an HTTPS reverse proxy) mark the session
+        # cookie Secure + SameSite=strict to harden it against theft/CSRF.
+        # In dev (polling, local HTTP) keep it usable over plain HTTP.
+        secure_cookie = settings.run_mode == "webhook"
+        app.add_middleware(
+            SessionMiddleware,
+            secret_key=settings.admin_secret,
+            https_only=secure_cookie,
+            same_site="strict" if secure_cookie else "lax",
+        )
     app.include_router(health.router)
     app.include_router(metrics.router)
     app.include_router(telegram.router)

@@ -135,6 +135,10 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 @router.message(Onboarding.waiting_for_name)
 async def on_name(message: Message, state: FSMContext) -> None:
     name = (message.text or "").strip()
+    # Drop HTML-significant and control chars: a real name never has them, and
+    # this keeps the value safe inside HTML messages and the LLM system prompt.
+    name = "".join(ch for ch in name if ch not in "<>" and (ch == " " or ch.isprintable()))
+    name = name.strip()
     if len(name) < 1 or len(name) > 64:
         await message.answer("Напиши имя (до 64 символов), или нажми «Пропустить».")
         return

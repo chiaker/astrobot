@@ -1,3 +1,5 @@
+import secrets
+
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -15,9 +17,14 @@ async def telegram_webhook(
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict[str, bool]:
     settings = get_settings()
-    if secret != settings.webhook_secret:
+    expected = settings.webhook_secret
+    # Refuse to operate without a configured secret (avoids an open webhook).
+    if not expected:
+        raise HTTPException(status_code=403, detail="webhook secret not configured")
+    # Constant-time comparison to avoid timing side-channels.
+    if not secrets.compare_digest(secret, expected):
         raise HTTPException(status_code=403, detail="bad secret in path")
-    if x_telegram_bot_api_secret_token != settings.webhook_secret:
+    if not secrets.compare_digest(x_telegram_bot_api_secret_token or "", expected):
         raise HTTPException(status_code=403, detail="bad secret token header")
 
     bot: Bot = request.app.state.bot

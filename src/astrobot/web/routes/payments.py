@@ -67,11 +67,10 @@ async def yookassa_webhook(request: Request) -> dict[str, bool]:
             return {"ok": True}
 
         try:
-            if event == "refund.succeeded":
-                await service.refund_payment(session, payment, bot)
-            else:
-                # payment.succeeded / payment.canceled — re-fetch & apply real status
-                await service.reconcile_payment(session, payment, bot)
+            # Never trust the notification body — reconcile_payment re-fetches the
+            # real state from YooKassa (status / refunded_amount) and applies it.
+            # This makes forged webhooks (succeeded OR refund) harmless.
+            await service.reconcile_payment(session, payment, bot)
         except Exception as e:
             PAYMENTS_FAILED.labels(stage="webhook").inc()
             log.warning("yookassa_webhook_apply_failed", payment_id=target_id, error=str(e))

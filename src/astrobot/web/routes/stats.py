@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import secrets as _secrets
 from datetime import UTC, datetime, timedelta
 
@@ -50,11 +51,17 @@ def _fmt_dt(dt) -> str:
 def _fmt_date(d) -> str:
     return d.strftime("%d.%m.%Y") if d else "—"
 
+def _esc(s) -> str:
+    """HTML-escape any user-controlled value before embedding in templates."""
+    return html.escape(str(s)) if s is not None else ""
+
+
 def _trunc(s, n: int = 80) -> str:
     if not s:
         return ""
     s = str(s).replace("\n", " ").strip()
-    return s[:n-1] + "…" if len(s) > n else s
+    s = s[:n-1] + "…" if len(s) > n else s
+    return html.escape(s)
 
 def _tier_badge(pu, now) -> str:
     if _is_prem(pu, now):
@@ -513,7 +520,7 @@ def _render_users(users: list, total: int, page: int, search: str, now: datetime
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
 
     def page_url(p: int) -> str:
-        s = f"&search={search}" if search else ""
+        s = f"&search={_esc(search)}" if search else ""
         return f"/admin/users?page={p}{s}"
 
     pager_html = ""
@@ -531,7 +538,7 @@ def _render_users(users: list, total: int, page: int, search: str, now: datetime
     rows = []
     for u in users:
         tier = _tier_badge(u.premium_until, now)
-        name = u.display_name or '<span class="muted">—</span>'
+        name = _esc(u.display_name) if u.display_name else '<span class="muted">—</span>'
         gender_icon = {"m": "♂", "f": "♀"}.get(u.gender or "", "—")
         bonus_natal = (
             '<span class="badge b-warn">∞</span>' if (u.natal_regens_bonus or 0) == -1
@@ -568,7 +575,7 @@ def _render_users(users: list, total: int, page: int, search: str, now: datetime
 <p class='ph-sub'>Всего: {total}</p>
 <form method='get' action='/admin/users'>
   <div class='search-row'>
-    <input name='search' placeholder='TG ID, имя или реф-код…' value='{search}'>
+    <input name='search' placeholder='TG ID, имя или реф-код…' value='{_esc(search)}'>
     <button type='submit' class='btn btn-p'>Найти</button>
     <a href='/admin/users' class='btn btn-ghost'>Сброс</a>
   </div>
@@ -619,9 +626,9 @@ def _render_user_detail(user, profile, stats: dict, now: datetime, msg: str = ""
     )
     alert = ""
     if msg:
-        alert = f"<div class='alert alert-ok'>✓ {msg}</div>"
+        alert = f"<div class='alert alert-ok'>✓ {_esc(msg)}</div>"
     if err:
-        alert = f"<div class='alert alert-err'>✗ {err}</div>"
+        alert = f"<div class='alert alert-err'>✗ {_esc(err)}</div>"
 
     gender_str = {"m": "♂ Мужской", "f": "♀ Женский"}.get(user.gender or "", "—")
     natal_bonus = (
@@ -645,8 +652,8 @@ def _render_user_detail(user, profile, stats: dict, now: datetime, msg: str = ""
 <div class='dg'>
   <div class='di'><div class='dl'>Дата рождения</div><div class='dv'>{_fmt_date(profile.birth_date)}</div></div>
   <div class='di'><div class='dl'>Время</div><div class='dv'>{time_str}</div></div>
-  <div class='di'><div class='dl'>Город</div><div class='dv'>{profile.city_name or '—'}</div></div>
-  <div class='di'><div class='dl'>Часовой пояс</div><div class='dv'><code>{profile.tz or '—'}</code></div></div>
+  <div class='di'><div class='dl'>Город</div><div class='dv'>{_esc(profile.city_name) or '—'}</div></div>
+  <div class='di'><div class='dl'>Часовой пояс</div><div class='dv'><code>{_esc(profile.tz) or '—'}</code></div></div>
   <div class='di'><div class='dl'>Обновлён</div><div class='dv small muted'>{_fmt_dt(profile.updated_at)}</div></div>
 </div>
 """
@@ -661,7 +668,7 @@ def _render_user_detail(user, profile, stats: dict, now: datetime, msg: str = ""
     </div>
     <div class='dg'>
       <div class='di'><div class='dl'>TG ID</div><div class='dv mono'>{user.tg_user_id}</div></div>
-      <div class='di'><div class='dl'>Имя</div><div class='dv'>{user.display_name or '—'}</div></div>
+      <div class='di'><div class='dl'>Имя</div><div class='dv'>{_esc(user.display_name) or '—'}</div></div>
       <div class='di'><div class='dl'>Пол</div><div class='dv'>{gender_str}</div></div>
       <div class='di'><div class='dl'>Астротермины</div><div class='dv'>{'Вкл' if user.astro_terms_enabled else 'Выкл'}</div></div>
       <div class='di'><div class='dl'>Реф-код</div><div class='dv mono'>{user.referral_code or '—'}</div></div>
@@ -877,7 +884,7 @@ def _render_payments(
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
 
     def page_url(p: int) -> str:
-        s = f"&status={status}" if status else ""
+        s = f"&status={_esc(status)}" if status else ""
         return f"/admin/payments?page={p}{s}"
 
     pager_html = ""
@@ -917,7 +924,7 @@ def _render_payments(
         f"<td class='small muted'>{r['id']}</td>"
         f"<td><a href='/admin/users/{r['user_id']}'>{r['user_id']}</a></td>"
         f"<td class='mono small'>{r['tg_user_id']}</td>"
-        f"<td>{r['item_code']}</td>"
+        f"<td>{_esc(r['item_code'])}</td>"
         f"<td class='r'><b>{_money_rub(r['amount'])}</b></td>"
         f"<td>{_pay_status_badge(r['status'])}</td>"
         f"<td class='small muted'>{_trunc(r['email'], 28)}</td>"
@@ -940,9 +947,9 @@ def _render_payments(
 
     alert = ""
     if msg:
-        alert = f"<div class='alert alert-ok'>✓ {msg}</div>"
+        alert = f"<div class='alert alert-ok'>✓ {_esc(msg)}</div>"
     elif err:
-        alert = f"<div class='alert alert-err'>✗ {err}</div>"
+        alert = f"<div class='alert alert-err'>✗ {_esc(err)}</div>"
 
     body = f"""
 <h1 class='ph'>Платежи</h1>
