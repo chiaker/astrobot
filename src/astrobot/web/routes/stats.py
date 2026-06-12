@@ -892,12 +892,22 @@ def _render_payments(
     def _action(r) -> str:
         if r["status"] != "succeeded":
             return ""
-        return (
+        amt = _money_rub(r["amount"])
+        uid = r["user_id"]
+        normal = (
             f"<form method='post' action='/admin/payments/{r['id']}/refund' "
-            f"onsubmit=\"return confirm('Вернуть платёж {_money_rub(r['amount'])} юзеру {r['user_id']}? Начисления откатятся.')\" style='margin:0'>"
+            f"onsubmit=\"return confirm('Вернуть платёж {amt} юзеру {uid}? Начисления откатятся.')\" style='margin:0'>"
             f"<button type='submit' class='btn btn-danger btn-sm'>Вернуть</button>"
             f"</form>"
         )
+        force = (
+            f"<form method='post' action='/admin/payments/{r['id']}/refund' "
+            f"onsubmit=\"return confirm('ПРИНУДИТЕЛЬНЫЙ возврат {amt} юзеру {uid} в обход лимитов?')\" style='margin:0'>"
+            f"<input type='hidden' name='force' value='1'>"
+            f"<button type='submit' class='btn btn-ghost btn-sm' title='В обход окна 14 дней и порога расхода'>Принуд.</button>"
+            f"</form>"
+        )
+        return f"<div style='display:flex;gap:5px'>{normal}{force}</div>"
 
     body_rows = "".join(
         f"<tr>"
@@ -1162,6 +1172,7 @@ async def payments_page(
 async def payment_refund(
     request: Request,
     payment_id: int,
+    force: str = Form(default=""),
     session: AsyncSession = Depends(get_session),
 ):
     if not request.session.get("authenticated"):
@@ -1179,6 +1190,15 @@ async def payment_refund(
             url="/admin/payments?err=Нет id платежа в YooKassa", status_code=303
         )
 
+    # Policy gate (skipped when admin forces)
+    if not force:
+        allowed, reason = await payment_service.refund_eligibility(session, payment)
+        if not allowed:
+            return RedirectResponse(
+                url=f"/admin/payments?err=Возврат не положен: {reason}. Можно «Принудительно».",
+                status_code=303,
+            )
+
     try:
         await yookassa.create_refund(payment.yookassa_payment_id, float(payment.amount))
     except Exception:
@@ -1188,4 +1208,5 @@ async def payment_refund(
 
     bot = getattr(request.app.state, "bot", None)
     await payment_service.refund_payment(session, payment, bot)
-    return RedirectResponse(url="/admin/payments?msg=Возврат выполнен", status_code=303)
+    suffix = " (принудительно)" if force else ""
+    return RedirectResponse(url=f"/admin/payments?msg=Возврат выполнен{suffix}", status_code=303)

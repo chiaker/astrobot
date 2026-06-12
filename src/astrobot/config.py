@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     yookassa_return_url: str = Field(default="", alias="YOOKASSA_RETURN_URL")
     yookassa_webhook_ips: str = Field(default="", alias="YOOKASSA_WEBHOOK_IPS")
 
+    # Refund policy
+    refund_window_days: int = Field(default=14, alias="REFUND_WINDOW_DAYS")
+    refund_max_consumed_pct: int = Field(default=25, alias="REFUND_MAX_CONSUMED_PCT")
+
     push_horoscope_hour: int = Field(default=9, alias="PUSH_HOROSCOPE_HOUR")
 
     llm_price_input_usd_per_m: float = Field(

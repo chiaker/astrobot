@@ -83,17 +83,20 @@ async def _profile_text(profile: BirthProfile, user: User, session: AsyncSession
         f"🌐 Часовой пояс: {profile.tz}\n\n"
     )
 
-    if is_premium(user) and user.premium_until:
-        until = user.premium_until.strftime("%d.%m.%Y")
-        return base + (
-            f"💎 <b>Премиум до {until}</b>\n"
-            "Звёзды в твоём распоряжении ✨"
-        )
-
     q_allow = await check_question(session, user)
     h_allow = await check_horoscope(session, user)
     q_left = max(0, q_allow.limit - q_allow.used)
     h_left = max(0, h_allow.limit - h_allow.used)
+
+    if is_premium(user) and user.premium_until:
+        until = user.premium_until.strftime("%d.%m.%Y")
+        return base + (
+            f"💎 <b>Премиум до {until}</b>\n"
+            f"💬 Вопросов в этом месяце: <b>{q_left} из {q_allow.limit}</b>\n"
+            f"🔮 Гороскопов сегодня: <b>{h_left} из {h_allow.limit}</b>\n\n"
+            "Звёзды в твоём распоряжении ✨"
+        )
+
     return base + (
         "🆓 <b>Бесплатный тариф</b>\n"
         f"💬 Вопросов осталось: <b>{q_left} из {q_allow.limit}</b>\n"

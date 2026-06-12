@@ -10,12 +10,15 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import structlog
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from astrobot.db.models import Payment, User
+from astrobot.config import get_settings
+from astrobot.db.models import LLMUsageLog, Payment, User
+from astrobot.limits import QUESTION_PACK_SIZE
 from astrobot.metrics import PAYMENTS_REFUNDED, PAYMENTS_SUCCEEDED
 from astrobot.payments import yookassa
-from astrobot.payments.catalog import get_item
+from astrobot.payments.catalog import Item, get_item
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -98,6 +101,67 @@ async def refund_payment(session: AsyncSession, payment: Payment, bot: Bot | Non
     if was_granted and user is not None:
         await _push(bot, user.tg_user_id, _refund_text(payment))
     return True
+
+
+async def _count_usage_since(
+    session: AsyncSession, user_id: int, kind_prefix: str, since: datetime | None
+) -> int:
+    stmt = select(func.count(LLMUsageLog.id)).where(
+        LLMUsageLog.user_id == user_id,
+        LLMUsageLog.kind.like(f"{kind_prefix}%"),
+    )
+    if since is not None:
+        stmt = stmt.where(LLMUsageLog.created_at >= since)
+    return (await session.scalar(stmt)) or 0
+
+
+async def consumed_fraction(session: AsyncSession, payment: Payment, item: Item) -> float:
+    """How much of the purchase has been used, as a 0..1+ fraction.
+
+    - subscription: elapsed time / period
+    - question_pack: questions used since purchase / pack size
+    - natal_regen: natal recalcs since purchase (1 unit → 1.0 per use)
+    """
+    paid = payment.paid_at or payment.created_at
+    now = datetime.now(UTC)
+    if item.kind == "subscription":
+        if not item.duration_days or paid is None:
+            return 0.0
+        elapsed_days = (now - paid).total_seconds() / 86400
+        return max(0.0, elapsed_days / item.duration_days)
+    if item.kind == "question_pack":
+        used = await _count_usage_since(session, payment.user_id, "question", paid)
+        return used / QUESTION_PACK_SIZE if QUESTION_PACK_SIZE else 0.0
+    if item.kind == "natal_regen":
+        used = await _count_usage_since(session, payment.user_id, "natal", paid)
+        return float(used)
+    return 0.0
+
+
+async def refund_eligibility(session: AsyncSession, payment: Payment) -> tuple[bool, str]:
+    """Policy check: refundable only within the window AND if consumed <= threshold.
+    Returns (allowed, human-readable reason when not allowed)."""
+    settings = get_settings()
+    now = datetime.now(UTC)
+
+    ref = payment.paid_at or payment.created_at
+    if ref is not None:
+        age_days = (now - ref).total_seconds() / 86400
+        if age_days > settings.refund_window_days:
+            return False, f"прошло больше {settings.refund_window_days} дней с оплаты"
+
+    item = get_item(payment.item_code)
+    if item is None:
+        return True, ""
+
+    consumed = await consumed_fraction(session, payment, item)
+    threshold = settings.refund_max_consumed_pct / 100.0
+    if consumed > threshold:
+        return (
+            False,
+            f"использовано ~{consumed * 100:.0f}% (порог {settings.refund_max_consumed_pct}%)",
+        )
+    return True, ""
 
 
 async def reconcile_payment(session: AsyncSession, payment: Payment, bot: Bot | None) -> str:

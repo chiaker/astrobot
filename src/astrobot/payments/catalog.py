@@ -73,6 +73,7 @@ class Item:
     amount_rub: int
     grant: Callable[[User], None]
     revoke: Callable[[User], None]
+    duration_days: int = 0  # subscriptions only; used for refund consumption math
 
 
 def _grant_subscription(days: int) -> Callable[[User], None]:
@@ -125,6 +126,7 @@ def _build_items() -> dict[str, Item]:
             amount_rub=p.price_rub,
             grant=_grant_subscription(p.duration_days),
             revoke=_revoke_subscription(p.duration_days),
+            duration_days=p.duration_days,
         )
     items["natal_regen"] = Item(
         code="natal_regen",
