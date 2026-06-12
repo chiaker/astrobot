@@ -19,7 +19,6 @@ from astrobot.db.models import (
     HoroscopeCache,
     LLMUsageLog,
     LunarEvent,
-    Payment,
     QuestionLog,
     Response,
     User,
@@ -62,13 +61,6 @@ def _tier_badge(user: User) -> Markup:
         until = user.premium_until.strftime("%d.%m.%Y")
         return _badge(f"💎 Premium до {until}", "#7c3aed")
     return _badge("🆓 Free", "#64748b")
-
-
-def _payment_status_badge(payment: Payment) -> Markup:
-    colors = {"succeeded": "#16a34a", "pending": "#d97706", "canceled": "#64748b"}
-    labels = {"succeeded": "✅ Оплачен", "pending": "⏳ Ожидает", "canceled": "✖ Отменён"}
-    status = payment.status or "pending"
-    return _badge(labels.get(status, status), colors.get(status, "#64748b"))
 
 
 def _money(value: float) -> str:
@@ -357,52 +349,6 @@ class LLMUsageLogAdmin(ModelView, model=LLMUsageLog):
     page_size = 100
 
 
-class PaymentAdmin(ModelView, model=Payment):
-    name = "Платёж"
-    name_plural = "Платежи"
-    category = "💰 Финансы"
-    icon = "fa-solid fa-credit-card"
-
-    column_list = [
-        Payment.id,
-        Payment.user_id,
-        Payment.item_code,
-        Payment.amount,
-        Payment.currency,
-        "status_badge",
-        Payment.email,
-        Payment.created_at,
-        Payment.paid_at,
-    ]
-    column_labels = {
-        Payment.user_id: "Юзер",
-        Payment.item_code: "Товар",
-        Payment.amount: "Сумма",
-        Payment.currency: "Валюта",
-        Payment.email: "Email",
-        Payment.yookassa_payment_id: "YooKassa ID",
-        Payment.created_at: "Создан",
-        Payment.paid_at: "Оплачен",
-        "status_badge": "Статус",
-    }
-    column_formatters = {
-        "status_badge": lambda m, _: _payment_status_badge(m),
-        Payment.created_at: lambda m, _: _fmt_dt(m.created_at),
-        Payment.paid_at: lambda m, _: _fmt_dt(m.paid_at),
-    }
-    column_formatters_detail = {
-        Payment.created_at: lambda m, _: _fmt_dt(m.created_at),
-        Payment.paid_at: lambda m, _: _fmt_dt(m.paid_at),
-    }
-    column_default_sort = [(Payment.created_at, True)]
-    column_sortable_list = [Payment.created_at, Payment.paid_at, Payment.amount]
-    column_searchable_list = [Payment.yookassa_payment_id, Payment.email]
-    can_create = False
-    can_edit = False
-    can_delete = False
-    page_size = 100
-
-
 # ---------- views: ⚙️ Система ----------
 
 class GeocodeCacheAdmin(ModelView, model=GeocodeCache):
@@ -533,7 +479,6 @@ def setup_admin(app: FastAPI) -> None:
     admin.add_view(QuestionLogAdmin)
     admin.add_view(ResponseAdmin)
     admin.add_view(FavoriteAdmin)
-    admin.add_view(PaymentAdmin)
     admin.add_view(LLMUsageLogAdmin)
     admin.add_view(GeocodeCacheAdmin)
     admin.add_view(HoroscopeCacheAdmin)

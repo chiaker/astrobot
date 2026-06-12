@@ -9,7 +9,15 @@ from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.config import get_settings
-from astrobot.db.models import BirthProfile, Favorite, LLMUsageLog, QuestionLog, Response, User
+from astrobot.db.models import (
+    BirthProfile,
+    Favorite,
+    LLMUsageLog,
+    Payment,
+    QuestionLog,
+    Response,
+    User,
+)
 from astrobot.db.session import get_session
 
 router = APIRouter(tags=["admin"])
@@ -200,6 +208,7 @@ def _layout(title: str, body: str, active: str = "") -> str:
     nav = [
         ("📊 Сводка", "/admin/stats", "stats"),
         ("👥 Юзеры", "/admin/users", "users"),
+        ("💳 Платежи", "/admin/payments", "payments"),
         ("📋 Логи LLM", "/admin/logs", "logs"),
     ]
     nav_html = "".join(
@@ -787,6 +796,136 @@ def _render_logs(logs: list, kind: str, now: datetime) -> str:
     return _layout("Логи LLM", body, active="logs")
 
 
+# ─── payments page ───────────────────────────────────────────────────────────
+
+def _money_rub(v) -> str:
+    return f"{float(v or 0):.0f} ₽"
+
+
+def _pay_status_badge(status: str) -> str:
+    m = {
+        "succeeded": ("b-ok", "✅ Оплачен"),
+        "pending": ("b-warn", "⏳ Ожидает"),
+        "canceled": ("b-free", "✖ Отменён"),
+    }
+    cls, lbl = m.get(status, ("b-free", status or "—"))
+    return f'<span class="badge {cls}">{lbl}</span>'
+
+
+async def _gather_payments(
+    session: AsyncSession, status: str, page: int
+) -> tuple[list, int, float, int]:
+    base = (
+        select(
+            Payment.id,
+            Payment.user_id,
+            Payment.item_code,
+            Payment.kind,
+            Payment.amount,
+            Payment.currency,
+            Payment.status,
+            Payment.email,
+            Payment.created_at,
+            Payment.paid_at,
+            User.tg_user_id,
+        )
+        .join(User, User.id == Payment.user_id)
+        .order_by(desc(Payment.created_at))
+    )
+    cnt_q = select(func.count(Payment.id))
+    if status:
+        base = base.where(Payment.status == status)
+        cnt_q = cnt_q.where(Payment.status == status)
+
+    total = (await session.scalar(cnt_q)) or 0
+    rows = (
+        await session.execute(base.limit(PAGE_SIZE).offset((page - 1) * PAGE_SIZE))
+    ).mappings().all()
+
+    # All-time revenue (succeeded only) + count
+    revenue = (
+        await session.scalar(
+            select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                Payment.status == "succeeded"
+            )
+        )
+    ) or 0
+    paid_count = (
+        await session.scalar(
+            select(func.count(Payment.id)).where(Payment.status == "succeeded")
+        )
+    ) or 0
+    return list(rows), total, float(revenue), paid_count
+
+
+def _render_payments(
+    rows: list, total: int, revenue: float, paid_count: int, page: int, status: str
+) -> str:
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+
+    def page_url(p: int) -> str:
+        s = f"&status={status}" if status else ""
+        return f"/admin/payments?page={p}{s}"
+
+    pager_html = ""
+    if total_pages > 1:
+        pages = []
+        for p in range(1, total_pages + 1):
+            if p == page:
+                pages.append(f"<span class='cur'>{p}</span>")
+            elif abs(p - page) <= 2 or p in (1, total_pages):
+                pages.append(f"<a href='{page_url(p)}'>{p}</a>")
+            elif abs(p - page) == 3:
+                pages.append("<span class='muted'>…</span>")
+        pager_html = f"<div class='pager'>{''.join(pages)}</div>"
+
+    body_rows = "".join(
+        f"<tr>"
+        f"<td class='small muted'>{r['id']}</td>"
+        f"<td><a href='/admin/users/{r['user_id']}'>{r['user_id']}</a></td>"
+        f"<td class='mono small'>{r['tg_user_id']}</td>"
+        f"<td>{r['item_code']}</td>"
+        f"<td class='r'><b>{_money_rub(r['amount'])}</b></td>"
+        f"<td>{_pay_status_badge(r['status'])}</td>"
+        f"<td class='small muted'>{_trunc(r['email'], 28)}</td>"
+        f"<td class='small muted'>{r['created_at'].strftime('%d.%m %H:%M') if r['created_at'] else '—'}</td>"
+        f"<td class='small muted'>{r['paid_at'].strftime('%d.%m %H:%M') if r['paid_at'] else '—'}</td>"
+        f"</tr>"
+        for r in rows
+    ) or "<tr><td colspan='9' class='muted'>Нет платежей.</td></tr>"
+
+    filter_html = " ".join(
+        f"<a href='/admin/payments?status={k}' class='btn btn-sm {'btn-p' if status == k else 'btn-ghost'}'>{lbl}</a>"
+        for k, lbl in (
+            ("succeeded", "Оплаченные"),
+            ("pending", "Ожидают"),
+            ("canceled", "Отменённые"),
+        )
+    )
+
+    body = f"""
+<h1 class='ph'>Платежи</h1>
+<p class='ph-sub'>Выручка (оплачено): <b>{_money_rub(revenue)}</b> · успешных платежей: <b>{paid_count}</b></p>
+<div style='display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap'>
+  {filter_html}
+  <a href='/admin/payments' class='btn btn-sm btn-ghost'>Все</a>
+</div>
+<div class='card'>
+  <div class='tbl-wrap'>
+    <table>
+      <thead><tr>
+        <th>#</th><th>Юзер</th><th>TG ID</th><th>Товар</th>
+        <th class='r'>Сумма</th><th>Статус</th><th>Email</th><th>Создан</th><th>Оплачен</th>
+      </tr></thead>
+      <tbody>{body_rows}</tbody>
+    </table>
+  </div>
+</div>
+{pager_html}
+"""
+    return _layout("Платежи", body, active="payments")
+
+
 # ─── login page ──────────────────────────────────────────────────────────────
 
 _LOGIN_PAGE = """<!doctype html><html lang='ru'><head>
@@ -970,3 +1109,17 @@ async def logs_page(
     now = datetime.now(UTC)
     logs = await _gather_logs(session, kind.strip())
     return HTMLResponse(_render_logs(logs, kind, now))
+
+
+@router.get("/admin/payments", response_class=HTMLResponse)
+async def payments_page(
+    request: Request,
+    status: str = "",
+    page: int = 1,
+    session: AsyncSession = Depends(get_session),
+):
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/admin/login", status_code=303)
+    page = max(1, page)
+    rows, total, revenue, paid_count = await _gather_payments(session, status.strip(), page)
+    return HTMLResponse(_render_payments(rows, total, revenue, paid_count, page, status.strip()))

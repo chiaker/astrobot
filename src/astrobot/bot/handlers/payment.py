@@ -126,7 +126,7 @@ async def on_pay(
         await state.update_data(pay_code=code)
         await call.message.answer(
             "📧 Для чека об оплате нужен <b>email</b> — отправь его одним сообщением.\n\n"
-            "<i>На него придёт фискальный чек. Спрошу только один раз.</i>"
+            "<i>На него придёт чек.</i>"
         )
         return
 
