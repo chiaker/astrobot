@@ -44,7 +44,6 @@ class Settings(BaseSettings):
     yookassa_secret_key: str = Field(default="", alias="YOOKASSA_SECRET_KEY")
     yookassa_return_url: str = Field(default="", alias="YOOKASSA_RETURN_URL")
     yookassa_webhook_ips: str = Field(default="", alias="YOOKASSA_WEBHOOK_IPS")
-    yookassa_vat_code: int = Field(default=1, alias="YOOKASSA_VAT_CODE")
 
     push_horoscope_hour: int = Field(default=9, alias="PUSH_HOROSCOPE_HOUR")
 
