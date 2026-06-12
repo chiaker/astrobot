@@ -93,3 +93,9 @@ PAYMENTS_FAILED = Counter(
     "Payment creation or webhook processing failures",
     ["stage"],
 )
+
+PAYMENTS_REFUNDED = Counter(
+    "astrobot_payments_refunded_total",
+    "Payments refunded and benefits revoked",
+    ["item"],
+)

@@ -72,6 +72,7 @@ class Item:
     title: str
     amount_rub: int
     grant: Callable[[User], None]
+    revoke: Callable[[User], None]
 
 
 def _grant_subscription(days: int) -> Callable[[User], None]:
@@ -87,12 +88,31 @@ def _grant_subscription(days: int) -> Callable[[User], None]:
     return grant
 
 
+def _revoke_subscription(days: int) -> Callable[[User], None]:
+    def revoke(user: User) -> None:
+        if user.premium_until is None:
+            return
+        new = user.premium_until - timedelta(days=days)
+        now = datetime.now(UTC)
+        user.premium_until = new if new > now else None
+
+    return revoke
+
+
 def _grant_natal_regen(user: User) -> None:
     user.natal_regens_bonus = (user.natal_regens_bonus or 0) + 1
 
 
+def _revoke_natal_regen(user: User) -> None:
+    user.natal_regens_bonus = max(0, (user.natal_regens_bonus or 0) - 1)
+
+
 def _grant_question_pack(user: User) -> None:
     user.bonus_questions = (user.bonus_questions or 0) + QUESTION_PACK_SIZE
+
+
+def _revoke_question_pack(user: User) -> None:
+    user.bonus_questions = max(0, (user.bonus_questions or 0) - QUESTION_PACK_SIZE)
 
 
 def _build_items() -> dict[str, Item]:
@@ -104,6 +124,7 @@ def _build_items() -> dict[str, Item]:
             title=p.title,
             amount_rub=p.price_rub,
             grant=_grant_subscription(p.duration_days),
+            revoke=_revoke_subscription(p.duration_days),
         )
     items["natal_regen"] = Item(
         code="natal_regen",
@@ -111,6 +132,7 @@ def _build_items() -> dict[str, Item]:
         title="Пересчёт натальной карты",
         amount_rub=NATAL_REGEN_PRICE_RUB,
         grant=_grant_natal_regen,
+        revoke=_revoke_natal_regen,
     )
     items["question_pack"] = Item(
         code="question_pack",
@@ -118,6 +140,7 @@ def _build_items() -> dict[str, Item]:
         title=f"Пакет {QUESTION_PACK_SIZE} вопросов",
         amount_rub=QUESTION_PACK_PRICE_RUB,
         grant=_grant_question_pack,
+        revoke=_revoke_question_pack,
     )
     return items
 

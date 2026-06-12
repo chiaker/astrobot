@@ -78,3 +78,25 @@ async def get_payment(payment_id: str) -> dict:
         )
         raise YooKassaError(f"get_payment HTTP {resp.status_code}")
     return resp.json()
+
+
+async def create_refund(payment_id: str, amount_rub: float) -> dict:
+    """Full refund of a captured payment. Returns the refund JSON."""
+    body = {
+        "payment_id": payment_id,
+        "amount": {"value": f"{amount_rub:.2f}", "currency": "RUB"},
+    }
+    headers = {"Idempotence-Key": uuid4().hex}
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_API_BASE}/refunds", json=body, headers=headers, auth=_auth()
+        )
+    if resp.status_code >= 300:
+        log.warning(
+            "yookassa_refund_failed",
+            status=resp.status_code,
+            payment_id=payment_id,
+            body=resp.text[:500],
+        )
+        raise YooKassaError(f"create_refund HTTP {resp.status_code}")
+    return resp.json()

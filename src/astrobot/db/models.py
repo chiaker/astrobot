@@ -208,6 +208,7 @@ class Payment(Base):
     kind: Mapped[str] = mapped_column(String(32))
     amount: Mapped[float] = mapped_column(Numeric(10, 2))
     currency: Mapped[str] = mapped_column(String(8), default="RUB")
+    # pending | succeeded | canceled | refunded
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -215,6 +216,9 @@ class Payment(Base):
         DateTime(timezone=True), server_default=func.now(), index=True
     )
     paid_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    refunded_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

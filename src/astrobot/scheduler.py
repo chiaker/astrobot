@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import structlog
@@ -20,13 +20,21 @@ from astrobot.bot.formatting import md_to_telegram_html
 from astrobot.bot.handlers.horoscope import _period_label
 from astrobot.bot.handlers.natal import _profile_to_birth
 from astrobot.config import get_settings
-from astrobot.db.models import BirthProfile, HoroscopeCache, LLMUsageLog, LunarEvent, User
+from astrobot.db.models import (
+    BirthProfile,
+    HoroscopeCache,
+    LLMUsageLog,
+    LunarEvent,
+    Payment,
+    User,
+)
 from astrobot.db.session import get_sessionmaker
 from astrobot.limits import is_premium
 from astrobot.llm.client import get_llm
 from astrobot.llm.prompts import build_system_horoscope, split_brief_full
 from astrobot.lunar import compute_phases, horizon_dates, phase_text
 from astrobot.metrics import PUSH_SENT
+from astrobot.payments import service as payment_service
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -265,6 +273,36 @@ async def lunar_push_job(bot: Bot) -> None:
                 PUSH_SENT.labels(kind="lunar", result="fail").inc()
 
 
+async def reconcile_payments_job(bot: Bot) -> None:
+    """Safety net for missed webhooks: poll YooKassa for every pending payment
+    and apply its real status (grant / cancel / refund). Pending payments older
+    than 2h that still can't be resolved are marked canceled (abandoned)."""
+    now = datetime.now(UTC)
+    stale_before = now - timedelta(hours=2)
+
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        pendings = list(
+            await session.scalars(
+                select(Payment).where(
+                    Payment.status == "pending",
+                    Payment.yookassa_payment_id.isnot(None),
+                )
+            )
+        )
+        for payment in pendings:
+            try:
+                result = await payment_service.reconcile_payment(session, payment, bot)
+            except Exception as e:
+                log.warning("reconcile_payment_error", payment_id=payment.id, error=str(e))
+                continue
+            # Unresolved + old → consider abandoned, stop showing as pending
+            if result in {"pending", "error", "mismatch"} and payment.created_at < stale_before:
+                payment.status = "canceled"
+                await session.commit()
+                log.info("payment_marked_abandoned", payment_id=payment.id)
+
+
 def build_scheduler(bot: Bot) -> AsyncIOScheduler:
     sched = AsyncIOScheduler(timezone="UTC")
     sched.add_job(
@@ -303,5 +341,15 @@ def build_scheduler(bot: Bot) -> AsyncIOScheduler:
         trigger="date",
         id="lunar_refresh_bootstrap",
         replace_existing=True,
+    )
+    sched.add_job(
+        reconcile_payments_job,
+        trigger="cron",
+        minute="*/5",
+        args=[bot],
+        id="reconcile_payments",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
     )
     return sched

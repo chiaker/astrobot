@@ -19,6 +19,8 @@ from astrobot.db.models import (
     User,
 )
 from astrobot.db.session import get_session
+from astrobot.payments import service as payment_service
+from astrobot.payments import yookassa
 
 router = APIRouter(tags=["admin"])
 
@@ -807,6 +809,7 @@ def _pay_status_badge(status: str) -> str:
         "succeeded": ("b-ok", "✅ Оплачен"),
         "pending": ("b-warn", "⏳ Ожидает"),
         "canceled": ("b-free", "✖ Отменён"),
+        "refunded": ("b-natal", "↩️ Возврат"),
     }
     cls, lbl = m.get(status, ("b-free", status or "—"))
     return f'<span class="badge {cls}">{lbl}</span>'
@@ -859,7 +862,14 @@ async def _gather_payments(
 
 
 def _render_payments(
-    rows: list, total: int, revenue: float, paid_count: int, page: int, status: str
+    rows: list,
+    total: int,
+    revenue: float,
+    paid_count: int,
+    page: int,
+    status: str,
+    msg: str = "",
+    err: str = "",
 ) -> str:
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
 
@@ -879,6 +889,16 @@ def _render_payments(
                 pages.append("<span class='muted'>…</span>")
         pager_html = f"<div class='pager'>{''.join(pages)}</div>"
 
+    def _action(r) -> str:
+        if r["status"] != "succeeded":
+            return ""
+        return (
+            f"<form method='post' action='/admin/payments/{r['id']}/refund' "
+            f"onsubmit=\"return confirm('Вернуть платёж {_money_rub(r['amount'])} юзеру {r['user_id']}? Начисления откатятся.')\" style='margin:0'>"
+            f"<button type='submit' class='btn btn-danger btn-sm'>Вернуть</button>"
+            f"</form>"
+        )
+
     body_rows = "".join(
         f"<tr>"
         f"<td class='small muted'>{r['id']}</td>"
@@ -890,9 +910,10 @@ def _render_payments(
         f"<td class='small muted'>{_trunc(r['email'], 28)}</td>"
         f"<td class='small muted'>{r['created_at'].strftime('%d.%m %H:%M') if r['created_at'] else '—'}</td>"
         f"<td class='small muted'>{r['paid_at'].strftime('%d.%m %H:%M') if r['paid_at'] else '—'}</td>"
+        f"<td>{_action(r)}</td>"
         f"</tr>"
         for r in rows
-    ) or "<tr><td colspan='9' class='muted'>Нет платежей.</td></tr>"
+    ) or "<tr><td colspan='10' class='muted'>Нет платежей.</td></tr>"
 
     filter_html = " ".join(
         f"<a href='/admin/payments?status={k}' class='btn btn-sm {'btn-p' if status == k else 'btn-ghost'}'>{lbl}</a>"
@@ -900,12 +921,20 @@ def _render_payments(
             ("succeeded", "Оплаченные"),
             ("pending", "Ожидают"),
             ("canceled", "Отменённые"),
+            ("refunded", "Возвраты"),
         )
     )
+
+    alert = ""
+    if msg:
+        alert = f"<div class='alert alert-ok'>✓ {msg}</div>"
+    elif err:
+        alert = f"<div class='alert alert-err'>✗ {err}</div>"
 
     body = f"""
 <h1 class='ph'>Платежи</h1>
 <p class='ph-sub'>Выручка (оплачено): <b>{_money_rub(revenue)}</b> · успешных платежей: <b>{paid_count}</b></p>
+{alert}
 <div style='display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap'>
   {filter_html}
   <a href='/admin/payments' class='btn btn-sm btn-ghost'>Все</a>
@@ -915,7 +944,7 @@ def _render_payments(
     <table>
       <thead><tr>
         <th>#</th><th>Юзер</th><th>TG ID</th><th>Товар</th>
-        <th class='r'>Сумма</th><th>Статус</th><th>Email</th><th>Создан</th><th>Оплачен</th>
+        <th class='r'>Сумма</th><th>Статус</th><th>Email</th><th>Создан</th><th>Оплачен</th><th></th>
       </tr></thead>
       <tbody>{body_rows}</tbody>
     </table>
@@ -1116,10 +1145,47 @@ async def payments_page(
     request: Request,
     status: str = "",
     page: int = 1,
+    msg: str = "",
+    err: str = "",
     session: AsyncSession = Depends(get_session),
 ):
     if not request.session.get("authenticated"):
         return RedirectResponse(url="/admin/login", status_code=303)
     page = max(1, page)
     rows, total, revenue, paid_count = await _gather_payments(session, status.strip(), page)
-    return HTMLResponse(_render_payments(rows, total, revenue, paid_count, page, status.strip()))
+    return HTMLResponse(
+        _render_payments(rows, total, revenue, paid_count, page, status.strip(), msg=msg, err=err)
+    )
+
+
+@router.post("/admin/payments/{payment_id}/refund", response_class=HTMLResponse)
+async def payment_refund(
+    request: Request,
+    payment_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    payment = await session.get(Payment, payment_id)
+    if payment is None:
+        return RedirectResponse(url="/admin/payments?err=Платёж не найден", status_code=303)
+    if payment.status != "succeeded":
+        return RedirectResponse(
+            url="/admin/payments?err=Вернуть можно только оплаченный платёж", status_code=303
+        )
+    if not payment.yookassa_payment_id:
+        return RedirectResponse(
+            url="/admin/payments?err=Нет id платежа в YooKassa", status_code=303
+        )
+
+    try:
+        await yookassa.create_refund(payment.yookassa_payment_id, float(payment.amount))
+    except Exception:
+        return RedirectResponse(
+            url="/admin/payments?err=YooKassa отклонила возврат", status_code=303
+        )
+
+    bot = getattr(request.app.state, "bot", None)
+    await payment_service.refund_payment(session, payment, bot)
+    return RedirectResponse(url="/admin/payments?msg=Возврат выполнен", status_code=303)
