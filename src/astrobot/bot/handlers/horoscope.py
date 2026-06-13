@@ -4,7 +4,7 @@ import asyncio
 from datetime import date, timedelta
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,11 +17,8 @@ from astrobot.astrology.transits import (
     transit_report_to_markdown,
 )
 from astrobot.bot.handlers.natal import _profile_to_birth
-from astrobot.bot.keyboards import (
-    MENU_HOROSCOPE,
-    horoscope_period_kb,
-)
-from astrobot.bot.responses import save_and_send_response
+from astrobot.bot.keyboards import horoscope_period_kb, with_back
+from astrobot.bot.responses import edit_or_send, save_and_send_response
 from astrobot.bot.utils import need_profile
 from astrobot.db.models import BirthProfile, HoroscopeCache, LLMUsageLog, User
 from astrobot.limits import check_horoscope, paywall_text
@@ -55,14 +52,13 @@ def _regen_row(period: str) -> list[InlineKeyboardButton]:
     return [InlineKeyboardButton(text="🔄 Пересчитать заново", callback_data=f"horo:regen:{period}")]
 
 
-@router.message(F.text == MENU_HOROSCOPE)
-async def on_horoscope_menu(message: Message, session: AsyncSession, user: User) -> None:
-    profile = await need_profile(message, session, user)
+@router.callback_query(F.data == "menu:horoscope")
+async def on_horoscope_menu(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+    await call.answer()
+    profile = await need_profile(call.message, session, user)
     if profile is None:
         return
-    await message.answer(
-        "🔮 На какой период посмотрим?", reply_markup=horoscope_period_kb()
-    )
+    await edit_or_send(call, "🔮 На какой период посмотрим?", horoscope_period_kb())
 
 
 @router.callback_query(F.data.startswith("horo:"))
@@ -123,7 +119,9 @@ async def on_horoscope_period(
     allowance = await check_horoscope(session, user)
     if not allowance.allowed:
         await call.answer()
-        await call.message.answer(paywall_text("horoscope", allowance))
+        await call.message.answer(
+            paywall_text("horoscope", allowance), reply_markup=with_back([])
+        )
         return
 
     await call.answer()

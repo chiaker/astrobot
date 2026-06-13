@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.astrology.chart import build_natal_chart
 from astrobot.astrology.serializer import chart_to_markdown
 from astrobot.astrology.types import BirthData
-from astrobot.bot.keyboards import MENU_NATAL, natal_paywall_kb
+from astrobot.bot.keyboards import natal_paywall_kb
 from astrobot.bot.responses import save_and_send_response
 from astrobot.bot.utils import need_profile
 from astrobot.db.models import BirthProfile, LLMUsageLog, User
@@ -33,15 +33,17 @@ def _profile_to_birth(profile: BirthProfile, name: str = "User") -> BirthData:
     )
 
 
-@router.message(F.text == MENU_NATAL)
-async def on_natal(message: Message, session: AsyncSession, user: User) -> None:
-    profile = await need_profile(message, session, user)
+@router.callback_query(F.data == "menu:natal")
+async def on_natal(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+    await call.answer()
+    target = call.message
+    profile = await need_profile(target, session, user)
     if profile is None:
         return
 
     if profile.cached_natal_brief and profile.cached_natal_full:
         await save_and_send_response(
-            message,
+            target,
             session,
             user,
             "natal",
@@ -53,12 +55,12 @@ async def on_natal(message: Message, session: AsyncSession, user: User) -> None:
 
     allowance = await check_natal(session, user)
     if not allowance.allowed:
-        await message.answer(paywall_text("natal", allowance), reply_markup=natal_paywall_kb())
+        await target.answer(paywall_text("natal", allowance), reply_markup=natal_paywall_kb())
         return
 
     pre_call_used = allowance.used
-    progress = await message.answer("🌙 Слушаю, что говорят звёзды о тебе…")
-    display_name = user.display_name or (message.from_user.full_name if message.from_user else None) or "User"
+    progress = await target.answer("🌙 Слушаю, что говорят звёзды о тебе…")
+    display_name = user.display_name or (call.from_user.full_name if call.from_user else None) or "User"
     birth = _profile_to_birth(profile, name=display_name)
     chart = build_natal_chart(birth)
     cached_context = chart_to_markdown(chart)
@@ -91,7 +93,7 @@ async def on_natal(message: Message, session: AsyncSession, user: User) -> None:
     )
 
     await progress.delete()
-    await save_and_send_response(message, session, user, "natal", brief, full, extra_row=_REGEN_ROW)
+    await save_and_send_response(target, session, user, "natal", brief, full, extra_row=_REGEN_ROW)
 
 
 @router.callback_query(F.data == "natal:regen")

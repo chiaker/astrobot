@@ -13,7 +13,8 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from astrobot.bot.keyboards import MENU_PREMIUM
+from astrobot.bot.keyboards import MENU_BACK_BTN
+from astrobot.bot.responses import edit_or_send
 from astrobot.bot.states import PaymentFlow
 from astrobot.config import get_settings
 from astrobot.db.models import Payment, User
@@ -60,6 +61,7 @@ def _plans_kb() -> InlineKeyboardMarkup:
             )
         ]
     )
+    rows.append([MENU_BACK_BTN])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -95,14 +97,15 @@ def _intro_text(user: User) -> str:
     return "\n".join(lines)
 
 
-@router.message(F.text == MENU_PREMIUM)
-async def on_premium(message: Message, user: User) -> None:
-    await message.answer(_intro_text(user), reply_markup=_plans_kb())
+@router.callback_query(F.data == "menu:premium")
+async def on_premium(call: CallbackQuery, user: User) -> None:
+    await call.answer()
+    await edit_or_send(call, _intro_text(user), _plans_kb())
 
 
 @router.callback_query(F.data == "premium:show")
 async def on_premium_inline(call: CallbackQuery, user: User) -> None:
-    await call.message.answer(_intro_text(user), reply_markup=_plans_kb())
+    await edit_or_send(call, _intro_text(user), _plans_kb())
     await call.answer()
 
 

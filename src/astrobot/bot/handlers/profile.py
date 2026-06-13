@@ -15,7 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.alerts import notify_ops
 from astrobot.astrology.geocoding import geocode_city
-from astrobot.bot.keyboards import MENU_PROFILE, name_skip_kb, push_hour_kb, reset_confirm_kb
+from astrobot.bot.keyboards import (
+    MENU_BACK_BTN,
+    name_skip_kb,
+    push_hour_kb,
+    reset_confirm_kb,
+    with_back,
+)
+from astrobot.bot.responses import edit_or_send
 from astrobot.bot.states import Onboarding, PushSetup
 from astrobot.db.models import BirthProfile, Favorite, HoroscopeCache, LLMUsageLog, Payment, User
 from astrobot.limits import NATAL_REGEN_PRICE_RUB, check_horoscope, check_question, is_premium
@@ -30,10 +37,22 @@ _GENDER_LABEL = {"m": "мужской", "f": "женский"}
 
 
 def _profile_kb(user: User) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
     gender_label = _GENDER_LABEL.get(user.gender or "", "не указан")
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"⚧ Пол: {gender_label}", callback_data="settings:gender")],
+            [InlineKeyboardButton(text="🧾 История операций", callback_data="payments:mine")],
+            [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show")],
+            [MENU_BACK_BTN],
+        ]
+    )
+
+
+def _settings_kb(user: User) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    terms_state = "вкл" if user.astro_terms_enabled else "выкл"
     rows.append(
-        [InlineKeyboardButton(text=f"⚧ Пол: {gender_label}", callback_data="settings:gender")]
+        [InlineKeyboardButton(text=f"🔭 Астротермины: {terms_state}", callback_data="settings:astro_terms")]
     )
     if is_premium(user):
         if user.push_horoscope_enabled:
@@ -42,7 +61,6 @@ def _profile_kb(user: User) -> InlineKeyboardMarkup:
             horo_label = f"🌅 Утренний гороскоп: вкл · {hour}{city}"
         else:
             horo_label = "🌅 Утренний гороскоп: выкл"
-
         lunar_state = "вкл" if user.push_lunar_enabled else "выкл"
         rows.append(
             [InlineKeyboardButton(text=horo_label, callback_data="settings:push_horoscope")]
@@ -51,19 +69,28 @@ def _profile_kb(user: User) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=f"🌑 Лунные фазы: {lunar_state}", callback_data="settings:push_lunar")]
         )
     rows.append(
-        [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show")]
+        [InlineKeyboardButton(text="✏️ Изменить данные / сбросить", callback_data="profile:reset")]
     )
-    rows.append(
-        [InlineKeyboardButton(text="🧾 История операций", callback_data="payments:mine")]
-    )
-    terms_state = "вкл" if user.astro_terms_enabled else "выкл"
-    rows.append(
-        [InlineKeyboardButton(text=f"🔭 Астротермины: {terms_state}", callback_data="settings:astro_terms")]
-    )
-    rows.append(
-        [InlineKeyboardButton(text="🔄 Ввести данные заново", callback_data="profile:reset")]
-    )
+    rows.append([MENU_BACK_BTN])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _settings_text(user: User) -> str:
+    terms = "вкл (с терминами)" if user.astro_terms_enabled else "выкл (без терминов)"
+    parts = [
+        "⚙️ <b>Настройки</b>",
+        "",
+        f"🔭 Астрологические термины: <b>{terms}</b>",
+    ]
+    if not is_premium(user):
+        parts.append(
+            "\n<i>Уведомления (утренний гороскоп, лунные фазы) доступны в Премиуме.</i>"
+        )
+    return "\n".join(parts)
+
+
+async def _render_settings(call: CallbackQuery, user: User) -> None:
+    await edit_or_send(call, _settings_text(user), _settings_kb(user))
 
 
 async def _profile_text(profile: BirthProfile, user: User, session: AsyncSession) -> str:
@@ -111,16 +138,25 @@ async def _profile_text(profile: BirthProfile, user: User, session: AsyncSession
     )
 
 
-@router.message(F.text == MENU_PROFILE)
-async def on_profile(message: Message, session: AsyncSession, user: User) -> None:
+@router.callback_query(F.data == "menu:profile")
+async def on_profile(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+    await call.answer()
     profile = await session.get(BirthProfile, user.id)
     if profile is None:
-        await message.answer(
-            "У тебя ещё нет сохранённого профиля. Нажми /start, чтобы пройти онбординг."
+        await edit_or_send(
+            call,
+            "У тебя ещё нет сохранённого профиля. Нажми /start, чтобы пройти онбординг.",
+            with_back([]),
         )
         return
     text = await _profile_text(profile, user, session)
-    await message.answer(text, reply_markup=_profile_kb(user))
+    await edit_or_send(call, text, _profile_kb(user))
+
+
+@router.callback_query(F.data == "menu:settings")
+async def on_settings(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+    await call.answer()
+    await _render_settings(call, user)
 
 
 def _fmt_op(p: Payment) -> str:
@@ -176,8 +212,7 @@ async def on_my_payments(call: CallbackQuery, session: AsyncSession, user: User)
         "<i>Фискальный чек по каждому оплаченному платежу приходит на email. "
         "Чтобы оформить возврат — нажми кнопку ниже, мы рассмотрим заявку.</i>",
     ]
-    kb = InlineKeyboardMarkup(inline_keyboard=refund_buttons) if refund_buttons else None
-    await call.message.answer("\n".join(lines), reply_markup=kb)
+    await edit_or_send(call, "\n".join(lines), with_back(refund_buttons))
     await call.answer()
 
 
@@ -247,10 +282,7 @@ async def on_push_horoscope_toggle(
         # Disable immediately
         user.push_horoscope_enabled = False
         await session.commit()
-        profile = await session.get(BirthProfile, user.id)
-        if profile is not None:
-            text = await _profile_text(profile, user, session)
-            await call.message.edit_text(text, reply_markup=_profile_kb(user))
+        await _render_settings(call, user)
         await call.answer("Утренний гороскоп выключен")
         return
 
@@ -259,10 +291,7 @@ async def on_push_horoscope_toggle(
         hour = user.push_hour if user.push_hour is not None else 9
         user.push_horoscope_enabled = True
         await session.commit()
-        profile = await session.get(BirthProfile, user.id)
-        if profile is not None:
-            text = await _profile_text(profile, user, session)
-            await call.message.edit_text(text, reply_markup=_profile_kb(user))
+        await _render_settings(call, user)
         await call.answer(f"Включён · {hour}:00 · {user.push_city_name}")
         return
 
@@ -347,10 +376,7 @@ async def on_push_lunar_toggle(call: CallbackQuery, session: AsyncSession, user:
         return
     user.push_lunar_enabled = not user.push_lunar_enabled
     await session.commit()
-    profile = await session.get(BirthProfile, user.id)
-    if profile is not None:
-        text = await _profile_text(profile, user, session)
-        await call.message.edit_text(text, reply_markup=_profile_kb(user))
+    await _render_settings(call, user)
     label = "включены" if user.push_lunar_enabled else "выключены"
     await call.answer(f"Лунные фазы {label}")
 
@@ -371,7 +397,7 @@ async def on_gender_toggle(call: CallbackQuery, session: AsyncSession, user: Use
     await session.commit()
     if profile is not None:
         text = await _profile_text(profile, user, session)
-        await call.message.edit_text(text, reply_markup=_profile_kb(user))
+        await edit_or_send(call, text, _profile_kb(user))
     await call.answer(f"Пол: {_GENDER_LABEL.get(user.gender or '', 'не указан')}")
 
 
@@ -384,9 +410,7 @@ async def on_astro_terms_toggle(call: CallbackQuery, session: AsyncSession, user
         profile.cached_natal_full = None
     await session.execute(delete(HoroscopeCache).where(HoroscopeCache.user_id == user.id))
     await session.commit()
-    if profile is not None:
-        text = await _profile_text(profile, user, session)
-        await call.message.edit_text(text, reply_markup=_profile_kb(user))
+    await _render_settings(call, user)
     label = "включены" if user.astro_terms_enabled else "выключены"
     await call.answer(f"Астрологические термины {label}")
 

@@ -5,14 +5,13 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    Message,
 )
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.formatting import md_to_telegram_html
-from astrobot.bot.keyboards import MENU_FAVORITES, main_menu
-from astrobot.bot.responses import chunk_text, safe_answer
+from astrobot.bot.keyboards import MENU_BACK_BTN, with_back
+from astrobot.bot.responses import chunk_text, edit_or_send, safe_answer
 from astrobot.db.models import Favorite, Response, User
 from astrobot.limits import is_premium
 from astrobot.metrics import FAVORITES_SAVED
@@ -101,11 +100,13 @@ def _list_kb(items: list[Favorite]) -> InlineKeyboardMarkup:
                 )
             ]
         )
+    rows.append([MENU_BACK_BTN])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@router.message(F.text == MENU_FAVORITES)
-async def on_favorites_menu(message: Message, session: AsyncSession, user: User) -> None:
+@router.callback_query(F.data == "menu:favorites")
+async def on_favorites_menu(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+    await call.answer()
     items = list(
         await session.scalars(
             select(Favorite)
@@ -115,17 +116,18 @@ async def on_favorites_menu(message: Message, session: AsyncSession, user: User)
         )
     )
     if not items:
-        await message.answer(
-            "⭐ Здесь будет то, что ты сохранила. Нажми «⭐ Сохранить» под любым "
+        await edit_or_send(
+            call,
+            "⭐ Здесь будет то, что ты сохранишь. Нажми «⭐ Сохранить» под любым "
             "ответом Астры, и он окажется тут.",
-            reply_markup=main_menu(),
+            with_back([]),
         )
         return
 
     intro = "⭐ <b>Твоё избранное</b>\n\nВыбери, чтобы перечитать:"
     if not is_premium(user):
         intro += f"\n<i>Использовано {len(items)} из {FREE_LIMIT} (free-тариф).</i>"
-    await message.answer(intro, reply_markup=_list_kb(items))
+    await edit_or_send(call, intro, _list_kb(items))
 
 
 @router.callback_query(F.data.startswith("fav:view:"))
@@ -152,7 +154,8 @@ async def on_view(
                 InlineKeyboardButton(
                     text="🗑 Удалить из избранного", callback_data=f"fav:del:{fav.id}"
                 )
-            ]
+            ],
+            [MENU_BACK_BTN],
         ]
     )
     header = f"⭐ <i>{fav.label} • {fav.created_at.strftime('%d.%m.%Y')}</i>\n\n"

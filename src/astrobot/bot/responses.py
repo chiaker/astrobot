@@ -4,10 +4,16 @@ import asyncio
 
 import structlog
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.formatting import md_to_telegram_html, strip_html
+from astrobot.bot.keyboards import MENU_BACK_BTN
 from astrobot.db.models import Response, User
 from astrobot.metrics import FLOOD_RETRIES_TOTAL
 
@@ -15,6 +21,24 @@ log = structlog.get_logger(__name__)
 
 CHUNK_LIMIT = 3800
 INTER_MESSAGE_DELAY = 0.08
+
+
+async def edit_or_send(
+    call: CallbackQuery,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    **kwargs,
+) -> None:
+    """Edit the callback's message in place; fall back to a fresh message if the
+    original can't be edited (too old / has no text / unchanged)."""
+    try:
+        await call.message.edit_text(text, reply_markup=reply_markup, **kwargs)
+    except TelegramBadRequest as e:
+        msg = str(e).lower()
+        if "message is not modified" in msg:
+            return
+        log.info("edit_or_send_fallback", error=str(e))
+        await safe_answer(call.message, text, reply_markup=reply_markup, **kwargs)
 
 
 def response_actions_kb(
@@ -25,6 +49,7 @@ def response_actions_kb(
     rows: list[list[InlineKeyboardButton]] = [[save]]
     if extra_row:
         rows.append(extra_row)
+    rows.append([MENU_BACK_BTN])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

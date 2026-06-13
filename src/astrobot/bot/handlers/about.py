@@ -5,10 +5,10 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    Message,
 )
 
-from astrobot.bot.keyboards import MENU_ABOUT
+from astrobot.bot.keyboards import MENU_BACK_BTN, with_back
+from astrobot.bot.responses import edit_or_send
 from astrobot.config import get_settings
 from astrobot.db.models import User
 from astrobot.legal.disclaimer import SHORT_DISCLAIMER
@@ -41,15 +41,15 @@ def _about_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📄 Terms", callback_data="legal:terms"),
         ],
         [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show")],
+        [MENU_BACK_BTN],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@router.message(F.text == MENU_ABOUT)
-async def on_about(message: Message) -> None:
-    await message.answer(
-        ABOUT_TEXT, reply_markup=_about_kb(), disable_web_page_preview=True
-    )
+@router.callback_query(F.data == "menu:about")
+async def on_about(call: CallbackQuery) -> None:
+    await call.answer()
+    await edit_or_send(call, ABOUT_TEXT, _about_kb(), disable_web_page_preview=True)
 
 
 @router.callback_query(F.data == "referral:show")
@@ -63,5 +63,7 @@ async def on_referral_show(call: CallbackQuery, user: User) -> None:
         "<b>вы оба получите +2 бесплатных вопроса</b> ✨\n\n"
         "Просто поделись ссылкой в любом мессенджере."
     )
-    await call.message.answer(text, disable_web_page_preview=True)
+    await call.message.answer(
+        text, reply_markup=with_back([]), disable_web_page_preview=True
+    )
     await call.answer()

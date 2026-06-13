@@ -27,6 +27,7 @@ def build_dispatcher() -> Dispatcher:
         favorites,
         horoscope,
         legal,
+        menu,
         natal,
         onboarding,
         payment,
@@ -49,6 +50,7 @@ def build_dispatcher() -> Dispatcher:
     dp.include_router(errors.router)
     dp.include_router(legal.router)
     dp.include_router(onboarding.router)
+    dp.include_router(menu.router)
     dp.include_router(profile.router)
     dp.include_router(natal.router)
     dp.include_router(horoscope.router)

@@ -11,13 +11,13 @@ from astrobot.astrology.serializer import chart_to_markdown
 from astrobot.bot.formatting import md_to_telegram_html
 from astrobot.bot.handlers.natal import _profile_to_birth
 from astrobot.bot.keyboards import (
-    MENU_QUESTION,
     SUGGESTED_QUESTIONS,
     ask_again_with_save_kb,
     question_entry_kb,
     suggested_questions_kb,
+    with_back,
 )
-from astrobot.bot.responses import chunk_text, safe_answer
+from astrobot.bot.responses import chunk_text, edit_or_send, safe_answer
 from astrobot.bot.states import AskingQuestion
 from astrobot.bot.utils import need_profile
 from astrobot.db.models import BirthProfile, LLMUsageLog, QuestionLog, Response, User
@@ -35,24 +35,28 @@ from astrobot.safety.crisis import CRISIS_REPLY, is_crisis
 router = Router(name="question")
 
 
-@router.message(F.text == MENU_QUESTION)
+@router.callback_query(F.data == "menu:question")
 async def on_question_button(
-    message: Message,
+    call: CallbackQuery,
     state: FSMContext,
     session: AsyncSession,
     user: User,
 ) -> None:
-    profile = await need_profile(message, session, user)
+    await call.answer()
+    profile = await need_profile(call.message, session, user)
     if profile is None:
         return
     allowance = await check_question(session, user)
     if not allowance.allowed:
-        await message.answer(paywall_text("question", allowance))
+        await call.message.answer(
+            paywall_text("question", allowance), reply_markup=with_back([])
+        )
         return
     await state.set_state(AskingQuestion.waiting_for_text)
-    await message.answer(
+    await edit_or_send(
+        call,
         "🌙 Слушаю.\n\nСпроси меня одним сообщением — я отвечу через твою карту.",
-        reply_markup=question_entry_kb(),
+        question_entry_kb(),
     )
 
 

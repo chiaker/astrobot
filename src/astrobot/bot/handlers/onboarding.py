@@ -10,12 +10,12 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.astrology.geocoding import geocode_city
+from astrobot.bot.handlers.menu import send_main_menu
 from astrobot.bot.keyboards import (
     astro_terms_kb,
     confirm_kb,
     final_confirm_kb,
     gender_kb,
-    main_menu,
     name_skip_kb,
     time_unknown_kb,
 )
@@ -98,10 +98,8 @@ async def cmd_start(
 
     profile = await session.get(BirthProfile, user.id)
     if profile is not None:
-        await message.answer(
-            "🌙 С возвращением. Звёзды ждали тебя — выбирай, что хочешь узнать ✨",
-            reply_markup=main_menu(),
-        )
+        await message.answer("🌙 С возвращением. Звёзды ждали тебя ✨")
+        await send_main_menu(message, user, session)
         return
 
     from astrobot.legal.disclaimer import ONBOARDING_CONSENT
@@ -126,9 +124,12 @@ async def cmd_start(
 
 
 @router.message(Command("cancel"))
-async def cmd_cancel(message: Message, state: FSMContext) -> None:
+async def cmd_cancel(
+    message: Message, state: FSMContext, session: AsyncSession, user: User
+) -> None:
     await state.clear()
-    await message.answer("Хорошо, отложила в сторону ✨", reply_markup=main_menu())
+    await message.answer("Хорошо, отложила в сторону ✨")
+    await send_main_menu(message, user, session)
 
 
 # ─── Шаг 1: имя ───────────────────────────────────────────────────────────────
@@ -374,8 +375,8 @@ async def on_final_ok(
     name_part = f", {user.display_name}" if user.display_name else ""
     await call.message.answer(
         f"🌙 Запомнила{name_part}. Твоя карта со мной — теперь спрашивай о чём угодно ✨",
-        reply_markup=main_menu(),
     )
+    await send_main_menu(call.message, user, session)
     await call.answer("Готово")
 
 
@@ -412,7 +413,10 @@ async def on_final_restart(
 # ─── cancel ───────────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "cancel")
-async def on_cancel(call: CallbackQuery, state: FSMContext) -> None:
+async def on_cancel(
+    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
+) -> None:
     await state.clear()
-    await call.message.answer("Хорошо, отложила ✨", reply_markup=main_menu())
+    await call.message.answer("Хорошо, отложила ✨")
+    await send_main_menu(call.message, user, session)
     await call.answer()

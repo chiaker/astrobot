@@ -1,8 +1,6 @@
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
 )
 
 MENU_NATAL = "🌟 Натальная карта"
@@ -12,18 +10,42 @@ MENU_PROFILE = "👤 Профиль"
 MENU_PREMIUM = "💎 Премиум"
 MENU_ABOUT = "ℹ️ Об Астре"
 MENU_FAVORITES = "⭐ Избранное"
+MENU_SETTINGS = "⚙️ Настройки"
+
+# Button that returns to the main menu (edits the current message into it).
+MENU_BACK_BTN = InlineKeyboardButton(text="🔙 Меню", callback_data="menu:open")
 
 
-def main_menu() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=MENU_NATAL), KeyboardButton(text=MENU_HOROSCOPE)],
-            [KeyboardButton(text=MENU_QUESTION), KeyboardButton(text=MENU_FAVORITES)],
-            [KeyboardButton(text=MENU_PREMIUM), KeyboardButton(text=MENU_PROFILE)],
-            [KeyboardButton(text=MENU_ABOUT)],
-        ],
-        resize_keyboard=True,
-        input_field_placeholder="Выбери пункт меню",
+def menu_back_row() -> list[InlineKeyboardButton]:
+    return [MENU_BACK_BTN]
+
+
+def with_back(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
+    """Append a '🔙 Меню' row to the given keyboard rows."""
+    return InlineKeyboardMarkup(inline_keyboard=[*rows, [MENU_BACK_BTN]])
+
+
+def main_menu_inline() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=MENU_HOROSCOPE, callback_data="menu:horoscope"),
+                InlineKeyboardButton(text=MENU_NATAL, callback_data="menu:natal"),
+            ],
+            [
+                InlineKeyboardButton(text=MENU_QUESTION, callback_data="menu:question"),
+                InlineKeyboardButton(text=MENU_FAVORITES, callback_data="menu:favorites"),
+            ],
+            [
+                InlineKeyboardButton(text=MENU_PREMIUM, callback_data="menu:premium"),
+                InlineKeyboardButton(text=MENU_PROFILE, callback_data="menu:profile"),
+            ],
+            [
+                InlineKeyboardButton(text=MENU_SETTINGS, callback_data="menu:settings"),
+                InlineKeyboardButton(text=MENU_ABOUT, callback_data="menu:about"),
+            ],
+            [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show")],
+        ]
     )
 
 
@@ -76,7 +98,8 @@ def ask_again_with_save_kb(response_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{response_id}"),
                 InlineKeyboardButton(text="💬 Спросить ещё", callback_data="ask_again"),
-            ]
+            ],
+            [MENU_BACK_BTN],
         ]
     )
 
@@ -117,7 +140,8 @@ def horoscope_period_kb() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Сегодня", callback_data="horo:today"),
                 InlineKeyboardButton(text="Неделя", callback_data="horo:week"),
                 InlineKeyboardButton(text="Месяц", callback_data="horo:month"),
-            ]
+            ],
+            [MENU_BACK_BTN],
         ]
     )
 
@@ -193,6 +217,7 @@ def natal_paywall_kb() -> InlineKeyboardMarkup:
                 )
             ],
             [InlineKeyboardButton(text="💎 Открыть Премиум", callback_data="premium:show")],
+            [MENU_BACK_BTN],
         ]
     )
 

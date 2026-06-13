@@ -27,6 +27,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.bot = bot
     app.state.dp = dp
 
+    # Native command list + the blue "Menu" button next to the input field.
+    try:
+        from aiogram.types import BotCommand
+
+        await bot.set_my_commands(
+            [
+                BotCommand(command="start", description="Начать / перезапустить"),
+                BotCommand(command="menu", description="Главное меню"),
+            ]
+        )
+    except Exception as e:
+        log.warning("set_my_commands_failed", error=str(e))
+
     polling_task: asyncio.Task | None = None
     scheduler = build_scheduler(bot)
     scheduler.start()
