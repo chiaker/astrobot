@@ -26,8 +26,15 @@ from astrobot.redis_client import get_redis
 router = Router(name="profile")
 
 
+_GENDER_LABEL = {"m": "мужской", "f": "женский"}
+
+
 def _profile_kb(user: User) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    gender_label = _GENDER_LABEL.get(user.gender or "", "не указан")
+    rows.append(
+        [InlineKeyboardButton(text=f"⚧ Пол: {gender_label}", callback_data="settings:gender")]
+    )
     if is_premium(user):
         if user.push_horoscope_enabled:
             hour = f"{user.push_hour}:00" if user.push_hour is not None else "9:00"
@@ -349,6 +356,24 @@ async def on_push_lunar_toggle(call: CallbackQuery, session: AsyncSession, user:
 
 
 # ─── Astro terms toggle ───────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "settings:gender")
+async def on_gender_toggle(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+    # Cycle: м → ж → не указан → м
+    nxt = {"m": "f", "f": None}.get(user.gender or "", "m")
+    user.gender = nxt
+    # Cached natal/horoscope text uses gendered agreement → regenerate.
+    profile = await session.get(BirthProfile, user.id)
+    if profile is not None:
+        profile.cached_natal_brief = None
+        profile.cached_natal_full = None
+    await session.execute(delete(HoroscopeCache).where(HoroscopeCache.user_id == user.id))
+    await session.commit()
+    if profile is not None:
+        text = await _profile_text(profile, user, session)
+        await call.message.edit_text(text, reply_markup=_profile_kb(user))
+    await call.answer(f"Пол: {_GENDER_LABEL.get(user.gender or '', 'не указан')}")
+
 
 @router.callback_query(F.data == "settings:astro_terms")
 async def on_astro_terms_toggle(call: CallbackQuery, session: AsyncSession, user: User) -> None:

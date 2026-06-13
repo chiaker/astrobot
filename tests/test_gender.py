@@ -16,6 +16,13 @@ def test_male_vowel_exceptions():
         assert guess_gender(n) == "m", n
 
 
+def test_male_diminutives_ending_in_vowel():
+    # The common trap: male short forms ending in -а/-я.
+    for n in ("Рома", "Дима", "Вова", "Юра", "Гоша", "Миша", "Паша",
+              "Вася", "Костя", "Серёжа", "Федя", "Митя", "Лёша"):
+        assert guess_gender(n) == "m", n
+
+
 def test_explicit_overrides():
     assert guess_gender("Игорь") == "m"
     assert guess_gender("Любовь") == "f"

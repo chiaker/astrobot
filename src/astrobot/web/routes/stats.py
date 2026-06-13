@@ -336,6 +336,88 @@ async def _gather_stats(session: AsyncSession) -> dict:
 
     days14 = [(now - timedelta(days=i)).strftime("%d.%m") for i in range(13, -1, -1)]
 
+    # ── Money: revenue (succeeded payments, by paid_at) ──
+    async def _revenue(since: datetime | None) -> float:
+        q = select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.status == "succeeded"
+        )
+        if since is not None:
+            q = q.where(Payment.paid_at >= since)
+        return float((await session.scalar(q)) or 0)
+
+    revenue = {
+        "24h": await _revenue(h24),
+        "7d": await _revenue(d7),
+        "30d": await _revenue(d30),
+        "all": await _revenue(None),
+    }
+    rev_by_kind_rows = (
+        await session.execute(
+            select(
+                Payment.kind,
+                func.coalesce(func.sum(Payment.amount), 0),
+                func.count(Payment.id),
+            )
+            .where(Payment.status == "succeeded", Payment.paid_at >= d30)
+            .group_by(Payment.kind)
+        )
+    ).all()
+    rev_by_kind = {r[0]: {"amount": float(r[1] or 0), "count": r[2]} for r in rev_by_kind_rows}
+
+    refunds_30d_amount = float(
+        (
+            await session.scalar(
+                select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                    Payment.status == "refunded", Payment.refunded_at >= d30
+                )
+            )
+        )
+        or 0
+    )
+    refunds_30d_count = (
+        await session.scalar(
+            select(func.count(Payment.id)).where(
+                Payment.status == "refunded", Payment.refunded_at >= d30
+            )
+        )
+    ) or 0
+
+    paying_users = (
+        await session.scalar(
+            select(func.count(func.distinct(Payment.user_id))).where(
+                Payment.status == "succeeded"
+            )
+        )
+    ) or 0
+
+    # ── Subscriptions / onboarding ──
+    profiles = (await session.scalar(select(func.count(BirthProfile.user_id)))) or 0
+    expiring_7d = (
+        await session.scalar(
+            select(func.count(User.id)).where(
+                User.premium_until.isnot(None),
+                User.premium_until > now,
+                User.premium_until <= now + timedelta(days=7),
+            )
+        )
+    ) or 0
+
+    # ── Activity (distinct active users by LLM calls) ──
+    async def _active(since: datetime) -> int:
+        return (
+            await session.scalar(
+                select(func.count(func.distinct(LLMUsageLog.user_id))).where(
+                    LLMUsageLog.created_at >= since
+                )
+            )
+        ) or 0
+
+    dau = await _active(h24)
+    wau = await _active(d7)
+    mau = await _active(d30)
+
+    cost_30d = cost_tier["30d"]["free"] + cost_tier["30d"]["premium"]
+
     return {
         "now": now,
         "settings": settings,
@@ -354,6 +436,17 @@ async def _gather_stats(session: AsyncSession) -> dict:
         "days14": days14,
         "questions_7d": questions_7d,
         "favorites_total": favorites_total,
+        "revenue": revenue,
+        "rev_by_kind": rev_by_kind,
+        "refunds_30d_amount": refunds_30d_amount,
+        "refunds_30d_count": refunds_30d_count,
+        "paying_users": paying_users,
+        "profiles": profiles,
+        "expiring_7d": expiring_7d,
+        "dau": dau,
+        "wau": wau,
+        "mau": mau,
+        "cost_30d": cost_30d,
     }
 
 
@@ -386,6 +479,16 @@ def _render_stats(d: dict) -> str:
 
     pct_prem = f"{d['premium']/d['total']*100:.0f}%" if d["total"] else "0%"
 
+    rev = d["revenue"]
+    paying = d["paying_users"]
+    conv = f"{paying / d['total'] * 100:.1f}%" if d["total"] else "0%"
+    arppu = rev["all"] / paying if paying else 0.0
+    onb_pct = f"{d['profiles'] / d['total'] * 100:.0f}%" if d["total"] else "0%"
+    rk = d["rev_by_kind"]
+
+    def _rk(k: str) -> str:
+        return _money_rub(rk.get(k, {}).get("amount", 0))
+
     body = f"""
 <h1 class='ph'>Сводка</h1>
 <p class='ph-sub'>Обновлено: {_fmt_dt(d['now'])}</p>
@@ -417,6 +520,72 @@ def _render_stats(d: dict) -> str:
     <div class='kpi-label'>По рефералам</div>
     <div class='kpi-value'>{d['referred']}</div>
     <div class='kpi-sub'>всего привлечено</div>
+  </div>
+</div>
+
+<h2 class='sec'>Деньги</h2>
+<div class='kpis'>
+  <div class='kpi green'>
+    <div class='kpi-label'>Выручка сутки</div>
+    <div class='kpi-value'>{_money_rub(rev['24h'])}</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>Выручка 7 дней</div>
+    <div class='kpi-value'>{_money_rub(rev['7d'])}</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>Выручка 30 дней</div>
+    <div class='kpi-value'>{_money_rub(rev['30d'])}</div>
+  </div>
+  <div class='kpi accent'>
+    <div class='kpi-label'>Выручка всего</div>
+    <div class='kpi-value'>{_money_rub(rev['all'])}</div>
+    <div class='kpi-sub'>ARPPU {_money_rub(arppu)}</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>Возвраты 30д</div>
+    <div class='kpi-value'>{_money_rub(d['refunds_30d_amount'])}</div>
+    <div class='kpi-sub'>{d['refunds_30d_count']} шт</div>
+  </div>
+</div>
+<p class='small muted' style='margin-top:6px'>
+  Выручка 30д по товарам: подписки <b>{_rk('subscription')}</b> ·
+  пакеты вопросов <b>{_rk('question_pack')}</b> ·
+  пересчёты натала <b>{_rk('natal_regen')}</b>
+</p>
+
+<h2 class='sec'>Подписки и конверсия</h2>
+<div class='kpis'>
+  <div class='kpi accent'>
+    <div class='kpi-label'>Платящих всего</div>
+    <div class='kpi-value'>{paying}</div>
+    <div class='kpi-sub'>конверсия в платных: {conv}</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>Активный премиум</div>
+    <div class='kpi-value'>{d['premium']}</div>
+    <div class='kpi-sub'>истекают за 7д: {d['expiring_7d']}</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>Прошли онбординг</div>
+    <div class='kpi-value'>{d['profiles']}</div>
+    <div class='kpi-sub'>{onb_pct} от всех</div>
+  </div>
+</div>
+
+<h2 class='sec'>Активность</h2>
+<div class='kpis'>
+  <div class='kpi'>
+    <div class='kpi-label'>DAU (сутки)</div>
+    <div class='kpi-value'>{d['dau']}</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>WAU (7 дней)</div>
+    <div class='kpi-value'>{d['wau']}</div>
+  </div>
+  <div class='kpi'>
+    <div class='kpi-label'>MAU (30 дней)</div>
+    <div class='kpi-value'>{d['mau']}</div>
   </div>
 </div>
 
