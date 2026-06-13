@@ -21,6 +21,7 @@ from astrobot.bot.keyboards import (
 )
 from astrobot.bot.states import Onboarding
 from astrobot.db.models import BirthProfile, HoroscopeCache, User
+from astrobot.gender import guess_gender
 
 router = Router(name="onboarding")
 
@@ -51,7 +52,7 @@ def _format_final_summary(data: dict) -> str:
     return (
         "<b>Всё в порядке? Проверь данные:</b>\n\n"
         f"👤 Имя: <b>{name}</b>\n"
-        f"⚧ Обращение: <b>{gender_str}</b>\n\n"
+        f"⚧ Пол: <b>{gender_str}</b>\n\n"
         f"📅 Дата рождения: <b>{d.strftime('%d.%m.%Y')}</b>\n"
         f"⏰ Время: <b>{time_str}</b>\n"
         f"📍 Место: <b>{data['city_display']}</b>\n"
@@ -143,18 +144,35 @@ async def on_name(message: Message, state: FSMContext) -> None:
         await message.answer("Напиши имя (до 64 символов), или нажми «Пропустить».")
         return
     await state.update_data(display_name=name)
-    await _ask_gender(message, state)
+
+    # Try to infer gender from the name; only ask if we can't tell.
+    guessed = guess_gender(name)
+    if guessed is not None:
+        await state.update_data(gender=guessed)
+        await _ask_date(message, state)
+    else:
+        await _ask_gender(message, state)
 
 
 @router.callback_query(Onboarding.waiting_for_name, F.data == "onb:name:skip")
 async def on_name_skip(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
+    # No name → can't infer gender → ask.
     await _ask_gender(call.message, state)
 
 
 async def _ask_gender(target, state: FSMContext) -> None:
     await state.set_state(Onboarding.choosing_gender)
-    await target.answer("Как к тебе обращаться?", reply_markup=gender_kb())
+    await target.answer("Укажи свой пол:", reply_markup=gender_kb())
+
+
+async def _ask_date(target, state: FSMContext) -> None:
+    await state.set_state(Onboarding.waiting_for_date)
+    await target.answer(
+        "Отлично! Теперь мне нужны данные для натальной карты ✨\n\n"
+        "Введи <b>дату рождения</b> в формате <code>DD.MM.YYYY</code> "
+        "(например, <code>14.03.1990</code>):"
+    )
 
 
 # ─── Шаг 2: пол ───────────────────────────────────────────────────────────────
@@ -165,13 +183,7 @@ async def on_gender(call: CallbackQuery, state: FSMContext) -> None:
     if value in ("m", "f"):
         await state.update_data(gender=value)
     await call.answer()
-    # After personal prefs → start collecting birth data
-    await state.set_state(Onboarding.waiting_for_date)
-    await call.message.answer(
-        "Отлично! Теперь мне нужны данные для натальной карты ✨\n\n"
-        "Введи <b>дату рождения</b> в формате <code>DD.MM.YYYY</code> "
-        "(например, <code>14.03.1990</code>):"
-    )
+    await _ask_date(call.message, state)
 
 
 # ─── Шаг 3: дата ──────────────────────────────────────────────────────────────

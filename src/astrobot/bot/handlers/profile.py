@@ -27,15 +27,7 @@ router = Router(name="profile")
 
 
 def _profile_kb(user: User) -> InlineKeyboardMarkup:
-    mode = "кратко" if user.default_response == "brief" else "подробно"
-    rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton(
-                text=f"📏 Ответы: {mode}",
-                callback_data="settings:response_toggle",
-            )
-        ],
-    ]
+    rows: list[list[InlineKeyboardButton]] = []
     if is_premium(user):
         if user.push_horoscope_enabled:
             hour = f"{user.push_hour}:00" if user.push_hour is not None else "9:00"
@@ -229,20 +221,6 @@ async def on_refund_request(call: CallbackQuery, session: AsyncSession, user: Us
         "📨 Заявка на возврат отправлена. Мы рассмотрим её и свяжемся с тобой ✨"
     )
     await call.answer("Заявка отправлена")
-
-
-@router.callback_query(F.data == "settings:response_toggle")
-async def on_response_toggle(call: CallbackQuery, session: AsyncSession, user: User) -> None:
-    user.default_response = "full" if user.default_response == "brief" else "brief"
-    await session.commit()
-    profile = await session.get(BirthProfile, user.id)
-    if profile is None:
-        await call.answer()
-        return
-    text = await _profile_text(profile, user, session)
-    await call.message.edit_text(text, reply_markup=_profile_kb(user))
-    mode_label = "кратко" if user.default_response == "brief" else "подробно"
-    await call.answer(f"Теперь по умолчанию — {mode_label}")
 
 
 # ─── Push horoscope setup ─────────────────────────────────────────────────────

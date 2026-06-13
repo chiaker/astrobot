@@ -17,21 +17,12 @@ CHUNK_LIMIT = 3800
 INTER_MESSAGE_DELAY = 0.08
 
 
-def response_toggle_kb(
+def response_actions_kb(
     response_id: int,
-    current: str,
     extra_row: list[InlineKeyboardButton] | None = None,
 ) -> InlineKeyboardMarkup:
-    if current == "brief":
-        toggle = InlineKeyboardButton(
-            text="📖 Подробнее", callback_data=f"resp:{response_id}:full"
-        )
-    else:
-        toggle = InlineKeyboardButton(
-            text="📝 Кратко", callback_data=f"resp:{response_id}:brief"
-        )
     save = InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{response_id}")
-    rows: list[list[InlineKeyboardButton]] = [[save, toggle]]
+    rows: list[list[InlineKeyboardButton]] = [[save]]
     if extra_row:
         rows.append(extra_row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -90,7 +81,6 @@ async def _send_chunks(
     target: Message,
     text: str,
     resp_id: int,
-    current: str,
     extra_row: list[InlineKeyboardButton] | None = None,
 ) -> list[int]:
     rendered = md_to_telegram_html(text)
@@ -99,11 +89,7 @@ async def _send_chunks(
     for i, chunk in enumerate(chunks):
         if i > 0:
             await asyncio.sleep(INTER_MESSAGE_DELAY)
-        kb = (
-            response_toggle_kb(resp_id, current, extra_row)
-            if i == len(chunks) - 1
-            else None
-        )
+        kb = response_actions_kb(resp_id, extra_row) if i == len(chunks) - 1 else None
         sent = await safe_answer(target, chunk, reply_markup=kb)
         ids.append(sent.message_id)
     return ids
@@ -118,33 +104,11 @@ async def save_and_send_response(
     full: str,
     extra_row: list[InlineKeyboardButton] | None = None,
 ) -> Response:
+    # Always send the detailed version; the brief/full toggle was removed.
     resp = Response(user_id=user.id, kind=kind, brief=brief, full=full)
     session.add(resp)
     await session.flush()
 
-    text = brief if user.default_response == "brief" else full
-    resp.message_ids = await _send_chunks(
-        message, text, resp.id, user.default_response, extra_row
-    )
+    resp.message_ids = await _send_chunks(message, full, resp.id, extra_row)
     await session.commit()
     return resp
-
-
-async def replace_response(
-    message: Message,
-    session: AsyncSession,
-    user: User,
-    resp: Response,
-    target: str,
-) -> None:
-    """Delete previous chunks of `resp`, re-render with `target` mode."""
-    bot = message.bot
-    for mid in list(resp.message_ids or []):
-        try:
-            await bot.delete_message(message.chat.id, mid)
-        except Exception:
-            pass
-
-    text = resp.brief if target == "brief" else resp.full
-    resp.message_ids = await _send_chunks(message, text, resp.id, target)
-    await session.commit()
