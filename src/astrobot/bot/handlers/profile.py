@@ -13,7 +13,6 @@ from aiogram.types import (
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from astrobot.alerts import notify_ops
 from astrobot.astrology.geocoding import geocode_city
 from astrobot.bot.keyboards import (
     MENU_BACK_BTN,
@@ -24,7 +23,15 @@ from astrobot.bot.keyboards import (
 )
 from astrobot.bot.responses import edit_or_send
 from astrobot.bot.states import Onboarding, PushSetup
-from astrobot.db.models import BirthProfile, Favorite, HoroscopeCache, LLMUsageLog, Payment, User
+from astrobot.db.models import (
+    BirthProfile,
+    Favorite,
+    HoroscopeCache,
+    LLMUsageLog,
+    Payment,
+    SupportTicket,
+    User,
+)
 from astrobot.limits import NATAL_REGEN_PRICE_RUB, check_horoscope, check_question, is_premium
 from astrobot.payments import service as payment_service
 from astrobot.payments.catalog import get_item
@@ -245,22 +252,25 @@ async def on_refund_request(call: CallbackQuery, session: AsyncSession, user: Us
     allowed, reason = await payment_service.refund_eligibility(session, payment)
     item = get_item(payment.item_code)
     title = item.title if item else payment.item_code
-    elig = "✅ по политике положен" if allowed else f"⚠️ вне политики ({reason})"
-    paid_d = (payment.paid_at or payment.created_at).strftime("%d.%m.%Y")
-    name = user.display_name or "—"
-
-    await notify_ops(
-        call.bot,
-        f"↩️ <b>Запрос возврата</b>\n"
-        f"Платёж #{payment.id}: {title} · {int(payment.amount)} ₽\n"
-        f"Юзер: {name} (id={user.id}, tg=<code>{user.tg_user_id}</code>)\n"
-        f"Оплачен: {paid_d}\n"
-        f"Право: {elig}\n"
-        f"→ /admin → 💳 Платежи → «Вернуть»",
+    elig = "по политике положен" if allowed else f"вне политики ({reason})"
+    ticket_msg = (
+        f"Запрос возврата: {title} · {int(payment.amount)} ₽ (платёж #{payment.id}). "
+        f"По политике: {elig}."
     )
+    session.add(
+        SupportTicket(
+            user_id=user.id,
+            kind="refund",
+            message=ticket_msg,
+            status="open",
+            payment_id=payment.id,
+        )
+    )
+    await session.commit()
 
     await call.message.answer(
-        "📨 Заявка на возврат отправлена. Мы рассмотрим её и свяжемся с тобой ✨"
+        "📨 Заявка на возврат отправлена. Мы рассмотрим её — ответ придёт в боте.",
+        reply_markup=with_back([]),
     )
     await call.answer("Заявка отправлена")
 

@@ -34,6 +34,7 @@ def build_dispatcher() -> Dispatcher:
         profile,
         question,
         response_toggle,
+        support,
     )
 
     settings = get_settings()
@@ -58,6 +59,7 @@ def build_dispatcher() -> Dispatcher:
     dp.include_router(payment.router)
     dp.include_router(about.router)
     dp.include_router(favorites.router)
+    dp.include_router(support.router)
     dp.include_router(response_toggle.router)
     dp.include_router(fallback.router)
     return dp

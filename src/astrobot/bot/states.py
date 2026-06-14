@@ -24,3 +24,7 @@ class PushSetup(StatesGroup):
 
 class PaymentFlow(StatesGroup):
     waiting_for_email = State()
+
+
+class SupportFlow(StatesGroup):
+    waiting_for_text = State()

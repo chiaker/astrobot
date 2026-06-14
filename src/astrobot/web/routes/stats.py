@@ -16,6 +16,7 @@ from astrobot.db.models import (
     LLMUsageLog,
     Payment,
     QuestionLog,
+    SupportTicket,
     User,
 )
 from astrobot.db.session import get_session
@@ -220,6 +221,7 @@ def _layout(title: str, body: str, active: str = "") -> str:
         ("📊 Сводка", "/admin/stats", "stats"),
         ("👥 Юзеры", "/admin/users", "users"),
         ("💳 Платежи", "/admin/payments", "payments"),
+        ("🆘 Поддержка", "/admin/support", "support"),
         ("📋 Логи LLM", "/admin/logs", "logs"),
     ]
     nav_html = "".join(
@@ -1144,6 +1146,104 @@ def _render_payments(
     return _layout("Платежи", body, active="payments")
 
 
+# ─── support page ──────────────────────────────────────────────────────────────
+
+async def _gather_support(session: AsyncSession, status: str) -> list:
+    q = (
+        select(
+            SupportTicket.id,
+            SupportTicket.user_id,
+            SupportTicket.kind,
+            SupportTicket.message,
+            SupportTicket.status,
+            SupportTicket.answer,
+            SupportTicket.payment_id,
+            SupportTicket.created_at,
+            SupportTicket.answered_at,
+            User.tg_user_id,
+            User.display_name,
+        )
+        .join(User, User.id == SupportTicket.user_id)
+        .order_by(desc(SupportTicket.status == "open"), desc(SupportTicket.created_at))
+        .limit(100)
+    )
+    if status:
+        q = q.where(SupportTicket.status == status)
+    return (await session.execute(q)).mappings().all()
+
+
+def _ticket_status_badge(status: str) -> str:
+    m = {"open": ("b-warn", "🕓 Открыт"), "answered": ("b-ok", "✅ Отвечен")}
+    cls, lbl = m.get(status, ("b-free", status or "—"))
+    return f'<span class="badge {cls}">{lbl}</span>'
+
+
+def _render_support(rows: list, status: str, msg: str = "", err: str = "") -> str:
+    open_count = sum(1 for r in rows if r["status"] == "open")
+
+    filter_html = " ".join(
+        f"<a href='/admin/support?status={k}' class='btn btn-sm {'btn-p' if status == k else 'btn-ghost'}'>{lbl}</a>"
+        for k, lbl in (("open", "Открытые"), ("answered", "Отвеченные"))
+    )
+
+    cards = []
+    for r in rows:
+        kind = "↩️ Возврат" if r["kind"] == "refund" else "💬 Вопрос"
+        name = _esc(r["display_name"]) if r["display_name"] else "—"
+        created = r["created_at"].strftime("%d.%m.%Y %H:%M") if r["created_at"] else "—"
+        pay_link = (
+            f" · <a href='/admin/payments'>платёж #{r['payment_id']}</a>"
+            if r["payment_id"]
+            else ""
+        )
+        answer_block = ""
+        if r["answer"]:
+            ad = r["answered_at"].strftime("%d.%m.%Y %H:%M") if r["answered_at"] else ""
+            answer_block = (
+                f"<div class='sep'></div><div class='small'><b>Ответ</b> "
+                f"<span class='muted'>{ad}</span><br>{_esc(r['answer'])}</div>"
+            )
+        if r["status"] == "open":
+            answer_block = (
+                f"<form method='post' action='/admin/support/{r['id']}/reply' style='margin-top:10px'>"
+                f"<textarea name='answer' rows='2' required "
+                f"style='width:100%;padding:8px 11px;border:1px solid #e2e8f0;border-radius:6px;font:inherit'"
+                f" placeholder='Ответ пользователю…'></textarea>"
+                f"<button type='submit' class='btn btn-p btn-sm' style='margin-top:6px'>Ответить</button>"
+                f"</form>"
+            )
+        cards.append(
+            f"<div class='card'>"
+            f"<div class='card-head'><span class='card-title'>#{r['id']} · {kind} · "
+            f"<a href='/admin/users/{r['user_id']}'>{name}</a> "
+            f"<span class='mono small muted'>{r['tg_user_id']}</span>{pay_link}</span>"
+            f"{_ticket_status_badge(r['status'])}</div>"
+            f"<div class='small muted'>{created}</div>"
+            f"<div style='margin-top:6px'>{_esc(r['message'])}</div>"
+            f"{answer_block}"
+            f"</div>"
+        )
+    body_cards = "".join(cards) or "<p class='muted'>Обращений нет.</p>"
+
+    alert = ""
+    if msg:
+        alert = f"<div class='alert alert-ok'>✓ {_esc(msg)}</div>"
+    elif err:
+        alert = f"<div class='alert alert-err'>✗ {_esc(err)}</div>"
+
+    body = f"""
+<h1 class='ph'>Поддержка</h1>
+<p class='ph-sub'>Открытых обращений: <b>{open_count}</b></p>
+{alert}
+<div style='display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap'>
+  {filter_html}
+  <a href='/admin/support' class='btn btn-sm btn-ghost'>Все</a>
+</div>
+{body_cards}
+"""
+    return _layout("Поддержка", body, active="support")
+
+
 # ─── login page ──────────────────────────────────────────────────────────────
 
 _LOGIN_PAGE = """<!doctype html><html lang='ru'><head>
@@ -1389,3 +1489,55 @@ async def payment_refund(
     await payment_service.refund_payment(session, payment, bot)
     suffix = " (принудительно)" if force else ""
     return RedirectResponse(url=f"/admin/payments?msg=Возврат выполнен{suffix}", status_code=303)
+
+
+@router.get("/admin/support", response_class=HTMLResponse)
+async def support_page(
+    request: Request,
+    status: str = "",
+    msg: str = "",
+    err: str = "",
+    session: AsyncSession = Depends(get_session),
+):
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/admin/login", status_code=303)
+    rows = await _gather_support(session, status.strip())
+    return HTMLResponse(_render_support(rows, status.strip(), msg=msg, err=err))
+
+
+@router.post("/admin/support/{ticket_id}/reply", response_class=HTMLResponse)
+async def support_reply(
+    request: Request,
+    ticket_id: int,
+    answer: str = Form(default=""),
+    session: AsyncSession = Depends(get_session),
+):
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    ticket = await session.get(SupportTicket, ticket_id)
+    if ticket is None:
+        return RedirectResponse(url="/admin/support?err=Обращение не найдено", status_code=303)
+    ans = answer.strip()
+    if not ans:
+        return RedirectResponse(url="/admin/support?err=Пустой ответ", status_code=303)
+
+    ticket.answer = ans[:4000]
+    ticket.status = "answered"
+    ticket.answered_at = datetime.now(UTC)
+    await session.commit()
+
+    user = await session.get(User, ticket.user_id)
+    bot = getattr(request.app.state, "bot", None)
+    if user is not None and bot is not None:
+        excerpt = html.escape(ticket.message[:200])
+        try:
+            await bot.send_message(
+                user.tg_user_id,
+                "✅ Ваше обращение рассмотрено:\n\n"
+                f"<i>{excerpt}</i>\n\n"
+                f"<b>Ответ:</b> {html.escape(ans)}",
+            )
+        except Exception:
+            pass
+    return RedirectResponse(url="/admin/support?msg=Ответ отправлен", status_code=303)
