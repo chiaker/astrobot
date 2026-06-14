@@ -3,6 +3,9 @@ from aiogram.types import (
     InlineKeyboardMarkup,
 )
 
+from astrobot.db.models import User
+from astrobot.limits import is_premium
+
 MENU_NATAL = "🌟 Натальная карта"
 MENU_HOROSCOPE = "🔮 Гороскоп"
 MENU_QUESTION = "💬 Спросить Астру"
@@ -23,6 +26,16 @@ def menu_back_row() -> list[InlineKeyboardButton]:
 def with_back(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
     """Append a '🔙 Меню' row to the given keyboard rows."""
     return InlineKeyboardMarkup(inline_keyboard=[*rows, [MENU_BACK_BTN]])
+
+
+def promo_row(user: User) -> list[InlineKeyboardButton]:
+    """Soft upsell shown under results: premium for free users, referral for all."""
+    if is_premium(user):
+        return [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show")]
+    return [
+        InlineKeyboardButton(text="💎 Премиум", callback_data="menu:premium"),
+        InlineKeyboardButton(text="🤝 Друг = +2 вопроса", callback_data="referral:show"),
+    ]
 
 
 def main_menu_inline() -> InlineKeyboardMarkup:
@@ -92,13 +105,14 @@ def ask_again_kb() -> InlineKeyboardMarkup:
     )
 
 
-def ask_again_with_save_kb(response_id: int) -> InlineKeyboardMarkup:
+def ask_again_with_save_kb(response_id: int, user: User) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{response_id}"),
                 InlineKeyboardButton(text="💬 Спросить ещё", callback_data="ask_again"),
             ],
+            promo_row(user),
             [MENU_BACK_BTN],
         ]
     )

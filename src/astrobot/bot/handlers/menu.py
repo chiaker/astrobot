@@ -16,11 +16,17 @@ router = Router(name="menu")
 async def render_main_menu(user: User, session: AsyncSession) -> tuple[str, InlineKeyboardMarkup]:
     name = user.display_name or "путник"
     if is_premium(user):
-        sub = "💎 Премиум активен — звёзды без ограничений ✨"
+        sub = (
+            "💎 Премиум активен — звёзды без ограничений ✨\n"
+            "🤝 Зови друзей: вам обоим +2 вопроса за каждого"
+        )
     else:
         allow = await check_question(session, user)
         left = max(0, allow.limit - allow.used)
-        sub = f"✨ Бесплатных вопросов осталось: <b>{left}</b>"
+        sub = (
+            f"✨ Бесплатных вопросов осталось: <b>{left}</b>\n"
+            "💎 Премиум снимает лимиты · 🤝 друг = +2 вопроса"
+        )
     text = f"🔮 Привет, <b>{name}</b>! Выбери раздел:\n{sub}"
     return text, main_menu_inline()
 

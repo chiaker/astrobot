@@ -125,7 +125,7 @@ async def _answer_question(
     rendered = md_to_telegram_html(response.text)
     chunks = chunk_text(rendered)
     for i, chunk in enumerate(chunks):
-        kb = ask_again_with_save_kb(resp_row.id) if i == len(chunks) - 1 else None
+        kb = ask_again_with_save_kb(resp_row.id, user) if i == len(chunks) - 1 else None
         await safe_answer(target, chunk, reply_markup=kb)
 
     # Soft-upsell for free users near their limit

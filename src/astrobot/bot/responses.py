@@ -13,7 +13,7 @@ from aiogram.types import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.formatting import md_to_telegram_html, strip_html
-from astrobot.bot.keyboards import MENU_BACK_BTN
+from astrobot.bot.keyboards import MENU_BACK_BTN, promo_row
 from astrobot.db.models import Response, User
 from astrobot.metrics import FLOOD_RETRIES_TOTAL
 
@@ -44,11 +44,14 @@ async def edit_or_send(
 def response_actions_kb(
     response_id: int,
     extra_row: list[InlineKeyboardButton] | None = None,
+    user: User | None = None,
 ) -> InlineKeyboardMarkup:
     save = InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{response_id}")
     rows: list[list[InlineKeyboardButton]] = [[save]]
     if extra_row:
         rows.append(extra_row)
+    if user is not None:
+        rows.append(promo_row(user))
     rows.append([MENU_BACK_BTN])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -107,6 +110,7 @@ async def _send_chunks(
     text: str,
     resp_id: int,
     extra_row: list[InlineKeyboardButton] | None = None,
+    user: User | None = None,
 ) -> list[int]:
     rendered = md_to_telegram_html(text)
     chunks = chunk_text(rendered)
@@ -114,7 +118,11 @@ async def _send_chunks(
     for i, chunk in enumerate(chunks):
         if i > 0:
             await asyncio.sleep(INTER_MESSAGE_DELAY)
-        kb = response_actions_kb(resp_id, extra_row) if i == len(chunks) - 1 else None
+        kb = (
+            response_actions_kb(resp_id, extra_row, user)
+            if i == len(chunks) - 1
+            else None
+        )
         sent = await safe_answer(target, chunk, reply_markup=kb)
         ids.append(sent.message_id)
     return ids
@@ -134,6 +142,6 @@ async def save_and_send_response(
     session.add(resp)
     await session.flush()
 
-    resp.message_ids = await _send_chunks(message, full, resp.id, extra_row)
+    resp.message_ids = await _send_chunks(message, full, resp.id, extra_row, user)
     await session.commit()
     return resp

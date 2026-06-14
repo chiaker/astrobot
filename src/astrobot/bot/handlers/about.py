@@ -26,9 +26,7 @@ ABOUT_TEXT = (
     "💬 Отвечаю на вопросы с учётом того, что записано в твоей карте\n\n"
     "<b>Команды</b>\n"
     "/start — пройти знакомство заново\n"
-    "/cancel — отменить текущее действие\n"
-    "/privacy — политика конфиденциальности\n"
-    "/terms — пользовательское соглашение\n\n"
+    "/cancel — отменить текущее действие\n\n"
     "<i>Карта подсказывает — а решаешь ты.</i>\n\n"
     + SHORT_DISCLAIMER
 )
@@ -36,10 +34,7 @@ ABOUT_TEXT = (
 
 def _about_kb() -> InlineKeyboardMarkup:
     rows = [
-        [
-            InlineKeyboardButton(text="📄 Privacy", callback_data="legal:privacy"),
-            InlineKeyboardButton(text="📄 Terms", callback_data="legal:terms"),
-        ],
+        [InlineKeyboardButton(text="💎 Премиум", callback_data="menu:premium")],
         [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show")],
         [MENU_BACK_BTN],
     ]
