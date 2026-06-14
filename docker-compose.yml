@@ -1,7 +1,15 @@
+# Shared log rotation so container logs can't fill the disk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: astrobot
       POSTGRES_PASSWORD: astrobot
@@ -19,6 +27,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *default-logging
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redisdata:/data
@@ -31,6 +40,7 @@ services:
   prometheus:
     image: prom/prometheus:v3.0.1
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheusdata:/prometheus
@@ -43,6 +53,7 @@ services:
   grafana:
     image: grafana/grafana:11.4.0
     restart: unless-stopped
+    logging: *default-logging
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
@@ -60,6 +71,7 @@ services:
   backup:
     image: prodrigestivill/postgres-backup-local:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,6 +91,7 @@ services:
   migrate:
     build: .
     env_file: .env
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -91,6 +104,7 @@ services:
   app:
     build: .
     env_file: .env
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
