@@ -122,7 +122,7 @@ def question_entry_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🤔 Не знаю что спросить", callback_data="show_topics")],
-            [InlineKeyboardButton(text="✖️ Отмена", callback_data="cancel")],
+            [MENU_BACK_BTN],
         ]
     )
 
@@ -142,7 +142,7 @@ def suggested_questions_kb() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="💼 Работа", callback_data="ask:work"),
                 InlineKeyboardButton(text="🔮 Этот год", callback_data="ask:year"),
             ],
-            [InlineKeyboardButton(text="✖️ Отмена", callback_data="cancel")],
+            [MENU_BACK_BTN],
         ]
     )
 

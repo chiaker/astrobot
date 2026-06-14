@@ -187,7 +187,7 @@ async def on_my_payments(call: CallbackQuery, session: AsyncSession, user: User)
         )
     )
     if not payments:
-        await call.message.answer("🧾 У тебя пока нет операций.")
+        await edit_or_send(call, "🧾 У тебя пока нет операций.", with_back([]))
         await call.answer()
         return
 

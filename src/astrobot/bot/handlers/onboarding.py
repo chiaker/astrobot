@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime, time
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -98,7 +98,10 @@ async def cmd_start(
 
     profile = await session.get(BirthProfile, user.id)
     if profile is not None:
-        await message.answer("🌙 С возвращением. Звёзды ждали тебя ✨")
+        await message.answer(
+            "🌙 С возвращением. Звёзды ждали тебя ✨",
+            reply_markup=ReplyKeyboardRemove(),
+        )
         await send_main_menu(message, user, session)
         return
 
@@ -375,6 +378,7 @@ async def on_final_ok(
     name_part = f", {user.display_name}" if user.display_name else ""
     await call.message.answer(
         f"🌙 Запомнила{name_part}. Твоя карта со мной — теперь спрашивай о чём угодно ✨",
+        reply_markup=ReplyKeyboardRemove(),
     )
     await send_main_menu(call.message, user, session)
     await call.answer("Готово")

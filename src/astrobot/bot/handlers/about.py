@@ -58,7 +58,5 @@ async def on_referral_show(call: CallbackQuery, user: User) -> None:
         "<b>вы оба получите +2 бесплатных вопроса</b> ✨\n\n"
         "Просто поделись ссылкой в любом мессенджере."
     )
-    await call.message.answer(
-        text, reply_markup=with_back([]), disable_web_page_preview=True
-    )
+    await edit_or_send(call, text, with_back([]), disable_web_page_preview=True)
     await call.answer()

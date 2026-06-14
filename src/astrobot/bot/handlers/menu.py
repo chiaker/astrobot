@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message, ReplyKeyboardRemove
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.keyboards import main_menu_inline
@@ -32,15 +33,9 @@ async def render_main_menu(user: User, session: AsyncSession) -> tuple[str, Inli
 
 
 async def send_main_menu(message: Message, user: User, session: AsyncSession) -> None:
-    """Send the main menu as a fresh message and clear any stale reply keyboard
-    left over from the old UI (one bubble via edit_reply_markup)."""
+    """Send the main menu as a single fresh inline message."""
     text, kb = await render_main_menu(user, session)
-    sent = await message.answer(text, reply_markup=ReplyKeyboardRemove())
-    try:
-        await sent.edit_reply_markup(reply_markup=kb)
-    except Exception:
-        # Fallback: separate message with the inline menu.
-        await message.answer(text, reply_markup=kb)
+    await message.answer(text, reply_markup=kb)
 
 
 @router.message(Command("menu"))
@@ -49,7 +44,12 @@ async def cmd_menu(message: Message, session: AsyncSession, user: User) -> None:
 
 
 @router.callback_query(F.data == "menu:open")
-async def on_menu_open(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+async def on_menu_open(
+    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
+) -> None:
+    # Returning to the menu cancels any in-progress flow (asking a question,
+    # push setup) so the next text isn't swallowed by a stale FSM state.
+    await state.clear()
     text, kb = await render_main_menu(user, session)
     await edit_or_send(call, text, kb)
     await call.answer()
