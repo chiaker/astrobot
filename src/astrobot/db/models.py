@@ -45,6 +45,11 @@ class User(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     bonus_questions: Mapped[int] = mapped_column(Integer, default=0)
+    # Questions asked before this moment don't count against the monthly quota —
+    # set on premium purchase so a buyer gets a full fresh allowance.
+    questions_reset_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     push_horoscope_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     push_lunar_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     last_horoscope_push_at: Mapped[datetime | None] = mapped_column(

@@ -35,6 +35,7 @@ from astrobot.llm.prompts import build_system_horoscope, split_brief_full
 from astrobot.lunar import compute_phases, horizon_dates, phase_text
 from astrobot.metrics import PUSH_SENT
 from astrobot.payments import service as payment_service
+from astrobot.redis_client import get_redis
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -255,6 +256,16 @@ async def lunar_push_job(bot: Bot) -> None:
                 select(LunarEvent).where(LunarEvent.event_date == today_local)
             )
             if event is None:
+                continue
+
+            # Dedup: the job runs every minute, so without this guard we'd send
+            # once per minute for the whole push hour. One push per user per event.
+            dedup_key = f"lunar:pushed:{user.id}:{today_local.isoformat()}"
+            try:
+                fresh = await get_redis().set(dedup_key, "1", ex=2 * 24 * 3600, nx=True)
+            except Exception:
+                fresh = True  # Redis down — don't block, but may resend
+            if not fresh:
                 continue
 
             try:

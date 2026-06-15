@@ -65,14 +65,20 @@ class Allowance:
 
 
 async def _count(
-    session: AsyncSession, user_id: int, kind_prefix: str, hours: int | None
+    session: AsyncSession,
+    user_id: int,
+    kind_prefix: str,
+    hours: int | None,
+    not_before: datetime | None = None,
 ) -> int:
     stmt = select(func.count(LLMUsageLog.id)).where(
         LLMUsageLog.user_id == user_id,
         LLMUsageLog.kind.like(f"{kind_prefix}%"),
     )
-    if hours is not None:
-        since = datetime.now(UTC) - timedelta(hours=hours)
+    since = datetime.now(UTC) - timedelta(hours=hours) if hours is not None else None
+    if not_before is not None and (since is None or not_before > since):
+        since = not_before
+    if since is not None:
         stmt = stmt.where(LLMUsageLog.created_at >= since)
     return (await session.scalar(stmt)) or 0
 
@@ -114,7 +120,9 @@ async def check_question(session: AsyncSession, user: User) -> Allowance:
 
     if t == "premium":
         limit = s.question_per_month or 0
-        used = await _count(session, user.id, "question", hours=24 * 30)
+        used = await _count(
+            session, user.id, "question", hours=24 * 30, not_before=user.questions_reset_at
+        )
         return Allowance(
             allowed=used < limit or bonus > 0,
             used=used,
