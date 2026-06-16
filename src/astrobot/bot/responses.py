@@ -133,15 +133,15 @@ async def save_and_send_response(
     session: AsyncSession,
     user: User,
     kind: str,
-    brief: str,
-    full: str,
+    text: str,
     extra_row: list[InlineKeyboardButton] | None = None,
 ) -> Response:
-    # Always send the detailed version; the brief/full toggle was removed.
-    resp = Response(user_id=user.id, kind=kind, brief=brief, full=full)
+    # Single detailed version. brief mirrors full (column kept for favorites
+    # dedup / admin preview — no separate short version is generated anymore).
+    resp = Response(user_id=user.id, kind=kind, brief=text, full=text)
     session.add(resp)
     await session.flush()
 
-    resp.message_ids = await _send_chunks(message, full, resp.id, extra_row, user)
+    resp.message_ids = await _send_chunks(message, text, resp.id, extra_row, user)
     await session.commit()
     return resp

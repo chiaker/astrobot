@@ -13,7 +13,7 @@ from astrobot.bot.utils import need_profile
 from astrobot.db.models import BirthProfile, LLMUsageLog, User
 from astrobot.limits import check_natal, consume_natal_bonus_if_needed, paywall_text
 from astrobot.llm.client import get_llm
-from astrobot.llm.prompts import build_system_natal, split_brief_full
+from astrobot.llm.prompts import build_system_natal
 
 _REGEN_ROW = [InlineKeyboardButton(text="🔄 Пересчитать заново", callback_data="natal:regen")]
 
@@ -41,15 +41,9 @@ async def on_natal(call: CallbackQuery, session: AsyncSession, user: User) -> No
     if profile is None:
         return
 
-    if profile.cached_natal_brief and profile.cached_natal_full:
+    if profile.cached_natal_full:
         await save_and_send_response(
-            target,
-            session,
-            user,
-            "natal",
-            profile.cached_natal_brief,
-            profile.cached_natal_full,
-            extra_row=_REGEN_ROW,
+            target, session, user, "natal", profile.cached_natal_full, extra_row=_REGEN_ROW
         )
         return
 
@@ -75,10 +69,10 @@ async def on_natal(call: CallbackQuery, session: AsyncSession, user: User) -> No
         max_tokens=4500,
         kind="natal",
     )
-    brief, full = split_brief_full(response.text)
+    text = response.text
 
-    profile.cached_natal_brief = brief
-    profile.cached_natal_full = full
+    profile.cached_natal_brief = text
+    profile.cached_natal_full = text
     consume_natal_bonus_if_needed(user, pre_call_used)
 
     session.add(
@@ -93,7 +87,7 @@ async def on_natal(call: CallbackQuery, session: AsyncSession, user: User) -> No
     )
 
     await progress.delete()
-    await save_and_send_response(target, session, user, "natal", brief, full, extra_row=_REGEN_ROW)
+    await save_and_send_response(target, session, user, "natal", text, extra_row=_REGEN_ROW)
 
 
 @router.callback_query(F.data == "natal:regen")
@@ -132,10 +126,10 @@ async def on_natal_regen(call: CallbackQuery, session: AsyncSession, user: User)
         max_tokens=4500,
         kind="natal",
     )
-    brief, full = split_brief_full(response.text)
+    text = response.text
 
-    profile.cached_natal_brief = brief
-    profile.cached_natal_full = full
+    profile.cached_natal_brief = text
+    profile.cached_natal_full = text
     consume_natal_bonus_if_needed(user, pre_call_used)
 
     session.add(
@@ -150,4 +144,4 @@ async def on_natal_regen(call: CallbackQuery, session: AsyncSession, user: User)
     )
 
     await progress.delete()
-    await save_and_send_response(call.message, session, user, "natal", brief, full, extra_row=_REGEN_ROW)
+    await save_and_send_response(call.message, session, user, "natal", text, extra_row=_REGEN_ROW)

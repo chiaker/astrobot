@@ -12,7 +12,7 @@ from astrobot.bot.states import TarotFlow
 from astrobot.db.models import LLMUsageLog, Response, User
 from astrobot.limits import check_question, consume_question_bonus_if_needed, paywall_text
 from astrobot.llm.client import get_llm
-from astrobot.llm.prompts import build_system_tarot, split_brief_full
+from astrobot.llm.prompts import build_system_tarot
 from astrobot.metrics import CRISIS_TRIGGERED
 from astrobot.safety.crisis import CRISIS_REPLY, is_crisis
 from astrobot.tarot import cards_to_markdown, draw_three
@@ -131,7 +131,7 @@ async def _do_tarot(
         max_tokens=1500,
         kind=_KIND,
     )
-    brief, full = split_brief_full(response.text)
+    text = response.text
 
     consume_question_bonus_if_needed(user, pre.used)
     session.add(
@@ -147,6 +147,4 @@ async def _do_tarot(
 
     await progress.delete()
     header = f"🃏 <b>Расклад:</b> {spread}\n\n"
-    await save_and_send_response(
-        target, session, user, "tarot", header + brief, header + full
-    )
+    await save_and_send_response(target, session, user, "tarot", header + text)

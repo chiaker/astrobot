@@ -31,7 +31,7 @@ from astrobot.db.models import (
 from astrobot.db.session import get_sessionmaker
 from astrobot.limits import is_premium
 from astrobot.llm.client import get_llm
-from astrobot.llm.prompts import build_system_horoscope, split_brief_full
+from astrobot.llm.prompts import build_system_horoscope
 from astrobot.lunar import compute_phases, horizon_dates, phase_text
 from astrobot.metrics import PUSH_SENT
 from astrobot.payments import service as payment_service
@@ -47,8 +47,8 @@ async def _get_or_generate_horoscope(
     session: AsyncSession,
     user: User,
     profile: BirthProfile,
-) -> tuple[str, str]:
-    """Returns (brief, full) for today's horoscope, using cache or generating."""
+) -> str:
+    """Returns today's horoscope text, using cache or generating."""
     birth = _profile_to_birth(profile, name="User")
     today = midnight_today_in(birth.tz)
 
@@ -59,7 +59,7 @@ async def _get_or_generate_horoscope(
         )
     )
     if cached and cached.computed_for == today:
-        return cached.brief, cached.full
+        return cached.full
 
     chart = await asyncio.to_thread(build_natal_chart, birth)
     natal_md = chart_to_markdown(chart)
@@ -74,20 +74,20 @@ async def _get_or_generate_horoscope(
         max_tokens=2800,
         kind="horoscope_today",
     )
-    brief, full = split_brief_full(response.text)
+    text = response.text
 
     if cached:
         cached.computed_for = today
-        cached.brief = brief
-        cached.full = full
+        cached.brief = text
+        cached.full = text
     else:
         session.add(
             HoroscopeCache(
                 user_id=user.id,
                 period="today",
                 computed_for=today,
-                brief=brief,
-                full=full,
+                brief=text,
+                full=text,
             )
         )
 
@@ -101,7 +101,7 @@ async def _get_or_generate_horoscope(
             output_tokens=response.output_tokens,
         )
     )
-    return brief, full
+    return text
 
 
 def _user_local_hour(tz: str) -> int:
@@ -170,7 +170,7 @@ async def morning_horoscope_job(bot: Bot) -> None:
                     pass
 
             try:
-                brief, full = await _get_or_generate_horoscope(session, user, profile)
+                full = await _get_or_generate_horoscope(session, user, profile)
             except Exception as e:
                 log.warning("push_generate_failed", user_id=user.id, error=str(e))
                 PUSH_SENT.labels(kind="horoscope", result="fail").inc()
@@ -179,7 +179,7 @@ async def morning_horoscope_job(bot: Bot) -> None:
             label = _period_label("today", today_local)
             text = (
                 "🌅 <b>Доброе утро.</b> Звёзды для тебя на сегодня:\n\n"
-                f"{label}\n\n" + md_to_telegram_html(brief)
+                f"{label}\n\n" + md_to_telegram_html(full)
             )
             try:
                 await bot.send_message(

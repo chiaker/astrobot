@@ -25,7 +25,7 @@ from astrobot.bot.utils import need_profile
 from astrobot.db.models import BirthProfile, LLMUsageLog, Response, User
 from astrobot.limits import check_question, consume_question_bonus_if_needed, paywall_text
 from astrobot.llm.client import get_llm
-from astrobot.llm.prompts import build_system_compatibility, split_brief_full
+from astrobot.llm.prompts import build_system_compatibility
 
 router = Router(name="compatibility")
 
@@ -219,7 +219,7 @@ async def _do_compat(
         max_tokens=1800,
         kind=_KIND,
     )
-    brief, full = split_brief_full(response.text)
+    text = response.text
 
     consume_question_bonus_if_needed(user, pre.used)
     session.add(
@@ -235,6 +235,4 @@ async def _do_compat(
 
     await progress.delete()
     header = f"💞 <b>{name_a} × {name_b}</b>\n\n"
-    await save_and_send_response(
-        target, session, user, "compatibility", header + brief, header + full
-    )
+    await save_and_send_response(target, session, user, "compatibility", header + text)

@@ -23,7 +23,7 @@ from astrobot.bot.utils import need_profile
 from astrobot.db.models import BirthProfile, HoroscopeCache, LLMUsageLog, User
 from astrobot.limits import check_horoscope, paywall_text
 from astrobot.llm.client import get_llm
-from astrobot.llm.prompts import build_system_horoscope, split_brief_full
+from astrobot.llm.prompts import build_system_horoscope
 
 router = Router(name="horoscope")
 
@@ -109,7 +109,6 @@ async def on_horoscope_period(
                 session,
                 user,
                 f"horoscope:{period}",
-                _with_label(cached.brief, label),
                 _with_label(cached.full, label),
                 extra_row=_regen_row(period),
             )
@@ -150,7 +149,7 @@ async def on_horoscope_period(
         max_tokens=2800,
         kind=f"horoscope_{period}",
     )
-    brief, full = split_brief_full(response.text)
+    text = response.text
 
     # Update or create cache entry
     existing = await session.scalar(
@@ -161,16 +160,16 @@ async def on_horoscope_period(
     )
     if existing:
         existing.computed_for = today
-        existing.brief = brief
-        existing.full = full
+        existing.brief = text
+        existing.full = text
     else:
         session.add(
             HoroscopeCache(
                 user_id=user.id,
                 period=period,
                 computed_for=today,
-                brief=brief,
-                full=full,
+                brief=text,
+                full=text,
             )
         )
 
@@ -191,7 +190,6 @@ async def on_horoscope_period(
         session,
         user,
         f"horoscope:{period}",
-        _with_label(brief, label),
-        _with_label(full, label),
+        _with_label(text, label),
         extra_row=_regen_row(period),
     )
