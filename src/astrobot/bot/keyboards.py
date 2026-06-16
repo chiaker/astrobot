@@ -62,11 +62,11 @@ def main_menu_inline() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text=MENU_SETTINGS, callback_data="menu:settings"),
-                InlineKeyboardButton(text=MENU_ABOUT, callback_data="menu:about"),
+                InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show"),
             ],
             [
                 InlineKeyboardButton(text="🆘 Поддержка", callback_data="menu:support"),
-                InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show"),
+                InlineKeyboardButton(text=MENU_ABOUT, callback_data="menu:about"),
             ],
         ]
     )

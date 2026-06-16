@@ -48,6 +48,7 @@ def _profile_kb(user: User) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=f"⚧ Пол: {gender_label}", callback_data="settings:gender")],
+            [InlineKeyboardButton(text="✏️ Изменить данные / сбросить", callback_data="profile:reset")],
             [InlineKeyboardButton(text="🧾 История операций", callback_data="payments:mine")],
             [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show")],
             [MENU_BACK_BTN],
@@ -75,9 +76,6 @@ def _settings_kb(user: User) -> InlineKeyboardMarkup:
         rows.append(
             [InlineKeyboardButton(text=f"🌑 Лунные фазы: {lunar_state}", callback_data="settings:push_lunar")]
         )
-    rows.append(
-        [InlineKeyboardButton(text="✏️ Изменить данные / сбросить", callback_data="profile:reset")]
-    )
     rows.append([MENU_BACK_BTN])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
