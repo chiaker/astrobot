@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from astrobot.bot.keyboards import premium_or_back_kb, tarot_entry_kb
+from astrobot.bot.keyboards import MENU_BACK_BTN, premium_or_back_kb, tarot_entry_kb
 from astrobot.bot.responses import edit_or_send, save_and_send_response
 from astrobot.bot.states import TarotFlow
-from astrobot.db.models import LLMUsageLog, User
+from astrobot.db.models import LLMUsageLog, Response, User
 from astrobot.limits import check_question, consume_question_bonus_if_needed, paywall_text
 from astrobot.llm.client import get_llm
 from astrobot.llm.prompts import build_system_tarot, split_brief_full
@@ -21,11 +22,19 @@ router = Router(name="tarot")
 _KIND = "question:tarot"
 
 
-@router.callback_query(F.data == "menu:tarot")
-async def on_tarot_menu(
+def _last_kb(resp_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🃏 Новый расклад", callback_data="tarot:new")],
+            [InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{resp_id}")],
+            [MENU_BACK_BTN],
+        ]
+    )
+
+
+async def _start_new(
     call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
 ) -> None:
-    await call.answer()
     allowance = await check_question(session, user)
     if not allowance.allowed:
         await edit_or_send(call, paywall_text("question", allowance), premium_or_back_kb())
@@ -36,6 +45,35 @@ async def on_tarot_menu(
         "🃏 О чём спросить карты? Напиши вопрос одним сообщением — или тяни без вопроса.",
         tarot_entry_kb(),
     )
+
+
+@router.callback_query(F.data == "menu:tarot")
+async def on_tarot_menu(
+    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
+) -> None:
+    await call.answer()
+    last = await session.scalar(
+        select(Response)
+        .where(Response.user_id == user.id, Response.kind == "tarot")
+        .order_by(desc(Response.created_at))
+        .limit(1)
+    )
+    if last is not None:
+        await edit_or_send(
+            call,
+            "🃏 <i>Твой последний расклад:</i>\n\n" + last.full,
+            _last_kb(last.id),
+        )
+        return
+    await _start_new(call, state, session, user)
+
+
+@router.callback_query(F.data == "tarot:new")
+async def on_tarot_new(
+    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
+) -> None:
+    await call.answer()
+    await _start_new(call, state, session, user)
 
 
 @router.callback_query(F.data == "tarot:draw")

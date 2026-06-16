@@ -5,18 +5,24 @@ from datetime import date, datetime, time
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.astrology.geocoding import geocode_city
 from astrobot.astrology.synastry import build_synastry_report, synastry_to_markdown
 from astrobot.astrology.types import BirthData
 from astrobot.bot.handlers.natal import _profile_to_birth
-from astrobot.bot.keyboards import compat_time_unknown_kb, premium_or_back_kb, with_back
+from astrobot.bot.keyboards import (
+    MENU_BACK_BTN,
+    compat_time_unknown_kb,
+    premium_or_back_kb,
+    with_back,
+)
 from astrobot.bot.responses import edit_or_send, save_and_send_response
 from astrobot.bot.states import CompatFlow
 from astrobot.bot.utils import need_profile
-from astrobot.db.models import BirthProfile, LLMUsageLog, User
+from astrobot.db.models import BirthProfile, LLMUsageLog, Response, User
 from astrobot.limits import check_question, consume_question_bonus_if_needed, paywall_text
 from astrobot.llm.client import get_llm
 from astrobot.llm.prompts import build_system_compatibility, split_brief_full
@@ -26,11 +32,19 @@ router = Router(name="compatibility")
 _KIND = "question:compatibility"
 
 
-@router.callback_query(F.data == "menu:compatibility")
-async def on_compat_menu(
+def _last_kb(resp_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💞 Новый расчёт", callback_data="compat:new")],
+            [InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{resp_id}")],
+            [MENU_BACK_BTN],
+        ]
+    )
+
+
+async def _start_new(
     call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
 ) -> None:
-    await call.answer()
     profile = await need_profile(call.message, session, user)
     if profile is None:
         return
@@ -44,6 +58,35 @@ async def on_compat_menu(
         "💞 Проверим совместимость с другим человеком.\n\nКак его/её зовут?",
         with_back([]),
     )
+
+
+@router.callback_query(F.data == "menu:compatibility")
+async def on_compat_menu(
+    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
+) -> None:
+    await call.answer()
+    last = await session.scalar(
+        select(Response)
+        .where(Response.user_id == user.id, Response.kind == "compatibility")
+        .order_by(desc(Response.created_at))
+        .limit(1)
+    )
+    if last is not None:
+        await edit_or_send(
+            call,
+            "💞 <i>Твой последний расчёт:</i>\n\n" + last.full,
+            _last_kb(last.id),
+        )
+        return
+    await _start_new(call, state, session, user)
+
+
+@router.callback_query(F.data == "compat:new")
+async def on_compat_new(
+    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
+) -> None:
+    await call.answer()
+    await _start_new(call, state, session, user)
 
 
 @router.message(CompatFlow.waiting_for_name)

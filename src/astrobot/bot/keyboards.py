@@ -15,8 +15,11 @@ MENU_ABOUT = "ℹ️ Об Астре"
 MENU_FAVORITES = "⭐ Избранное"
 MENU_SETTINGS = "⚙️ Настройки"
 
-# Button that returns to the main menu (edits the current message into it).
+# Returns to the main menu by EDITING the current message into it (navigation).
 MENU_BACK_BTN = InlineKeyboardButton(text="🔙 Меню", callback_data="menu:open")
+# Returns to the menu as a NEW message, keeping the current one (under results,
+# so a generated reading isn't replaced by the menu).
+MENU_BACK_NEW_BTN = InlineKeyboardButton(text="🔙 Меню", callback_data="menu:new")
 
 
 def menu_back_row() -> list[InlineKeyboardButton]:
@@ -47,11 +50,11 @@ def main_menu_inline() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text=MENU_QUESTION, callback_data="menu:question"),
-                InlineKeyboardButton(text=MENU_FAVORITES, callback_data="menu:favorites"),
+                InlineKeyboardButton(text="🃏 Таро", callback_data="menu:tarot"),
             ],
             [
-                InlineKeyboardButton(text="🃏 Таро", callback_data="menu:tarot"),
                 InlineKeyboardButton(text="💞 Совместимость", callback_data="menu:compatibility"),
+                InlineKeyboardButton(text=MENU_FAVORITES, callback_data="menu:favorites"),
             ],
             [
                 InlineKeyboardButton(text=MENU_PREMIUM, callback_data="menu:premium"),
@@ -120,7 +123,7 @@ def ask_again_with_save_kb(response_id: int, user: User) -> InlineKeyboardMarkup
                 InlineKeyboardButton(text="💬 Спросить ещё", callback_data="ask_again"),
             ],
             promo_row(user),
-            [MENU_BACK_BTN],
+            [MENU_BACK_NEW_BTN],
         ]
     )
 

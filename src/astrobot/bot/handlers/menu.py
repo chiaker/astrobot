@@ -53,3 +53,14 @@ async def on_menu_open(
     text, kb = await render_main_menu(user, session)
     await edit_or_send(call, text, kb)
     await call.answer()
+
+
+@router.callback_query(F.data == "menu:new")
+async def on_menu_new(
+    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
+) -> None:
+    # Menu as a fresh message — keeps the result above (used under readings),
+    # so the user can scroll back and reread it.
+    await state.clear()
+    await send_main_menu(call.message, user, session)
+    await call.answer()

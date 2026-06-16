@@ -13,7 +13,7 @@ from aiogram.types import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.formatting import md_to_telegram_html, strip_html
-from astrobot.bot.keyboards import MENU_BACK_BTN, promo_row
+from astrobot.bot.keyboards import MENU_BACK_NEW_BTN, promo_row
 from astrobot.db.models import Response, User
 from astrobot.metrics import FLOOD_RETRIES_TOTAL
 
@@ -52,7 +52,7 @@ def response_actions_kb(
         rows.append(extra_row)
     if user is not None:
         rows.append(promo_row(user))
-    rows.append([MENU_BACK_BTN])
+    rows.append([MENU_BACK_NEW_BTN])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
