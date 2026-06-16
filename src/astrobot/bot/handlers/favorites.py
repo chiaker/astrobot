@@ -26,6 +26,8 @@ _LABEL_BY_KIND: dict[str, str] = {
     "horoscope:week": "🔮 Гороскоп на неделю",
     "horoscope:month": "🔮 Гороскоп на месяц",
     "question": "💬 Ответ Астры",
+    "tarot": "🃏 Расклад Таро",
+    "compatibility": "💞 Совместимость",
 }
 
 

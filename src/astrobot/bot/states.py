@@ -28,3 +28,14 @@ class PaymentFlow(StatesGroup):
 
 class SupportFlow(StatesGroup):
     waiting_for_text = State()
+
+
+class TarotFlow(StatesGroup):
+    waiting_for_question = State()
+
+
+class CompatFlow(StatesGroup):
+    waiting_for_name = State()
+    waiting_for_date = State()
+    waiting_for_time = State()
+    waiting_for_city = State()

@@ -50,6 +50,10 @@ def main_menu_inline() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text=MENU_FAVORITES, callback_data="menu:favorites"),
             ],
             [
+                InlineKeyboardButton(text="🃏 Таро", callback_data="menu:tarot"),
+                InlineKeyboardButton(text="💞 Совместимость", callback_data="menu:compatibility"),
+            ],
+            [
                 InlineKeyboardButton(text=MENU_PREMIUM, callback_data="menu:premium"),
                 InlineKeyboardButton(text=MENU_PROFILE, callback_data="menu:profile"),
             ],
@@ -167,6 +171,33 @@ def horoscope_regen_kb(period: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Пересчитать заново", callback_data=f"horo:regen:{period}")]
+        ]
+    )
+
+
+def premium_or_back_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💎 Открыть Премиум", callback_data="menu:premium")],
+            [MENU_BACK_BTN],
+        ]
+    )
+
+
+def tarot_entry_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🃏 Тянуть без вопроса", callback_data="tarot:draw")],
+            [MENU_BACK_BTN],
+        ]
+    )
+
+
+def compat_time_unknown_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Не знаю времени", callback_data="compat:time:unknown")],
+            [MENU_BACK_BTN],
         ]
     )
 
