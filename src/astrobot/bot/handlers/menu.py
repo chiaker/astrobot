@@ -26,7 +26,7 @@ async def render_main_menu(user: User, session: AsyncSession) -> tuple[str, Inli
         left = max(0, allow.limit - allow.used)
         sub = (
             f"✨ Бесплатных вопросов осталось: <b>{left}</b>\n"
-            "💎 Премиум снимает лимиты \n 🤝 Друг = +2 вопроса"
+            "💎 Премиум открывает больше звёзд ✨ · 🤝 Пригласи друга"
         )
     text = f"🔮 Привет, <b>{name}</b>! Выбери раздел:\n{sub}"
     return text, main_menu_inline()

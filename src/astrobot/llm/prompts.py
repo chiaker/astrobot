@@ -229,8 +229,20 @@ def build_system_horoscope(user: User | None = None) -> str:
     return ASTRA_PERSONA + _persona_extra(user) + _HOROSCOPE_TASK
 
 
+_QUESTION_UPSELL_HINT = (
+    "\n\nЕсли вопрос предполагает глубокое погружение — несколько сфер жизни, "
+    "история паттернов, детальный разбор — в самом конце ответа добавь одно тёплое, "
+    "органичное (не рекламное) предложение о том, что <b>💎 Премиум</b> открывает "
+    "больше вопросов для таких погружений. Не добавляй этот намёк в каждом ответе — "
+    "только там, где тема действительно глубокая."
+)
+
+
 def build_system_question(user: User | None = None) -> str:
-    return ASTRA_PERSONA + _persona_extra(user) + _QUESTION_TASK
+    from astrobot.limits import is_premium  # local import — avoids circular dependency
+
+    upsell = "" if (user is not None and is_premium(user)) else _QUESTION_UPSELL_HINT
+    return ASTRA_PERSONA + _persona_extra(user) + _QUESTION_TASK + upsell
 
 
 def build_system_tarot(user: User | None = None) -> str:

@@ -15,9 +15,9 @@ from astrobot.bot.keyboards import (
     QUESTION_TOPICS,
     chat_answer_kb,
     chat_entry_kb,
+    premium_or_back_kb,
     topic_questions_kb,
     topics_kb,
-    with_back,
 )
 from astrobot.bot.responses import chunk_text, edit_or_send, safe_answer
 from astrobot.bot.states import AskingQuestion
@@ -51,7 +51,7 @@ async def on_question_button(
     allowance = await check_question(session, user)
     if not allowance.allowed:
         await call.message.answer(
-            paywall_text("question", allowance), reply_markup=with_back([])
+            paywall_text("question", allowance), reply_markup=premium_or_back_kb()
         )
         return
     await state.set_state(AskingQuestion.waiting_for_text)
@@ -128,7 +128,7 @@ async def _answer_question(
     rendered = md_to_telegram_html(response.text)
     chunks = chunk_text(rendered)
     for i, chunk in enumerate(chunks):
-        kb = chat_answer_kb(resp_row.id) if i == len(chunks) - 1 else None
+        kb = chat_answer_kb(resp_row.id, show_premium=not is_premium(user)) if i == len(chunks) - 1 else None
         await safe_answer(target, chunk, reply_markup=kb)
 
     # Soft-upsell for free users near their limit
@@ -138,12 +138,14 @@ async def _answer_question(
         if left == 0:
             await target.answer(
                 "🌙 Это был твой последний бесплатный вопрос. "
-                "Если хочешь продолжать — открой <b>💎 Премиум</b>."
+                "Если хочешь продолжать — открой <b>💎 Премиум</b>.",
+                reply_markup=premium_or_back_kb(),
             )
         elif left == 1:
             await target.answer(
                 "🌙 У тебя остался <b>1 вопрос</b> на бесплатном тарифе. "
-                "Премиум снимает границы ✨"
+                "Премиум открывает звёзды без ограничений ✨",
+                reply_markup=premium_or_back_kb(),
             )
 
 
@@ -175,8 +177,7 @@ async def on_question_text(
     allowance = await check_question(session, user)
     if not allowance.allowed:
         await state.clear()
-        await message.answer(paywall_text("question", allowance))
-        await send_main_menu(message, user, session)
+        await message.answer(paywall_text("question", allowance), reply_markup=premium_or_back_kb())
         return
 
     # Stay in chat mode (no state.clear) — the next message is a new question.
@@ -245,7 +246,7 @@ async def on_question_pick(
     key, raw_idx = parts[1], parts[2]
     topic = QUESTION_TOPICS.get(key)
     try:
-        question = topic[1][int(raw_idx)] if topic else None
+        question = topic[1][int(raw_idx)][1] if topic else None
     except (ValueError, IndexError):
         question = None
     if not question:
@@ -262,8 +263,7 @@ async def on_question_pick(
     if not allowance.allowed:
         await state.clear()
         await call.answer()
-        await call.message.answer(paywall_text("question", allowance))
-        await send_main_menu(call.message, user, session)
+        await call.message.answer(paywall_text("question", allowance), reply_markup=premium_or_back_kb())
         return
 
     await call.answer()

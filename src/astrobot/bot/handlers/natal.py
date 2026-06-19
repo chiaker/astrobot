@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton
+from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.astrology.chart import build_natal_chart
@@ -33,28 +33,16 @@ def _profile_to_birth(profile: BirthProfile, name: str = "User") -> BirthData:
     )
 
 
-@router.callback_query(F.data == "menu:natal")
-async def on_natal(call: CallbackQuery, session: AsyncSession, user: User) -> None:
-    await call.answer()
-    target = call.message
-    profile = await need_profile(target, session, user)
-    if profile is None:
-        return
-
-    if profile.cached_natal_full:
-        await save_and_send_response(
-            target, session, user, "natal", profile.cached_natal_full, extra_row=_REGEN_ROW
-        )
-        return
-
-    allowance = await check_natal(session, user)
-    if not allowance.allowed:
-        await target.answer(paywall_text("natal", allowance), reply_markup=natal_paywall_kb())
-        return
-
-    pre_call_used = allowance.used
-    progress = await target.answer("🌙 Слушаю, что говорят звёзды о тебе…")
-    display_name = user.display_name or (call.from_user.full_name if call.from_user else None) or "User"
+async def _run_natal_generation(
+    target: Message,
+    session: AsyncSession,
+    user: User,
+    profile: BirthProfile,
+    display_name: str,
+    pre_call_used: int,
+    progress: Message,
+) -> None:
+    """LLM call + cache update + send result. Progress message is deleted after."""
     birth = _profile_to_birth(profile, name=display_name)
     chart = build_natal_chart(birth)
     cached_context = chart_to_markdown(chart)
@@ -90,6 +78,46 @@ async def on_natal(call: CallbackQuery, session: AsyncSession, user: User) -> No
     await save_and_send_response(target, session, user, "natal", text, extra_row=_REGEN_ROW)
 
 
+async def generate_natal(
+    target: Message,
+    session: AsyncSession,
+    user: User,
+    profile: BirthProfile,
+) -> None:
+    """Generate and send natal chart without paywall/cache checks.
+
+    Called after onboarding so the chart appears immediately after data entry.
+    """
+    pre_call_used = (await check_natal(session, user)).used
+    display_name = user.display_name or "User"
+    progress = await target.answer("🌙 Слушаю, что говорят звёзды о тебе…")
+    await _run_natal_generation(target, session, user, profile, display_name, pre_call_used, progress)
+
+
+@router.callback_query(F.data == "menu:natal")
+async def on_natal(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+    await call.answer()
+    target = call.message
+    profile = await need_profile(target, session, user)
+    if profile is None:
+        return
+
+    if profile.cached_natal_full:
+        await save_and_send_response(
+            target, session, user, "natal", profile.cached_natal_full, extra_row=_REGEN_ROW
+        )
+        return
+
+    allowance = await check_natal(session, user)
+    if not allowance.allowed:
+        await target.answer(paywall_text("natal", allowance), reply_markup=natal_paywall_kb())
+        return
+
+    display_name = user.display_name or (call.from_user.full_name if call.from_user else None) or "User"
+    progress = await target.answer("🌙 Слушаю, что говорят звёзды о тебе…")
+    await _run_natal_generation(target, session, user, profile, display_name, allowance.used, progress)
+
+
 @router.callback_query(F.data == "natal:regen")
 async def on_natal_regen(call: CallbackQuery, session: AsyncSession, user: User) -> None:
     profile = await session.get(BirthProfile, user.id)
@@ -108,40 +136,6 @@ async def on_natal_regen(call: CallbackQuery, session: AsyncSession, user: User)
     await session.commit()
 
     await call.answer()
-    pre_call_used = allowance.used
-    progress = await call.message.answer("🌙 Пересчитываю твою карту заново…")
-
     display_name = user.display_name or (call.from_user.full_name if call.from_user else None) or "User"
-    birth = _profile_to_birth(profile, name=display_name)
-    chart = build_natal_chart(birth)
-    cached_context = chart_to_markdown(chart)
-
-    await progress.edit_text("✨ Складываю узор твоей карты…")
-
-    llm = get_llm()
-    response = await llm.complete(
-        system=build_system_natal(user),
-        cached_context=cached_context,
-        user_message="Дай интерпретацию натальной карты.",
-        max_tokens=4500,
-        kind="natal",
-    )
-    text = response.text
-
-    profile.cached_natal_brief = text
-    profile.cached_natal_full = text
-    consume_natal_bonus_if_needed(user, pre_call_used)
-
-    session.add(
-        LLMUsageLog(
-            user_id=user.id,
-            kind="natal",
-            model=response.model,
-            input_tokens=response.input_tokens,
-            cached_tokens=response.cached_input_tokens,
-            output_tokens=response.output_tokens,
-        )
-    )
-
-    await progress.delete()
-    await save_and_send_response(call.message, session, user, "natal", text, extra_row=_REGEN_ROW)
+    progress = await call.message.answer("🌙 Пересчитываю твою карту заново…")
+    await _run_natal_generation(call.message, session, user, profile, display_name, allowance.used, progress)

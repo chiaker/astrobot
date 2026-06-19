@@ -13,6 +13,8 @@ import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
 from astrobot.config import get_settings
 from astrobot.db.models import LLMUsageLog, Payment, User
 from astrobot.limits import QUESTION_PACK_SIZE
@@ -51,11 +53,16 @@ def _refund_text(payment: Payment) -> str:
     )
 
 
-async def _push(bot: Bot | None, chat_id: int, text: str) -> None:
+_MENU_KB = InlineKeyboardMarkup(
+    inline_keyboard=[[InlineKeyboardButton(text="🔮 Открыть меню", callback_data="menu:open")]]
+)
+
+
+async def _push(bot: Bot | None, chat_id: int, text: str, reply_markup=None) -> None:
     if bot is None:
         return
     try:
-        await bot.send_message(chat_id, text)
+        await bot.send_message(chat_id, text, reply_markup=reply_markup)
     except Exception as e:
         log.warning("payment_push_failed", chat_id=chat_id, error=str(e))
 
@@ -93,7 +100,7 @@ async def grant_payment(session: AsyncSession, payment: Payment, bot: Bot | None
     PAYMENTS_SUCCEEDED.labels(item=row.item_code).inc()
     log.info("payment_granted", payment_id=row.id, item=row.item_code)
 
-    await _push(bot, user.tg_user_id, _confirmation_text(row, user))
+    await _push(bot, user.tg_user_id, _confirmation_text(row, user), reply_markup=_MENU_KB)
     return True
 
 

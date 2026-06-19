@@ -375,12 +375,18 @@ async def on_final_ok(
     await session.commit()
     await state.clear()
 
+    from astrobot.bot.handlers.natal import generate_natal
+
     name_part = f", {user.display_name}" if user.display_name else ""
     await call.message.answer(
-        f"🌙 Запомнила{name_part}. Твоя карта со мной — теперь спрашивай о чём угодно ✨",
+        f"🌙 Запомнила{name_part}. Читаю твою карту… ✨",
         reply_markup=ReplyKeyboardRemove(),
     )
-    await send_main_menu(call.message, user, session)
+    profile = await session.get(BirthProfile, user.id)
+    if profile is not None:
+        await generate_natal(call.message, session, user, profile)
+    else:
+        await send_main_menu(call.message, user, session)
     await call.answer("Готово")
 
 
