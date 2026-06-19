@@ -107,32 +107,27 @@ SUGGESTED_QUESTIONS: dict[str, str] = {
 }
 
 
-def ask_again_kb() -> InlineKeyboardMarkup:
+# Leaves the chat-with-Astra mode (clears FSM and shows the menu).
+CHAT_EXIT_BTN = InlineKeyboardButton(text="🚪 Выйти из чата", callback_data="chat:exit")
+
+
+def chat_entry_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="💬 Спросить ещё", callback_data="ask_again")]
+            [InlineKeyboardButton(text="🤔 Не знаю что спросить", callback_data="show_topics")],
+            [CHAT_EXIT_BTN],
         ]
     )
 
 
-def ask_again_with_save_kb(response_id: int, user: User) -> InlineKeyboardMarkup:
+def chat_answer_kb(response_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{response_id}"),
-                InlineKeyboardButton(text="💬 Спросить ещё", callback_data="ask_again"),
+                InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show"),
             ],
-            promo_row(user),
-            [MENU_BACK_NEW_BTN],
-        ]
-    )
-
-
-def question_entry_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🤔 Не знаю что спросить", callback_data="show_topics")],
-            [MENU_BACK_BTN],
+            [CHAT_EXIT_BTN],
         ]
     )
 
@@ -152,7 +147,7 @@ def suggested_questions_kb() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="💼 Работа", callback_data="ask:work"),
                 InlineKeyboardButton(text="🔮 Этот год", callback_data="ask:year"),
             ],
-            [MENU_BACK_BTN],
+            [CHAT_EXIT_BTN],
         ]
     )
 

@@ -9,11 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from astrobot.astrology.chart import build_natal_chart
 from astrobot.astrology.serializer import chart_to_markdown
 from astrobot.bot.formatting import md_to_telegram_html
+from astrobot.bot.handlers.menu import send_main_menu
 from astrobot.bot.handlers.natal import _profile_to_birth
 from astrobot.bot.keyboards import (
     SUGGESTED_QUESTIONS,
-    ask_again_with_save_kb,
-    question_entry_kb,
+    chat_answer_kb,
+    chat_entry_kb,
     suggested_questions_kb,
     with_back,
 )
@@ -55,8 +56,9 @@ async def on_question_button(
     await state.set_state(AskingQuestion.waiting_for_text)
     await edit_or_send(
         call,
-        "🌙 Слушаю.\n\nСпроси меня одним сообщением — я отвечу через твою карту.",
-        question_entry_kb(),
+        "💬 <b>Чат с Астрой.</b>\n\nПиши вопросы — отвечу через твою карту. "
+        "Каждый вопрос тратит 1 из лимита. Чтобы выйти — кнопка ниже.",
+        chat_entry_kb(),
     )
 
 
@@ -125,7 +127,7 @@ async def _answer_question(
     rendered = md_to_telegram_html(response.text)
     chunks = chunk_text(rendered)
     for i, chunk in enumerate(chunks):
-        kb = ask_again_with_save_kb(resp_row.id, user) if i == len(chunks) - 1 else None
+        kb = chat_answer_kb(resp_row.id) if i == len(chunks) - 1 else None
         await safe_answer(target, chunk, reply_markup=kb)
 
     # Soft-upsell for free users near their limit
@@ -168,7 +170,15 @@ async def on_question_text(
         await message.answer("Сначала познакомимся — нажми /start.")
         return
 
-    await state.clear()
+    # Each chat message is a full question — gate on quota before answering.
+    allowance = await check_question(session, user)
+    if not allowance.allowed:
+        await state.clear()
+        await message.answer(paywall_text("question", allowance))
+        await send_main_menu(message, user, session)
+        return
+
+    # Stay in chat mode (no state.clear) — the next message is a new question.
     await _answer_question(
         message,
         message.from_user.full_name if message.from_user else "User",
@@ -179,38 +189,16 @@ async def on_question_text(
     )
 
 
-@router.callback_query(F.data == "ask_again")
-async def on_ask_again(
+@router.callback_query(F.data == "chat:exit")
+async def on_chat_exit(
     call: CallbackQuery,
     state: FSMContext,
     session: AsyncSession,
     user: User,
 ) -> None:
-    profile = await session.get(BirthProfile, user.id)
-    if profile is None:
-        await call.answer("Сначала пройди /start", show_alert=True)
-        return
-
-    allowance = await check_question(session, user)
-    if not allowance.allowed:
-        await call.answer()
-        try:
-            await call.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-        await call.message.answer(paywall_text("question", allowance))
-        return
-
-    await call.answer()
-    try:
-        await call.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-    await state.set_state(AskingQuestion.waiting_for_text)
-    await call.message.answer(
-        "🌙 Слушаю.\n\nСпроси меня одним сообщением — я отвечу через твою карту.",
-        reply_markup=question_entry_kb(),
-    )
+    await state.clear()
+    await call.answer("Чат закрыт")
+    await send_main_menu(call.message, user, session)
 
 
 @router.callback_query(AskingQuestion.waiting_for_text, F.data == "show_topics")
@@ -244,8 +232,16 @@ async def on_suggested(
         await call.answer("Сначала пройди /start", show_alert=True)
         return
 
+    allowance = await check_question(session, user)
+    if not allowance.allowed:
+        await state.clear()
+        await call.answer()
+        await call.message.answer(paywall_text("question", allowance))
+        await send_main_menu(call.message, user, session)
+        return
+
     await call.answer()
-    await state.clear()
+    # Stay in chat mode after a suggested question.
     try:
         await call.message.edit_reply_markup(reply_markup=None)
     except Exception:
