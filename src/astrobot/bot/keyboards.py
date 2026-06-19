@@ -97,13 +97,79 @@ def cancel_kb() -> InlineKeyboardMarkup:
     )
 
 
-SUGGESTED_QUESTIONS: dict[str, str] = {
-    "purpose": "В чём моё главное призвание по карте?",
-    "strengths": "Какие у меня сильные стороны и где я могу проявиться лучше всего?",
-    "growth": "Что мне сейчас стоит развивать в себе?",
-    "love": "Какие люди мне подходят в отношениях и что я ищу в партнёре?",
-    "work": "Какая работа ближе всего к моей натуре?",
-    "year": "На что мне обратить внимание в этом году?",
+# Two-level prepared questions: theme key → (title, [questions]).
+QUESTION_TOPICS: dict[str, tuple[str, list[str]]] = {
+    "popular": (
+        "🔥 Популярные",
+        [
+            "Сколько судьбоносных романтических партнёров уготовано мне в этой жизни?",
+            "Когда я вступлю в отношения?",
+            "В чём скрыты мои финансы, карьера? На что сделать упор?",
+            "Будут ли у меня дети и с кем?",
+            "В чём смысл лично моего рождения, какое моё предназначение?",
+            "Где я могу встретить партнёра по судьбе?",
+            "Какую профессию выбрать, чтобы быть реализованным?",
+            "Хочу посмотреть, кем я вероятно был в прошлой жизни?",
+            "Что я должен отработать в этом воплощении?",
+        ],
+    ),
+    "love": (
+        "❤️ Отношения, брак, семья",
+        [
+            "Сколько судьбоносных романтических партнёров уготовано мне в этой жизни?",
+            "Будут ли у меня дети и с кем?",
+            "Какие отношения у меня будут с детьми?",
+            "Какие характеристики у моего судьбоносного мужа / жены?",
+            "Почему в моей жизни повторяются болезненные отношения?",
+            "Где я могу встретить партнёра по судьбе?",
+            "Какая у меня планета партнёра Даракарака?",
+            "Как мне усилить планету любви Венеру?",
+            "Когда я вступлю в отношения?",
+        ],
+    ),
+    "money": (
+        "💼 Финансы и карьера",
+        [
+            "В чём скрыты мои финансы, карьера? На что сделать упор?",
+            "Мои деньги будут лёгкими или тяжёлыми?",
+            "Буду ли я богатым?",
+            "Что мешает мне зарабатывать больше?",
+        ],
+    ),
+    "self": (
+        "🧬 Личность",
+        [
+            "Какие общие характеристики меня как личности в этой жизни?",
+            "Хочу узнать свои слабые и сильные стороны",
+            "Какая планета влияет на меня сильнее всего и что это значит?",
+            "Какие у меня страхи по карте?",
+        ],
+    ),
+    "health": (
+        "🩺 Здоровье и тело",
+        [
+            "Давай посмотрим, что карта говорит о моём здоровье?",
+            "Силы и слабости моего здоровья и тела",
+            "Что именно мне нужно делать для поддержания здоровья?",
+        ],
+    ),
+    "purpose": (
+        "✨ Предназначение и таланты",
+        [
+            "В чём смысл лично моего рождения, какое моё предназначение?",
+            "Хочу посмотреть свою социальную реализацию и статус",
+            "Какие у меня таланты, как их раскрыть?",
+            "Какую профессию выбрать, чтобы быть реализованным?",
+        ],
+    ),
+    "move": (
+        "✈️ Эмиграция и путешествия",
+        [
+            "Есть ли у меня показатели эмиграции в карте?",
+            "В какие периоды вероятны переезды или смена места жительства?",
+            "В какой стране или регионе мне благоприятнее жить?",
+        ],
+    ),
 }
 
 
@@ -132,24 +198,24 @@ def chat_answer_kb(response_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def suggested_questions_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✨ Призвание", callback_data="ask:purpose"),
-                InlineKeyboardButton(text="💪 Сильные стороны", callback_data="ask:strengths"),
-            ],
-            [
-                InlineKeyboardButton(text="🌱 Точки роста", callback_data="ask:growth"),
-                InlineKeyboardButton(text="❤️ Отношения", callback_data="ask:love"),
-            ],
-            [
-                InlineKeyboardButton(text="💼 Работа", callback_data="ask:work"),
-                InlineKeyboardButton(text="🔮 Этот год", callback_data="ask:year"),
-            ],
-            [CHAT_EXIT_BTN],
-        ]
-    )
+def topics_kb() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=title, callback_data=f"topic:{key}")]
+        for key, (title, _) in QUESTION_TOPICS.items()
+    ]
+    rows.append([CHAT_EXIT_BTN])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def topic_questions_kb(key: str) -> InlineKeyboardMarkup:
+    questions = QUESTION_TOPICS[key][1]
+    rows = [
+        [InlineKeyboardButton(text=q, callback_data=f"q:{key}:{idx}")]
+        for idx, q in enumerate(questions)
+    ]
+    rows.append([InlineKeyboardButton(text="⬅️ К темам", callback_data="show_topics")])
+    rows.append([CHAT_EXIT_BTN])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def horoscope_period_kb() -> InlineKeyboardMarkup:

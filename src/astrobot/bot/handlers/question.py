@@ -12,10 +12,11 @@ from astrobot.bot.formatting import md_to_telegram_html
 from astrobot.bot.handlers.menu import send_main_menu
 from astrobot.bot.handlers.natal import _profile_to_birth
 from astrobot.bot.keyboards import (
-    SUGGESTED_QUESTIONS,
+    QUESTION_TOPICS,
     chat_answer_kb,
     chat_entry_kb,
-    suggested_questions_kb,
+    topic_questions_kb,
+    topics_kb,
     with_back,
 )
 from astrobot.bot.responses import chunk_text, edit_or_send, safe_answer
@@ -206,22 +207,47 @@ async def on_show_topics(call: CallbackQuery) -> None:
     try:
         await call.message.edit_text(
             "🌙 Выбери тему — или просто спроси что-то своё одним сообщением:",
-            reply_markup=suggested_questions_kb(),
+            reply_markup=topics_kb(),
         )
     except Exception:
         pass
     await call.answer()
 
 
-@router.callback_query(AskingQuestion.waiting_for_text, F.data.startswith("ask:"))
-async def on_suggested(
+@router.callback_query(AskingQuestion.waiting_for_text, F.data.startswith("topic:"))
+async def on_topic(call: CallbackQuery) -> None:
+    key = call.data.split(":", 1)[1]
+    if key not in QUESTION_TOPICS:
+        await call.answer()
+        return
+    title = QUESTION_TOPICS[key][0]
+    try:
+        await call.message.edit_text(
+            f"<b>{title}</b>\n\nВыбери вопрос — или просто напиши свой:",
+            reply_markup=topic_questions_kb(key),
+        )
+    except Exception:
+        pass
+    await call.answer()
+
+
+@router.callback_query(AskingQuestion.waiting_for_text, F.data.startswith("q:"))
+async def on_question_pick(
     call: CallbackQuery,
     state: FSMContext,
     session: AsyncSession,
     user: User,
 ) -> None:
-    key = call.data.split(":", 1)[1]
-    question = SUGGESTED_QUESTIONS.get(key)
+    parts = call.data.split(":", 2)
+    if len(parts) != 3:
+        await call.answer()
+        return
+    key, raw_idx = parts[1], parts[2]
+    topic = QUESTION_TOPICS.get(key)
+    try:
+        question = topic[1][int(raw_idx)] if topic else None
+    except (ValueError, IndexError):
+        question = None
     if not question:
         await call.answer()
         return
@@ -241,7 +267,7 @@ async def on_suggested(
         return
 
     await call.answer()
-    # Stay in chat mode after a suggested question.
+    # Stay in chat mode after a picked question.
     try:
         await call.message.edit_reply_markup(reply_markup=None)
     except Exception:

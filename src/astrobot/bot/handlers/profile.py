@@ -29,13 +29,10 @@ from astrobot.db.models import (
     HoroscopeCache,
     LLMUsageLog,
     Payment,
-    SupportTicket,
     User,
 )
 from astrobot.limits import NATAL_REGEN_PRICE_RUB, check_horoscope, check_question, is_premium
-from astrobot.payments import service as payment_service
 from astrobot.payments.catalog import get_item
-from astrobot.redis_client import get_redis
 
 router = Router(name="profile")
 
@@ -171,9 +168,6 @@ def _fmt_op(p: Payment) -> str:
     if p.status == "succeeded":
         d = (p.paid_at or p.created_at).strftime("%d.%m.%Y")
         return f"✅ {d} · {title} · <b>{amount} ₽</b> — оплачен"
-    if p.status == "refunded":
-        d = (p.refunded_at or p.created_at).strftime("%d.%m.%Y")
-        return f"↩️ {d} · {title} · {amount} ₽ — возврат"
     if p.status == "pending":
         d = p.created_at.strftime("%d.%m.%Y")
         return f"⏳ {d} · {title} · {amount} ₽ — ожидает оплаты"
@@ -186,7 +180,7 @@ async def on_my_payments(call: CallbackQuery, session: AsyncSession, user: User)
     payments = list(
         await session.scalars(
             select(Payment)
-            .where(Payment.user_id == user.id)
+            .where(Payment.user_id == user.id, Payment.status != "refunded")
             .order_by(desc(Payment.created_at))
             .limit(30)
         )
@@ -197,80 +191,13 @@ async def on_my_payments(call: CallbackQuery, session: AsyncSession, user: User)
         return
 
     lines = ["🧾 <b>История операций</b>", ""]
-    refund_buttons: list[list[InlineKeyboardButton]] = []
-    for p in payments:
-        lines.append(_fmt_op(p))
-        if p.status == "succeeded" and len(refund_buttons) < 5:
-            item = get_item(p.item_code)
-            title = item.title if item else p.item_code
-            d = (p.paid_at or p.created_at).strftime("%d.%m")
-            refund_buttons.append(
-                [
-                    InlineKeyboardButton(
-                        text=f"↩️ Запросить возврат: {title} ({d})",
-                        callback_data=f"refund:req:{p.id}",
-                    )
-                ]
-            )
+    lines += [_fmt_op(p) for p in payments]
     lines += [
         "",
-        "<i>Фискальный чек по каждому оплаченному платежу приходит на email. "
-        "Чтобы оформить возврат — нажми кнопку ниже, мы рассмотрим заявку.</i>",
+        "<i>Фискальный чек по каждому оплаченному платежу приходит на email.</i>",
     ]
-    await edit_or_send(call, "\n".join(lines), with_back(refund_buttons))
+    await edit_or_send(call, "\n".join(lines), with_back([]))
     await call.answer()
-
-
-@router.callback_query(F.data.startswith("refund:req:"))
-async def on_refund_request(call: CallbackQuery, session: AsyncSession, user: User) -> None:
-    try:
-        payment_id = int(call.data.split(":")[2])
-    except (IndexError, ValueError):
-        await call.answer()
-        return
-
-    payment = await session.get(Payment, payment_id)
-    if payment is None or payment.user_id != user.id:
-        await call.answer("Платёж не найден", show_alert=True)
-        return
-    if payment.status != "succeeded":
-        await call.answer("По этому платежу возврат недоступен", show_alert=True)
-        return
-
-    # Dedupe: one open request per payment per day
-    redis = get_redis()
-    try:
-        fresh = await redis.set(f"refundreq:{payment_id}", "1", ex=86400, nx=True)
-    except Exception:
-        fresh = True
-    if not fresh:
-        await call.answer("Заявка уже отправлена — мы свяжемся с тобой.", show_alert=True)
-        return
-
-    allowed, reason = await payment_service.refund_eligibility(session, payment)
-    item = get_item(payment.item_code)
-    title = item.title if item else payment.item_code
-    elig = "по политике положен" if allowed else f"вне политики ({reason})"
-    ticket_msg = (
-        f"Запрос возврата: {title} · {int(payment.amount)} ₽ (платёж #{payment.id}). "
-        f"По политике: {elig}."
-    )
-    session.add(
-        SupportTicket(
-            user_id=user.id,
-            kind="refund",
-            message=ticket_msg,
-            status="open",
-            payment_id=payment.id,
-        )
-    )
-    await session.commit()
-
-    await call.message.answer(
-        "📨 Заявка на возврат отправлена. Мы рассмотрим её — ответ придёт в боте.",
-        reply_markup=with_back([]),
-    )
-    await call.answer("Заявка отправлена")
 
 
 # ─── Push horoscope setup ─────────────────────────────────────────────────────
