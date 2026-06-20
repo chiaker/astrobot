@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from astrobot.bot.keyboards import MENU_BACK_BTN, premium_or_back_kb, tarot_entry_kb
+from astrobot.bot.keyboards import MENU_BACK_BTN, premium_or_back_kb, promo_row, tarot_entry_kb
 from astrobot.bot.responses import edit_or_send, save_and_send_response
 from astrobot.bot.states import TarotFlow
 from astrobot.db.models import LLMUsageLog, Response, User
@@ -20,13 +20,15 @@ from astrobot.tarot import cards_to_markdown, draw_three
 router = Router(name="tarot")
 
 _KIND = "question:tarot"
+_NEW_ROW = [InlineKeyboardButton(text="🃏 Новый расклад", callback_data="tarot:new")]
 
 
-def _last_kb(resp_id: int) -> InlineKeyboardMarkup:
+def _last_kb(resp_id: int, user: User) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🃏 Новый расклад", callback_data="tarot:new")],
+            _NEW_ROW,
             [InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{resp_id}")],
+            promo_row(user),
             [MENU_BACK_BTN],
         ]
     )
@@ -62,7 +64,7 @@ async def on_tarot_menu(
         await edit_or_send(
             call,
             "🃏 <i>Твой последний расклад:</i>\n\n" + last.full,
-            _last_kb(last.id),
+            _last_kb(last.id, user),
         )
         return
     await _start_new(call, state, session, user)
@@ -147,4 +149,4 @@ async def _do_tarot(
 
     await progress.delete()
     header = f"🃏 <b>Расклад:</b> {spread}\n\n"
-    await save_and_send_response(target, session, user, "tarot", header + text)
+    await save_and_send_response(target, session, user, "tarot", header + text, extra_row=_NEW_ROW)

@@ -17,6 +17,7 @@ from astrobot.bot.keyboards import (
     MENU_BACK_BTN,
     compat_time_unknown_kb,
     premium_or_back_kb,
+    promo_row,
     with_back,
 )
 from astrobot.bot.responses import edit_or_send, save_and_send_response
@@ -30,13 +31,15 @@ from astrobot.llm.prompts import build_system_compatibility
 router = Router(name="compatibility")
 
 _KIND = "question:compatibility"
+_NEW_ROW = [InlineKeyboardButton(text="💞 Новый расчёт", callback_data="compat:new")]
 
 
-def _last_kb(resp_id: int) -> InlineKeyboardMarkup:
+def _last_kb(resp_id: int, user: User) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="💞 Новый расчёт", callback_data="compat:new")],
+            _NEW_ROW,
             [InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{resp_id}")],
+            promo_row(user),
             [MENU_BACK_BTN],
         ]
     )
@@ -75,7 +78,7 @@ async def on_compat_menu(
         await edit_or_send(
             call,
             "💞 <i>Твой последний расчёт:</i>\n\n" + last.full,
-            _last_kb(last.id),
+            _last_kb(last.id, user),
         )
         return
     await _start_new(call, state, session, user)
@@ -235,4 +238,4 @@ async def _do_compat(
 
     await progress.delete()
     header = f"💞 <b>{name_a} × {name_b}</b>\n\n"
-    await save_and_send_response(target, session, user, "compatibility", header + text)
+    await save_and_send_response(target, session, user, "compatibility", header + text, extra_row=_NEW_ROW)
