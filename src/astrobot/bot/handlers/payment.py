@@ -259,7 +259,8 @@ async def _start_payment(
     PAYMENTS_CREATED.labels(item=item.code).inc()
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=f"💳 Оплатить — {item.amount_rub} ₽", url=confirmation_url)]
+            [InlineKeyboardButton(text=f"💳 Оплатить — {item.amount_rub} ₽", url=confirmation_url)],
+            [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel")],
         ]
     )
     await target.answer(
