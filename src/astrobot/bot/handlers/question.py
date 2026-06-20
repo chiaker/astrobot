@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -34,6 +36,12 @@ from astrobot.metrics import CRISIS_TRIGGERED
 from astrobot.safety.crisis import CRISIS_REPLY, is_crisis
 
 router = Router(name="question")
+
+_REFUSAL_RE = re.compile(
+    r"^(нет|не\s+хочу|не\s+надо|не\s+нужно|не\s+интересно"
+    r"|не\s+сейчас|пока\s+нет|стоп|отмена|хватит|ничего)[,!.?…\s]*$",
+    re.IGNORECASE,
+)
 
 
 @router.callback_query(F.data == "menu:question")
@@ -157,6 +165,10 @@ async def on_question_text(
     question = (message.text or "").strip()
     if len(question) < 3:
         await message.answer("Слишком коротко — расскажи подробнее, что тебя волнует.")
+        return
+
+    if _REFUSAL_RE.match(question):
+        await message.answer("Хорошо! Напиши, когда захочешь — или нажми 🚪, чтобы выйти.")
         return
 
     if is_crisis(question):
