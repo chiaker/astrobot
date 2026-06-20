@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,6 @@ from astrobot.bot.handlers.natal import _profile_to_birth
 from astrobot.bot.keyboards import (
     QUESTION_TOPICS,
     chat_answer_kb,
-    chat_entry_kb,
     premium_or_back_kb,
     topic_questions_kb,
     topics_kb,
@@ -57,9 +56,8 @@ async def on_question_button(
     await state.set_state(AskingQuestion.waiting_for_text)
     await edit_or_send(
         call,
-        "💬 <b>Чат с Астрой.</b>\n\nПиши вопросы — отвечу через твою карту. "
-        "Каждый вопрос тратит 1 из лимита. Чтобы выйти — кнопка ниже.",
-        chat_entry_kb(),
+        "🌙 Выбери тему — или напиши свой вопрос:",
+        topics_kb(),
     )
 
 
@@ -201,6 +199,20 @@ async def on_chat_exit(
     await state.clear()
     await call.answer("Чат закрыт")
     await send_main_menu(call.message, user, session)
+
+
+@router.callback_query(AskingQuestion.waiting_for_text, F.data == "chat:own_question")
+async def on_own_question(call: CallbackQuery) -> None:
+    try:
+        await call.message.edit_text(
+            "✍️ Напиши свой вопрос:",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="🚪 Выйти из чата", callback_data="chat:exit")]]
+            ),
+        )
+    except Exception:
+        pass
+    await call.answer()
 
 
 @router.callback_query(AskingQuestion.waiting_for_text, F.data == "show_topics")

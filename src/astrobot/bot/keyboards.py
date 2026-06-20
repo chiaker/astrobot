@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -179,15 +181,6 @@ QUESTION_TOPICS: dict[str, tuple[str, list[tuple[str, str]]]] = {
 CHAT_EXIT_BTN = InlineKeyboardButton(text="🚪 Выйти из чата", callback_data="chat:exit")
 
 
-def chat_entry_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🤔 Не знаю что спросить", callback_data="show_topics")],
-            [CHAT_EXIT_BTN],
-        ]
-    )
-
-
 def chat_answer_kb(response_id: int, show_premium: bool = False) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [
@@ -201,11 +194,15 @@ def chat_answer_kb(response_id: int, show_premium: bool = False) -> InlineKeyboa
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+_OWN_QUESTION_BTN = InlineKeyboardButton(text="✏️ Задать свой вопрос", callback_data="chat:own_question")
+
+
 def topics_kb() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=title, callback_data=f"topic:{key}")]
         for key, (title, _) in QUESTION_TOPICS.items()
     ]
+    rows.append([_OWN_QUESTION_BTN])
     rows.append([CHAT_EXIT_BTN])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -216,6 +213,7 @@ def topic_questions_kb(key: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=label, callback_data=f"q:{key}:{idx}")]
         for idx, (label, _) in enumerate(questions)
     ]
+    rows.append([_OWN_QUESTION_BTN])
     rows.append([InlineKeyboardButton(text="⬅️ К темам", callback_data="show_topics")])
     rows.append([CHAT_EXIT_BTN])
     return InlineKeyboardMarkup(inline_keyboard=rows)
