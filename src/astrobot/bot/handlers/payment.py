@@ -23,6 +23,8 @@ from astrobot.bot.handlers.menu import send_main_menu
 from astrobot.db.models import Payment, User
 from astrobot.limits import (
     NATAL_REGEN_PRICE_RUB,
+    QUESTION_PACK_30_PRICE_RUB,
+    QUESTION_PACK_30_SIZE,
     QUESTION_PACK_PRICE_RUB,
     QUESTION_PACK_SIZE,
     is_premium,
@@ -64,8 +66,28 @@ def _plans_kb() -> InlineKeyboardMarkup:
             )
         ]
     )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=f"💬 Пакет {QUESTION_PACK_30_SIZE} вопросов — {QUESTION_PACK_30_PRICE_RUB} ₽",
+                callback_data="pay:question_pack_30",
+            )
+        ]
+    )
     rows.append([MENU_BACK_BTN])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+_PLAN_FEATURES = "\n".join(
+    f"• {b}" for b in PLANS[0].bullets  # all plans share the same feature set
+)
+
+_PACKS_SECTION = (
+    "<b>Разовые покупки</b> (работают и без подписки, и поверх неё):\n"
+    f"• 🔄 Пересчёт натальной карты — <b>{NATAL_REGEN_PRICE_RUB} ₽</b>\n"
+    f"• 💬 Пакет {QUESTION_PACK_SIZE} вопросов — <b>{QUESTION_PACK_PRICE_RUB} ₽</b>\n"
+    f"• 💬 Пакет {QUESTION_PACK_30_SIZE} вопросов — <b>{QUESTION_PACK_30_PRICE_RUB} ₽</b>"
+)
 
 
 def _intro_text(user: User) -> str:
@@ -74,11 +96,10 @@ def _intro_text(user: User) -> str:
         return (
             "💎 <b>Премиум активен</b>\n\n"
             f"Действует до <b>{until}</b>. Звёзды в твоём распоряжении ✨\n\n"
+            f"Что входит:\n{_PLAN_FEATURES}\n\n"
             "Можно продлить — следующий платёж сложится к текущему сроку.\n\n"
             "— — —\n\n"
-            f"💬 <b>Пакет {QUESTION_PACK_SIZE} вопросов — {QUESTION_PACK_PRICE_RUB} ₽</b>\n"
-            "<i>Это отдельная разовая услуга, не входит в подписку. Бери, если "
-            "не хватает 10 вопросов премиума в этом месяце — пакет добавится сверх них.</i>"
+            + _PACKS_SECTION
         )
 
     lines = [
@@ -97,11 +118,7 @@ def _intro_text(user: User) -> str:
         "",
         "— — —",
         "",
-        "<b>Разовые покупки</b> (отдельно от подписки):",
-        f"• 🔄 Пересчёт натальной карты — <b>{NATAL_REGEN_PRICE_RUB} ₽</b>",
-        f"• 💬 Пакет {QUESTION_PACK_SIZE} вопросов — <b>{QUESTION_PACK_PRICE_RUB} ₽</b>",
-        "<i>Пакет вопросов — доп. услуга для тех, кому не хватает лимита "
-        "(и на премиуме, и без него). Это не замена подписки.</i>",
+        _PACKS_SECTION,
     ]
     return "\n".join(lines)
 

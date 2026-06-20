@@ -12,6 +12,8 @@ from astrobot.config import get_settings
 from astrobot.db.models import User
 from astrobot.limits import (
     NATAL_REGEN_PRICE_RUB,
+    QUESTION_PACK_30_PRICE_RUB,
+    QUESTION_PACK_30_SIZE,
     QUESTION_PACK_PRICE_RUB,
     QUESTION_PACK_SIZE,
 )
@@ -27,6 +29,13 @@ class Plan:
     bullets: tuple[str, ...]
 
 
+_PREMIUM_BULLETS = (
+    "3 гороскопа в день (день / неделя / месяц)",
+    "5 вопросов Астре ежемесячно",
+    "Утренний гороскоп в 9:00 (опционально)",
+    "Уведомления о новолунии и полнолунии (опционально)",
+)
+
 PLANS: tuple[Plan, ...] = (
     Plan(
         code="month",
@@ -34,12 +43,7 @@ PLANS: tuple[Plan, ...] = (
         price_rub=299,
         duration_days=30,
         duration_label="30 дней",
-        bullets=(
-            "3 гороскопа в день (день / неделя / месяц)",
-            "10 вопросов Астре в месяц",
-            "Утренний гороскоп в 9:00 (опционально)",
-            "Уведомления о новолунии и полнолунии",
-        ),
+        bullets=_PREMIUM_BULLETS,
     ),
     Plan(
         code="half",
@@ -47,10 +51,7 @@ PLANS: tuple[Plan, ...] = (
         price_rub=1499,
         duration_days=180,
         duration_label="180 дней",
-        bullets=(
-            "Всё из месячного",
-            "Экономия ~17%",
-        ),
+        bullets=_PREMIUM_BULLETS + ("Экономия ~17% по сравнению с месячным",),
     ),
     Plan(
         code="year",
@@ -58,10 +59,7 @@ PLANS: tuple[Plan, ...] = (
         price_rub=2499,
         duration_days=365,
         duration_label="365 дней",
-        bullets=(
-            "Всё из полугодового",
-            "Экономия ~30%",
-        ),
+        bullets=_PREMIUM_BULLETS + ("Экономия ~30% по сравнению с месячным",),
     ),
 )
 
@@ -120,6 +118,14 @@ def _revoke_question_pack(user: User) -> None:
     user.bonus_questions = max(0, (user.bonus_questions or 0) - QUESTION_PACK_SIZE)
 
 
+def _grant_question_pack_30(user: User) -> None:
+    user.bonus_questions = (user.bonus_questions or 0) + QUESTION_PACK_30_SIZE
+
+
+def _revoke_question_pack_30(user: User) -> None:
+    user.bonus_questions = max(0, (user.bonus_questions or 0) - QUESTION_PACK_30_SIZE)
+
+
 def _build_items() -> dict[str, Item]:
     items: dict[str, Item] = {}
     for p in PLANS:
@@ -147,6 +153,14 @@ def _build_items() -> dict[str, Item]:
         amount_rub=QUESTION_PACK_PRICE_RUB,
         grant=_grant_question_pack,
         revoke=_revoke_question_pack,
+    )
+    items["question_pack_30"] = Item(
+        code="question_pack_30",
+        kind="question_pack",
+        title=f"Пакет {QUESTION_PACK_30_SIZE} вопросов",
+        amount_rub=QUESTION_PACK_30_PRICE_RUB,
+        grant=_grant_question_pack_30,
+        revoke=_revoke_question_pack_30,
     )
     return items
 

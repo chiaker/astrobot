@@ -14,8 +14,10 @@ Kind = Literal["natal", "horoscope", "question"]
 
 NATAL_PER_MONTH = 1  # same for both tiers; extra via natal_regens_bonus
 NATAL_REGEN_PRICE_RUB = 100
-QUESTION_PACK_PRICE_RUB = 500
+QUESTION_PACK_PRICE_RUB = 499
 QUESTION_PACK_SIZE = 10
+QUESTION_PACK_30_SIZE = 30
+QUESTION_PACK_30_PRICE_RUB = 1299
 
 
 @dataclass(frozen=True)
@@ -33,13 +35,13 @@ FREE_LIMITS = LimitSpec(
     question_per_month=None,
 )
 
-# Premium: 3 horoscopes/day, 10 questions/month
+# Premium: 3 horoscopes/day, 5 questions/month
 # Natal: same 1/month as free (buy extra via natal_regens_bonus)
 PREMIUM_LIMITS = LimitSpec(
     natal_per_month=NATAL_PER_MONTH,
     horoscope_per_day=3,
     question_lifetime=None,
-    question_per_month=10,
+    question_per_month=5,
 )
 
 
@@ -180,11 +182,30 @@ def paywall_text(kind: Kind, allowance: Allowance) -> str:
     # question
     if allowance.tier == "premium":
         return (
-            "🌙 На этот месяц <b>10 вопросов</b> израсходованы. "
-            f"Купи пакет — <b>{QUESTION_PACK_SIZE} вопросов за {QUESTION_PACK_PRICE_RUB} ₽</b> ✨"
+            f"🌙 На этот месяц <b>{PREMIUM_LIMITS.question_per_month} вопросов</b> израсходованы. "
+            f"Купи пакет — <b>{QUESTION_PACK_SIZE} вопросов за {QUESTION_PACK_PRICE_RUB} ₽</b> "
+            f"или <b>{QUESTION_PACK_30_SIZE} за {QUESTION_PACK_30_PRICE_RUB} ₽</b> ✨"
         )
     return (
         f"🌙 Ты использовал все {allowance.limit} бесплатных вопроса. "
-        "Открой <b>💎 Премиум</b> — там 10 вопросов в месяц, "
+        f"Открой <b>💎 Премиум</b> — там {PREMIUM_LIMITS.question_per_month} вопросов в месяц, "
         f"или пакеты по {QUESTION_PACK_SIZE} вопросов за {QUESTION_PACK_PRICE_RUB} ₽ ✨"
     )
+
+
+async def free_questions_remaining(session: AsyncSession, user: User) -> int:
+    """Remaining lifetime free questions regardless of current tier.
+
+    For premium users, counts only questions used before premium started
+    (i.e. during the free period) to avoid double-counting monthly quota.
+    """
+    limit = FREE_LIMITS.question_lifetime or 0
+    if user.questions_reset_at:
+        all_time = await _count(session, user.id, "question", hours=None)
+        since_premium = await _count(
+            session, user.id, "question", hours=None, not_before=user.questions_reset_at
+        )
+        free_used = all_time - since_premium
+    else:
+        free_used = await _count(session, user.id, "question", hours=None)
+    return max(0, limit - free_used)
