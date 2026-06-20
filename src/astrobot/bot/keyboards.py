@@ -219,17 +219,24 @@ def topic_questions_kb(key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def horoscope_period_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Сегодня", callback_data="horo:today"),
-                InlineKeyboardButton(text="Неделя", callback_data="horo:week"),
-                InlineKeyboardButton(text="Месяц", callback_data="horo:month"),
-            ],
-            [MENU_BACK_BTN],
+def horoscope_period_kb(user: User | None = None) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(text="Сегодня", callback_data="horo:today"),
+            InlineKeyboardButton(text="Неделя", callback_data="horo:week"),
+            InlineKeyboardButton(text="Месяц", callback_data="horo:month"),
         ]
-    )
+    ]
+    if user is not None:
+        if user.push_horoscope_enabled:
+            hour = f"{user.push_hour}:00" if user.push_hour is not None else "9:00"
+            city = f" · {user.push_city_name}" if user.push_city_name else ""
+            push_label = f"🌅 Утренний гороскоп: вкл · {hour}{city}"
+        else:
+            push_label = "🌅 Утренний гороскоп: выкл"
+        rows.append([InlineKeyboardButton(text=push_label, callback_data="settings:push_horoscope")])
+    rows.append([MENU_BACK_BTN])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def horoscope_regen_kb(period: str) -> InlineKeyboardMarkup:

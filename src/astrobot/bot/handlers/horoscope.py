@@ -58,7 +58,7 @@ async def on_horoscope_menu(call: CallbackQuery, session: AsyncSession, user: Us
     profile = await need_profile(call.message, session, user)
     if profile is None:
         return
-    await edit_or_send(call, "🔮 На какой период посмотрим?", horoscope_period_kb())
+    await edit_or_send(call, "🔮 На какой период посмотрим?", horoscope_period_kb(user))
 
 
 @router.callback_query(F.data.startswith("horo:"))

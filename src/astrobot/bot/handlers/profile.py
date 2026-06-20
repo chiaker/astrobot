@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from astrobot.astrology.geocoding import geocode_city
 from astrobot.bot.keyboards import (
     MENU_BACK_BTN,
+    horoscope_period_kb,
     name_skip_kb,
     push_hour_kb,
     reset_confirm_kb,
@@ -60,16 +61,7 @@ def _settings_kb(user: User) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=f"🔭 Астротермины: {terms_state}", callback_data="settings:astro_terms")]
     )
     if is_premium(user):
-        if user.push_horoscope_enabled:
-            hour = f"{user.push_hour}:00" if user.push_hour is not None else "9:00"
-            city = f" · {user.push_city_name}" if user.push_city_name else ""
-            horo_label = f"🌅 Утренний гороскоп: вкл · {hour}{city}"
-        else:
-            horo_label = "🌅 Утренний гороскоп: выкл"
         lunar_state = "вкл" if user.push_lunar_enabled else "выкл"
-        rows.append(
-            [InlineKeyboardButton(text=horo_label, callback_data="settings:push_horoscope")]
-        )
         rows.append(
             [InlineKeyboardButton(text=f"🌑 Лунные фазы: {lunar_state}", callback_data="settings:push_lunar")]
         )
@@ -217,7 +209,7 @@ async def on_push_horoscope_toggle(
         # Disable immediately
         user.push_horoscope_enabled = False
         await session.commit()
-        await _render_settings(call, user)
+        await edit_or_send(call, "🔮 На какой период посмотрим?", horoscope_period_kb(user))
         await call.answer("Утренний гороскоп выключен")
         return
 
@@ -226,7 +218,7 @@ async def on_push_horoscope_toggle(
         hour = user.push_hour if user.push_hour is not None else 9
         user.push_horoscope_enabled = True
         await session.commit()
-        await _render_settings(call, user)
+        await edit_or_send(call, "🔮 На какой период посмотрим?", horoscope_period_kb(user))
         await call.answer(f"Включён · {hour}:00 · {user.push_city_name}")
         return
 
