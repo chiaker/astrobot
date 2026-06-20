@@ -17,6 +17,9 @@ from astrobot.bot.keyboards import MENU_BACK_BTN
 from astrobot.bot.responses import edit_or_send
 from astrobot.bot.states import PaymentFlow
 from astrobot.config import get_settings
+from sqlalchemy import desc, select
+
+from astrobot.bot.handlers.menu import send_main_menu
 from astrobot.db.models import Payment, User
 from astrobot.limits import (
     NATAL_REGEN_PRICE_RUB,
@@ -260,7 +263,7 @@ async def _start_payment(
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить — {item.amount_rub} ₽", url=confirmation_url)],
-            [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel")],
+            [InlineKeyboardButton(text="❌ Отменить", callback_data="pay:cancel")],
         ]
     )
     await target.answer(
@@ -269,3 +272,29 @@ async def _start_payment(
         "После оплаты вернись в бот — я подтвержу начисление ✨",
         reply_markup=kb,
     )
+
+
+@router.callback_query(F.data == "pay:cancel")
+async def on_pay_cancel(
+    call: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    pending = await session.scalar(
+        select(Payment)
+        .where(Payment.user_id == user.id, Payment.status == "pending")
+        .order_by(desc(Payment.created_at))
+        .limit(1)
+    )
+    if pending is not None:
+        pending.status = "canceled"
+        await session.commit()
+
+    await state.clear()
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await call.answer("Оплата отменена")
+    await send_main_menu(call.message, user, session)
