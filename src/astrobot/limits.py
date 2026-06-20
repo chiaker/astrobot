@@ -132,7 +132,7 @@ async def check_question(session: AsyncSession, user: User) -> Allowance:
         )
 
     limit = s.question_lifetime or 0
-    used = await _count(session, user.id, "question", hours=None)
+    used = await _count(session, user.id, "question", hours=None, not_before=user.questions_reset_at)
     regular_left = max(0, limit - used)
     return Allowance(
         allowed=regular_left > 0 or bonus > 0,

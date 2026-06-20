@@ -894,8 +894,11 @@ def _render_user_detail(user, profile, stats: dict, now: datetime, msg: str = ""
       <button type='submit' class='btn btn-p'>Сохранить</button>
       <button type='submit' name='quick' value='prem30' class='btn btn-g'>+30 дней премиум</button>
       <button type='submit' name='quick' value='prem365' class='btn btn-g'>+365 дней</button>
+      <button type='submit' name='quick' value='add_questions' class='btn btn-g'>+10 вопросов</button>
+      <button type='submit' name='quick' value='add_natal' class='btn btn-g'>+1 натал</button>
       <button type='submit' name='quick' value='reset_prem' class='btn btn-danger btn-sm'>Сбросить премиум</button>
       <button type='submit' name='quick' value='unlimited_natal' class='btn btn-ghost btn-sm'>∞ Natal (тест)</button>
+      <button type='submit' name='quick' value='reset_all' class='btn btn-danger' onclick="return confirm('Полный сброс аккаунта — премиум, бонусы и лимиты. Продолжить?')">⚠ Полный сброс</button>
     </div>
   </form>
 </div>
@@ -1396,6 +1399,18 @@ async def user_edit(
     elif quick == "unlimited_natal":
         user.natal_regens_bonus = -1
         msg = "Натал: безлимит (−1)."
+    elif quick == "add_questions":
+        user.bonus_questions = (user.bonus_questions or 0) + 10
+        msg = "Добавлено 10 вопросов."
+    elif quick == "add_natal":
+        user.natal_regens_bonus = (user.natal_regens_bonus or 0) + 1
+        msg = "Добавлен 1 пересчёт натала."
+    elif quick == "reset_all":
+        user.premium_until = None
+        user.bonus_questions = 0
+        user.natal_regens_bonus = 0
+        user.questions_reset_at = now
+        msg = "Аккаунт полностью сброшен."
     else:
         # Manual form submission
         if premium_until.strip():
