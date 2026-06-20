@@ -116,45 +116,38 @@ async def check_horoscope(session: AsyncSession, user: User) -> Allowance:
 
 
 async def check_question(session: AsyncSession, user: User) -> Allowance:
-    s = spec_of(user)
     t = tier_of(user)
+    free_bal = user.free_questions_balance or 0
     bonus = max(0, user.bonus_questions or 0)
 
     if t == "premium":
-        limit = s.question_per_month or 0
-        used = await _count(
+        limit = PREMIUM_LIMITS.question_per_month or 0
+        monthly_used = await _count(
             session, user.id, "question", hours=24 * 30, not_before=user.questions_reset_at
         )
         return Allowance(
-            allowed=used < limit or bonus > 0,
-            used=used,
-            limit=limit + bonus,
+            allowed=free_bal > 0 or bonus > 0 or monthly_used < limit,
+            used=monthly_used,
+            limit=limit,
             window="month",
             tier=t,
         )
 
-    limit = s.question_lifetime or 0
-    used = await _count(session, user.id, "question", hours=None, not_before=user.questions_reset_at)
-    regular_left = max(0, limit - used)
     return Allowance(
-        allowed=regular_left > 0 or bonus > 0,
-        used=used,
-        limit=limit + bonus,
+        allowed=free_bal > 0 or bonus > 0,
+        used=max(0, (FREE_LIMITS.question_lifetime or 0) - free_bal),
+        limit=FREE_LIMITS.question_lifetime or 0,
         window="lifetime",
         tier=t,
     )
 
 
-def consume_question_bonus_if_needed(user: User, used_before_call: int) -> None:
-    bonus = user.bonus_questions or 0
-    if bonus <= 0:
-        return
-    if is_premium(user):
-        limit = PREMIUM_LIMITS.question_per_month or 0
-    else:
-        limit = FREE_LIMITS.question_lifetime or 0
-    if used_before_call >= limit:
-        user.bonus_questions = max(0, bonus - 1)
+def consume_question_from_priority_bucket(user: User) -> None:
+    """Consume from free balance first, then bonus pack, then monthly (implicit via log)."""
+    if (user.free_questions_balance or 0) > 0:
+        user.free_questions_balance -= 1
+    elif (user.bonus_questions or 0) > 0:
+        user.bonus_questions -= 1
 
 
 CHECKS = {
@@ -193,19 +186,5 @@ def paywall_text(kind: Kind, allowance: Allowance) -> str:
     )
 
 
-async def free_questions_remaining(session: AsyncSession, user: User) -> int:
-    """Remaining lifetime free questions regardless of current tier.
-
-    For premium users, counts only questions used before premium started
-    (i.e. during the free period) to avoid double-counting monthly quota.
-    """
-    limit = FREE_LIMITS.question_lifetime or 0
-    if user.questions_reset_at:
-        all_time = await _count(session, user.id, "question", hours=None)
-        since_premium = await _count(
-            session, user.id, "question", hours=None, not_before=user.questions_reset_at
-        )
-        free_used = all_time - since_premium
-    else:
-        free_used = await _count(session, user.id, "question", hours=None)
-    return max(0, limit - free_used)
+def free_questions_remaining(user: User) -> int:
+    return user.free_questions_balance or 0

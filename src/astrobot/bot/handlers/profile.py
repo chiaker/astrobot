@@ -33,12 +33,10 @@ from astrobot.db.models import (
     User,
 )
 from astrobot.limits import (
-    FREE_LIMITS,
     NATAL_REGEN_PRICE_RUB,
     PREMIUM_LIMITS,
     check_horoscope,
     check_question,
-    free_questions_remaining,
     is_premium,
 )
 from astrobot.payments.catalog import get_item
@@ -124,7 +122,6 @@ async def _profile_text(profile: BirthProfile, user: User, session: AsyncSession
 
     q_allow = await check_question(session, user)
     h_allow = await check_horoscope(session, user)
-    q_left = max(0, q_allow.limit - q_allow.used)
     h_left = max(0, h_allow.limit - h_allow.used)
 
     if is_premium(user) and user.premium_until:
@@ -133,7 +130,7 @@ async def _profile_text(profile: BirthProfile, user: User, session: AsyncSession
         monthly_left = max(0, monthly_limit - q_allow.used)
         bonus = max(0, user.bonus_questions or 0)
         bonus_line = f"\n🎁 Доп. вопросы из пакета: <b>{bonus}</b> (не сгорают)" if bonus > 0 else ""
-        free_left = await free_questions_remaining(session, user)
+        free_left = user.free_questions_balance or 0
         free_line = f"\n🆓 Бесплатных вопросов: <b>{free_left}</b> (не сгорают)" if free_left > 0 else ""
         return base + (
             f"💎 <b>Премиум до {until}</b>\n"
@@ -142,10 +139,13 @@ async def _profile_text(profile: BirthProfile, user: User, session: AsyncSession
             "Звёзды в твоём распоряжении ✨"
         )
 
-    free_limit = FREE_LIMITS.question_lifetime or 0
+    free_bal = user.free_questions_balance or 0
+    bonus = max(0, user.bonus_questions or 0)
     return base + (
         "🆓 <b>Бесплатный тариф</b>\n"
-        f"💬 Вопросов осталось: <b>{q_left} из {free_limit}</b>\n"
+        f"💬 Вопросов осталось: <b>{free_bal}</b>"
+        + (f"\n🎁 Доп. вопросы: <b>{bonus}</b>" if bonus > 0 else "")
+        + "\n"
         f"🔮 Гороскоп сегодня: {'доступен ✨' if h_left > 0 else 'на сегодня посмотрен'}\n\n"
         "<i>💎 Премиум открывает новые горизонты — загляни в раздел «Премиум».</i>"
     )

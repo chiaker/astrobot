@@ -24,7 +24,7 @@ from astrobot.bot.responses import edit_or_send, save_and_send_response
 from astrobot.bot.states import CompatFlow
 from astrobot.bot.utils import need_profile
 from astrobot.db.models import BirthProfile, LLMUsageLog, Response, User
-from astrobot.limits import check_question, consume_question_bonus_if_needed, paywall_text
+from astrobot.limits import check_question, consume_question_from_priority_bucket, paywall_text
 from astrobot.llm.client import get_llm
 from astrobot.llm.prompts import build_system_compatibility
 
@@ -208,7 +208,6 @@ async def _do_compat(
     name_a: str,
     name_b: str,
 ) -> None:
-    pre = await check_question(session, user)
     progress = await target.answer("💞 Сравниваю ваши карты…")
 
     report = await asyncio.to_thread(build_synastry_report, me, partner)
@@ -224,7 +223,7 @@ async def _do_compat(
     )
     text = response.text
 
-    consume_question_bonus_if_needed(user, pre.used)
+    consume_question_from_priority_bucket(user)
     session.add(
         LLMUsageLog(
             user_id=user.id,

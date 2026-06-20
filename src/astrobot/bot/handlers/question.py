@@ -26,7 +26,7 @@ from astrobot.bot.utils import need_profile
 from astrobot.db.models import BirthProfile, LLMUsageLog, QuestionLog, Response, User
 from astrobot.limits import (
     check_question,
-    consume_question_bonus_if_needed,
+    consume_question_from_priority_bucket,
     is_premium,
     paywall_text,
 )
@@ -79,10 +79,6 @@ async def _answer_question(
 ) -> None:
     progress = await target.answer("🌟 Прикладываю карту к твоему вопросу…")
 
-    # Pre-call snapshot for bonus accounting
-    pre_call_allowance = await check_question(session, user)
-    pre_call_used = pre_call_allowance.used
-
     birth = _profile_to_birth(profile, name=user.display_name or user_name or "User")
     chart = build_natal_chart(birth)
     natal_md = chart_to_markdown(chart)
@@ -126,7 +122,7 @@ async def _answer_question(
         full=response.text,
     )
     session.add(resp_row)
-    consume_question_bonus_if_needed(user, pre_call_used)
+    consume_question_from_priority_bucket(user)
     await session.flush()
     await session.commit()
 

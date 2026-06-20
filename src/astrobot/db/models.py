@@ -45,6 +45,7 @@ class User(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     bonus_questions: Mapped[int] = mapped_column(Integer, default=0)
+    free_questions_balance: Mapped[int] = mapped_column(Integer, default=3, server_default="3")
     # Questions asked before this moment don't count against the monthly quota —
     # set on premium purchase so a buyer gets a full fresh allowance.
     questions_reset_at: Mapped[datetime | None] = mapped_column(

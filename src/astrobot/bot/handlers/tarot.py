@@ -10,7 +10,7 @@ from astrobot.bot.keyboards import MENU_BACK_BTN, premium_or_back_kb, promo_row,
 from astrobot.bot.responses import edit_or_send, save_and_send_response
 from astrobot.bot.states import TarotFlow
 from astrobot.db.models import LLMUsageLog, Response, User
-from astrobot.limits import check_question, consume_question_bonus_if_needed, paywall_text
+from astrobot.limits import check_question, consume_question_from_priority_bucket, paywall_text
 from astrobot.llm.client import get_llm
 from astrobot.llm.prompts import build_system_tarot
 from astrobot.metrics import CRISIS_TRIGGERED
@@ -116,7 +116,6 @@ async def on_tarot_question(
 async def _do_tarot(
     target: Message, session: AsyncSession, user: User, question: str | None
 ) -> None:
-    pre = await check_question(session, user)
     progress = await target.answer("🃏 Тасую колоду и раскладываю карты…")
 
     cards = draw_three()
@@ -135,7 +134,7 @@ async def _do_tarot(
     )
     text = response.text
 
-    consume_question_bonus_if_needed(user, pre.used)
+    consume_question_from_priority_bucket(user)
     session.add(
         LLMUsageLog(
             user_id=user.id,
