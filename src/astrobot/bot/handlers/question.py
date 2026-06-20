@@ -142,7 +142,7 @@ async def _answer_question(
         elif left == 1:
             await target.answer(
                 "🌙 У тебя остался <b>1 вопрос</b> на бесплатном тарифе. "
-                "Премиум открывает звёзды без ограничений ✨",
+                "Премиум раздвигает горизонты ✨",
                 reply_markup=premium_or_back_kb(),
             )
 

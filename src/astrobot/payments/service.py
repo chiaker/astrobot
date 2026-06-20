@@ -34,7 +34,7 @@ def _confirmation_text(payment: Payment, user: User) -> str:
         return (
             "✅ Оплата прошла — <b>Премиум активирован</b>"
             + (f" до <b>{until}</b>" if until else "")
-            + ". Звёзды теперь без ограничений ✨"
+            + ". Звёзды теперь открыты для тебя полностью ✨"
         )
     if payment.kind == "natal_regen":
         return (

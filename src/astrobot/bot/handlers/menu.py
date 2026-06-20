@@ -18,7 +18,7 @@ async def render_main_menu(user: User, session: AsyncSession) -> tuple[str, Inli
     name = user.display_name or "путник"
     if is_premium(user):
         sub = (
-            "💎 Премиум активен — звёзды без ограничений ✨\n"
+            "💎 Премиум активен — горизонты открыты полностью ✨\n"
             "🤝 Зови друзей: вам обоим +2 вопроса за каждого"
         )
     else:
