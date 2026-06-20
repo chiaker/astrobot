@@ -169,7 +169,7 @@ async def on_question_text(
 
     if _REFUSAL_RE.match(question):
         await message.answer(
-            "Хорошо! Напиши, когда захочешь.",
+            "Хорошо! Напиши, когда захочешь что-то спросить.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[[InlineKeyboardButton(text="🚪 Выйти из чата", callback_data="chat:exit")]]
             ),
