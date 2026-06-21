@@ -31,7 +31,7 @@ class LimitSpec:
 FREE_LIMITS = LimitSpec(
     natal_per_month=NATAL_PER_MONTH,
     horoscope_per_day=1,
-    question_lifetime=3,
+    question_lifetime=2,
     question_per_month=None,
 )
 

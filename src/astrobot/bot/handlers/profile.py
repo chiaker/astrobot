@@ -129,9 +129,9 @@ async def _profile_text(profile: BirthProfile, user: User, session: AsyncSession
         monthly_limit = PREMIUM_LIMITS.question_per_month or 0
         monthly_left = max(0, monthly_limit - q_allow.used)
         bonus = max(0, user.bonus_questions or 0)
-        bonus_line = f"\n🎁 Доп. вопросы из пакета: <b>{bonus}</b> (не сгорают)" if bonus > 0 else ""
+        bonus_line = f"\n🎁 Доп. вопросы из пакета: <b>{bonus}</b>" if bonus > 0 else ""
         free_left = user.free_questions_balance or 0
-        free_line = f"\n🆓 Бесплатных вопросов: <b>{free_left}</b> (не сгорают)" if free_left > 0 else ""
+        free_line = f"\n🆓 Бесплатных вопросов: <b>{free_left}</b>" if free_left > 0 else ""
         return base + (
             f"💎 <b>Премиум до {until}</b>\n"
             f"💬 Вопросов в этом месяце: <b>{monthly_left} из {monthly_limit}</b>{bonus_line}{free_line}\n"
