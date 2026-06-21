@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 
 from aiogram import F, Router
@@ -100,7 +101,9 @@ async def _answer_question(
         progress = await target.answer("🌟 Прикладываю карту к твоему вопросу…")
 
         birth = _profile_to_birth(profile, name=user.display_name or user_name or "User")
-        chart = build_natal_chart(birth)
+        # CPU-bound (swisseph) — offload to a thread so it doesn't block the
+        # single event loop while other users are being served.
+        chart = await asyncio.to_thread(build_natal_chart, birth)
         natal_md = chart_to_markdown(chart)
 
         history_rows = await session.scalars(

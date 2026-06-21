@@ -12,8 +12,11 @@ def get_engine():
     return create_async_engine(
         settings.database_url,
         pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=20,
+        # A connection is held for the whole duration of each update (incl. the
+        # multi-second LLM call), so the pool must cover peak concurrent users.
+        # 30 + 30 = 60 max, comfortably under Postgres' default max_connections=100.
+        pool_size=30,
+        max_overflow=30,
         pool_timeout=30,
         pool_recycle=1800,
         future=True,

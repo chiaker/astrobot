@@ -8,3 +8,15 @@ scrape_configs:
       - targets:
           - app:8000
     metrics_path: /metrics
+
+  # Host server resources (CPU, RAM, disk, network, load)
+  - job_name: node
+    static_configs:
+      - targets:
+          - node-exporter:9100
+
+  # Per-container resources (cAdvisor)
+  - job_name: cadvisor
+    static_configs:
+      - targets:
+          - cadvisor:8080

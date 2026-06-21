@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,7 +46,9 @@ async def _run_natal_generation(
 ) -> None:
     """LLM call + cache update + send result. Progress message is deleted after."""
     birth = _profile_to_birth(profile, name=display_name)
-    chart = build_natal_chart(birth)
+    # CPU-bound (swisseph) — offload to a thread so it doesn't block the
+    # single event loop while other users are being served.
+    chart = await asyncio.to_thread(build_natal_chart, birth)
     cached_context = chart_to_markdown(chart)
 
     await progress.edit_text("✨ Складываю узор твоей карты…")

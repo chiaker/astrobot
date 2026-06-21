@@ -68,6 +68,32 @@ services:
     depends_on:
       - prometheus
 
+  # Host-level resources: CPU, RAM, disk, network, load average.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    logging: *default-logging
+    pid: host
+    command:
+      - "--path.rootfs=/host"
+    volumes:
+      - /:/host:ro,rslave
+
+  # Per-container resources: CPU / memory / network for app, postgres, redis…
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    restart: unless-stopped
+    logging: *default-logging
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+
   backup:
     image: prodrigestivill/postgres-backup-local:16-alpine
     restart: unless-stopped
