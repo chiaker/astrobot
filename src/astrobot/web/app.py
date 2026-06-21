@@ -46,10 +46,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("scheduler_started")
 
     if settings.run_mode == "webhook":
+        # drop_pending_updates=False so a restart doesn't discard messages users
+        # sent during the brief downtime — Telegram redelivers them, and the
+        # dedupe middleware drops any duplicates.
         await bot.set_webhook(
             url=settings.webhook_url,
             secret_token=settings.webhook_secret,
-            drop_pending_updates=True,
+            drop_pending_updates=False,
         )
         log.info("webhook_set", url=settings.webhook_url)
     else:

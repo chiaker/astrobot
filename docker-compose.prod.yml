@@ -13,6 +13,14 @@ services:
     expose:
       - "8000"
 
+  # Serve Grafana behind Caddy under https://<domain>/grafana/ instead of the
+  # raw :3000 port (which firewalls/networks often block). Caddy reaches it over
+  # the internal compose network, so the loopback-only port binding is enough.
+  grafana:
+    environment:
+      GF_SERVER_ROOT_URL: "https://${BOT_DOMAIN}/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped

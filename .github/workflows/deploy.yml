@@ -74,6 +74,12 @@ jobs:
             export IMAGE_TAG="${{ needs.build.outputs.tag }}"
             docker compose -f docker-compose.yml -f docker-compose.prod.yml pull app migrate
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+            # Mounted config files (prometheus.yml scrape targets, Caddyfile routes)
+            # don't trigger a recreate on `up -d`, so reload them explicitly.
+            # caddy reload is zero-downtime; the `|| true` keeps deploy green if the
+            # binary/path differs across caddy versions.
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml restart prometheus
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true
             # Remove ALL images not used by a running/created container, not just
             # dangling ones — old :<short_sha> tags accumulate otherwise and fill
             # /var/lib/docker/overlay2. Rollbacks re-pull from the registry.

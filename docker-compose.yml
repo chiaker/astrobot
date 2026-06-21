@@ -63,8 +63,11 @@ services:
       - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafanadata:/var/lib/grafana
+    # Bind to loopback only: not reachable from the internet directly. Access is
+    # via Caddy (https://<domain>/grafana/) on the compose network, or an SSH
+    # tunnel to the host. Local dev still works on http://localhost:3000.
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - prometheus
 

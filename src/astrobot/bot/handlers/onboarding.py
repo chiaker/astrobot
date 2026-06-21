@@ -392,6 +392,10 @@ async def on_final_ok(
 
     from astrobot.bot.handlers.natal import generate_natal
 
+    # Ack the callback up-front: natal generation below can take 30s+, and a
+    # callback query expires after ~15s ("query is too old" otherwise).
+    await call.answer("Готово")
+
     name_part = f", {user.display_name}" if user.display_name else ""
     await call.message.answer(
         f"🌙 Запомнила{name_part}. Читаю твою карту… ✨",
@@ -402,7 +406,6 @@ async def on_final_ok(
         await generate_natal(call.message, session, user, profile)
     else:
         await send_main_menu(call.message, user, session)
-    await call.answer("Готово")
 
 
 @router.callback_query(Onboarding.final_confirm, F.data == "onb:final:restart")

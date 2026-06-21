@@ -66,6 +66,20 @@ async def _push(bot: Bot | None, chat_id: int, text: str, reply_markup=None) -> 
         log.warning("payment_push_failed", chat_id=chat_id, error=str(e))
 
 
+async def _alert_ops_once(bot: Bot | None, dedup_key: str, text: str) -> None:
+    """Ops alert sent at most once per dedup_key, so the 5-min reconcile job can't
+    spam the same 'paid but not granted' payment over and over."""
+    from astrobot.alerts import notify_ops
+    from astrobot.redis_client import get_redis
+
+    try:
+        fresh = await get_redis().set(f"alert:{dedup_key}", "1", ex=86400, nx=True)
+    except Exception:
+        fresh = True  # Redis down → still alert (better noisy than silent about money)
+    if fresh:
+        await notify_ops(bot, text)
+
+
 async def grant_payment(session: AsyncSession, payment: Payment, bot: Bot | None) -> bool:
     """Idempotently grant the purchased item and notify. True if newly granted.
 
@@ -85,11 +99,19 @@ async def grant_payment(session: AsyncSession, payment: Payment, bot: Bot | None
     item = get_item(row.item_code)
     user = await session.get(User, row.user_id)
     if item is None or user is None:
-        # Money was paid — flip status anyway so it doesn't loop; flag it.
+        # Money was paid — flip status anyway so it doesn't loop; flag it loudly.
         row.status = "succeeded"
         row.paid_at = now
         await session.commit()
         log.warning("grant_missing_item_or_user", payment_id=row.id, item=row.item_code)
+        reason = "товар не найден" if item is None else "пользователь не найден"
+        await _alert_ops_once(
+            bot,
+            f"grant_missing:{row.id}",
+            "🚨 Платёж ОПЛАЧЕН, но начисление не сделано — нужна ручная проверка.\n"
+            f"payment_id={row.id}, user_id={row.user_id}, item={row.item_code}\n"
+            f"Причина: {reason}.",
+        )
         return False
 
     item.grant(user)
@@ -222,6 +244,15 @@ async def reconcile_payment(session: AsyncSession, payment: Payment, bot: Bot | 
         paid = float((fetched.get("amount") or {}).get("value") or 0)
         if item is None or abs(paid - float(item.amount_rub)) > 0.01:
             log.warning("reconcile_amount_mismatch", payment_id=payment.id, paid=paid)
+            expected = f"{item.amount_rub}₽" if item is not None else "товар не найден"
+            await _alert_ops_once(
+                bot,
+                f"mismatch:{payment.id}",
+                "🚨 Платёж ОПЛАЧЕН в YooKassa, но сумма/товар не совпали — "
+                "начисление НЕ сделано, нужна ручная проверка (возможно, вернуть деньги).\n"
+                f"payment_id={payment.id}, user_id={payment.user_id}, "
+                f"item={payment.item_code}\nоплачено={paid}₽, ожидалось={expected}.",
+            )
             return "mismatch"
         await grant_payment(session, payment, bot)
         return "granted"

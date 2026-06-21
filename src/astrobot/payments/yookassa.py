@@ -2,9 +2,15 @@
 
 We deliberately use httpx async instead of the official `yookassa` SDK, which is
 synchronous and would block the asyncio event loop.
+
+All calls go through `_request`, which retries transient failures (network errors
+and 5xx) so a momentary blip doesn't fail a user's payment. POSTs pass a fixed
+Idempotence-Key that is reused across retries, so a retry never creates a
+duplicate payment or refund.
 """
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 import httpx
@@ -15,7 +21,11 @@ from astrobot.config import get_settings
 log = structlog.get_logger(__name__)
 
 _API_BASE = "https://api.yookassa.ru/v3"
-_TIMEOUT = httpx.Timeout(20.0)
+# 20s overall, but fail a dead connection fast (5s) so retries kick in quickly
+# instead of making the user wait ~20s per attempt.
+_TIMEOUT = httpx.Timeout(20.0, connect=5.0)
+_MAX_ATTEMPTS = 3
+_BACKOFF_SECONDS = (0.5, 1.5)  # waits before the 2nd and 3rd attempts
 
 
 class YooKassaError(RuntimeError):
@@ -25,6 +35,59 @@ class YooKassaError(RuntimeError):
 def _auth() -> tuple[str, str]:
     s = get_settings()
     return (s.yookassa_shop_id, s.yookassa_secret_key)
+
+
+async def _request(
+    method: str,
+    path: str,
+    *,
+    op: str,
+    headers: dict | None = None,
+    json: dict | None = None,
+) -> dict:
+    """Call the YooKassa API with retries on transient failures.
+
+    Retries only network errors (ConnectTimeout/ReadTimeout/ConnectError…) and 5xx
+    responses. 4xx are deterministic and raised immediately. `headers` (incl. the
+    caller's fixed Idempotence-Key for POSTs) is reused on every attempt, so a
+    retry is idempotent and won't double-charge.
+    """
+    url = f"{_API_BASE}{path}"
+    last_error = "unknown"
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        for attempt in range(_MAX_ATTEMPTS):
+            try:
+                resp = await client.request(
+                    method, url, headers=headers, json=json, auth=_auth()
+                )
+            except httpx.HTTPError as e:
+                last_error = type(e).__name__
+                log.warning(
+                    "yookassa_request_error", op=op, attempt=attempt, error=last_error
+                )
+            else:
+                if resp.status_code < 300:
+                    return resp.json()
+                if resp.status_code < 500:
+                    # Deterministic client error — retrying won't help.
+                    log.warning(
+                        "yookassa_request_failed",
+                        op=op,
+                        status=resp.status_code,
+                        body=resp.text[:500],
+                    )
+                    raise YooKassaError(f"{op} HTTP {resp.status_code}")
+                last_error = f"HTTP {resp.status_code}"
+                log.warning(
+                    "yookassa_request_5xx",
+                    op=op,
+                    attempt=attempt,
+                    status=resp.status_code,
+                    body=resp.text[:500],
+                )
+            if attempt < _MAX_ATTEMPTS - 1:
+                await asyncio.sleep(_BACKOFF_SECONDS[attempt])
+    raise YooKassaError(f"{op} failed after {_MAX_ATTEMPTS} attempts ({last_error})")
 
 
 async def create_payment(
@@ -50,34 +113,12 @@ async def create_payment(
         body["receipt"] = receipt
 
     headers = {"Idempotence-Key": uuid4().hex}
-
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(
-            f"{_API_BASE}/payments", json=body, headers=headers, auth=_auth()
-        )
-    if resp.status_code >= 300:
-        log.warning(
-            "yookassa_create_failed",
-            status=resp.status_code,
-            body=resp.text[:500],
-        )
-        raise YooKassaError(f"create_payment HTTP {resp.status_code}")
-    return resp.json()
+    return await _request("POST", "/payments", op="create_payment", headers=headers, json=body)
 
 
 async def get_payment(payment_id: str) -> dict:
     """Fetch a payment by id — used by the webhook to verify the real status."""
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.get(f"{_API_BASE}/payments/{payment_id}", auth=_auth())
-    if resp.status_code >= 300:
-        log.warning(
-            "yookassa_get_failed",
-            status=resp.status_code,
-            payment_id=payment_id,
-            body=resp.text[:500],
-        )
-        raise YooKassaError(f"get_payment HTTP {resp.status_code}")
-    return resp.json()
+    return await _request("GET", f"/payments/{payment_id}", op="get_payment")
 
 
 async def create_refund(payment_id: str, amount_rub: float) -> dict:
@@ -87,16 +128,4 @@ async def create_refund(payment_id: str, amount_rub: float) -> dict:
         "amount": {"value": f"{amount_rub:.2f}", "currency": "RUB"},
     }
     headers = {"Idempotence-Key": uuid4().hex}
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(
-            f"{_API_BASE}/refunds", json=body, headers=headers, auth=_auth()
-        )
-    if resp.status_code >= 300:
-        log.warning(
-            "yookassa_refund_failed",
-            status=resp.status_code,
-            payment_id=payment_id,
-            body=resp.text[:500],
-        )
-        raise YooKassaError(f"create_refund HTTP {resp.status_code}")
-    return resp.json()
+    return await _request("POST", "/refunds", op="create_refund", headers=headers, json=body)
