@@ -22,13 +22,21 @@ from astrobot.bot.keyboards import (
 )
 from astrobot.bot.responses import edit_or_send, save_and_send_response
 from astrobot.bot.states import CompatFlow
-from astrobot.bot.utils import need_profile
+from astrobot.bot.utils import need_profile, rate_limit_ok, user_llm_lock
 from astrobot.db.models import BirthProfile, LLMUsageLog, Response, User
-from astrobot.limits import check_question, consume_question_from_priority_bucket, paywall_text
+from astrobot.limits import (
+    check_question,
+    consume_question_from_priority_bucket,
+    paywall_text,
+    reset_premium_questions_if_due,
+)
 from astrobot.llm.client import get_llm
 from astrobot.llm.prompts import build_system_compatibility
 
 router = Router(name="compatibility")
+
+# Cap geocoding (external Nominatim calls) per user to curb spam / OSM ToS abuse.
+GEOCODE_PER_HOUR = 20
 
 _KIND = "question:compatibility"
 _NEW_ROW = [InlineKeyboardButton(text="💞 Новый расчёт", callback_data="compat:new")]
@@ -156,6 +164,12 @@ async def on_compat_city(
         await message.answer("Слишком короткое название. Введи город, например <code>Москва</code>.")
         return
 
+    if not await rate_limit_ok(f"geo:rl:{user.id}", GEOCODE_PER_HOUR, 3600):
+        await message.answer(
+            "⏳ Слишком много запросов городов подряд. Попробуй через несколько минут."
+        )
+        return
+
     progress = await message.answer("🔍 Ищу город на карте…")
     result = await geocode_city(session, query)
     await progress.delete()
@@ -208,33 +222,48 @@ async def _do_compat(
     name_a: str,
     name_b: str,
 ) -> None:
-    progress = await target.answer("💞 Сравниваю ваши карты…")
+    async with user_llm_lock(user.id) as acquired:
+        if not acquired:
+            await target.answer("⏳ Секунду — предыдущий расчёт ещё считается.")
+            return
 
-    report = await asyncio.to_thread(build_synastry_report, me, partner)
-    context = synastry_to_markdown(report, name_a, name_b)
+        # Authoritative quota gate under the lock (see question handler).
+        await session.refresh(user)
+        reset_premium_questions_if_due(user)
+        allowance = await check_question(session, user)
+        if not allowance.allowed:
+            await target.answer(
+                paywall_text("question", allowance), reply_markup=premium_or_back_kb()
+            )
+            return
 
-    llm = get_llm()
-    response = await llm.complete(
-        system=build_system_compatibility(user),
-        cached_context=context,
-        user_message=f"Дай разбор совместимости: {name_a} и {name_b}.",
-        max_tokens=1800,
-        kind=_KIND,
-    )
-    text = response.text
+        progress = await target.answer("💞 Сравниваю ваши карты…")
 
-    consume_question_from_priority_bucket(user)
-    session.add(
-        LLMUsageLog(
-            user_id=user.id,
+        report = await asyncio.to_thread(build_synastry_report, me, partner)
+        context = synastry_to_markdown(report, name_a, name_b)
+
+        llm = get_llm()
+        response = await llm.complete(
+            system=build_system_compatibility(user),
+            cached_context=context,
+            user_message=f"Дай разбор совместимости: {name_a} и {name_b}.",
+            max_tokens=1800,
             kind=_KIND,
-            model=response.model,
-            input_tokens=response.input_tokens,
-            cached_tokens=response.cached_input_tokens,
-            output_tokens=response.output_tokens,
         )
-    )
+        text = response.text
 
-    await progress.delete()
-    header = f"💞 <b>{name_a} × {name_b}</b>\n\n"
-    await save_and_send_response(target, session, user, "compatibility", header + text, extra_row=_NEW_ROW)
+        consume_question_from_priority_bucket(user)
+        session.add(
+            LLMUsageLog(
+                user_id=user.id,
+                kind=_KIND,
+                model=response.model,
+                input_tokens=response.input_tokens,
+                cached_tokens=response.cached_input_tokens,
+                output_tokens=response.output_tokens,
+            )
+        )
+
+        await progress.delete()
+        header = f"💞 <b>{name_a} × {name_b}</b>\n\n"
+        await save_and_send_response(target, session, user, "compatibility", header + text, extra_row=_NEW_ROW)

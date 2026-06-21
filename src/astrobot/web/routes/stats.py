@@ -22,10 +22,50 @@ from astrobot.db.models import (
 from astrobot.db.session import get_session
 from astrobot.payments import service as payment_service
 from astrobot.payments import yookassa
+from astrobot.redis_client import get_redis
 
 router = APIRouter(tags=["admin"])
 
 PAGE_SIZE = 50
+
+# Brute-force protection for the admin login.
+_LOGIN_MAX_FAILS = 10
+_LOGIN_WINDOW_SECONDS = 15 * 60
+
+
+def _login_client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+async def _login_blocked(ip: str) -> bool:
+    """True when this IP has exceeded the failed-login budget for the window."""
+    try:
+        redis = get_redis()
+        n = await redis.get(f"admin:login:fail:{ip}")
+        return n is not None and int(n) >= _LOGIN_MAX_FAILS
+    except Exception:
+        return False  # Redis down → don't lock admins out
+
+
+async def _record_login_fail(ip: str) -> None:
+    try:
+        redis = get_redis()
+        key = f"admin:login:fail:{ip}"
+        n = await redis.incr(key)
+        if n == 1:
+            await redis.expire(key, _LOGIN_WINDOW_SECONDS)
+    except Exception:
+        pass
+
+
+async def _clear_login_fails(ip: str) -> None:
+    try:
+        await get_redis().delete(f"admin:login:fail:{ip}")
+    except Exception:
+        pass
 
 # ─── cost / format helpers ────────────────────────────────────────────────────
 
@@ -1298,6 +1338,10 @@ async def login_submit(
     username: str = Form(default=""),
     password: str = Form(default=""),
 ):
+    ip = _login_client_ip(request)
+    if await _login_blocked(ip):
+        return RedirectResponse(url="/admin/login?error=1", status_code=303)
+
     settings = get_settings()
     ok = (
         bool(settings.admin_password)
@@ -1305,8 +1349,10 @@ async def login_submit(
         and _secrets.compare_digest(password, settings.admin_password)
     )
     if ok:
+        await _clear_login_fails(ip)
         request.session["authenticated"] = True
         return RedirectResponse(url="/admin/stats", status_code=303)
+    await _record_login_fail(ip)
     return RedirectResponse(url="/admin/login?error=1", status_code=303)
 
 

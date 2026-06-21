@@ -124,10 +124,11 @@ async def check_question(session: AsyncSession, user: User) -> Allowance:
         limit = PREMIUM_LIMITS.question_per_month or 0
         now = datetime.now(UTC)
         reset_at = user.questions_reset_at or now
-        if (now - reset_at).days >= 30:
-            user.premium_questions_used = 0
-            user.questions_reset_at = now
-        monthly_used = user.premium_questions_used or 0
+        # Pure read: if the monthly window has rolled over, treat usage as 0 for
+        # the allowance calc but DON'T mutate the user here. The actual reset is
+        # persisted by reset_premium_questions_if_due() in the consume path.
+        due = (now - reset_at).days >= 30
+        monthly_used = 0 if due else (user.premium_questions_used or 0)
         return Allowance(
             allowed=free_bal > 0 or bonus > 0 or monthly_used < limit,
             used=monthly_used,
@@ -143,6 +144,19 @@ async def check_question(session: AsyncSession, user: User) -> Allowance:
         window="lifetime",
         tier=t,
     )
+
+
+def reset_premium_questions_if_due(user: User) -> None:
+    """Explicitly roll over a premium user's monthly question counter when the
+    30-day window has elapsed. Call inside the locked consume path so the reset
+    is persisted with the surrounding commit (check_question stays side-effect free)."""
+    if not is_premium(user):
+        return
+    now = datetime.now(UTC)
+    reset_at = user.questions_reset_at or now
+    if (now - reset_at).days >= 30:
+        user.premium_questions_used = 0
+        user.questions_reset_at = now
 
 
 def consume_question_from_priority_bucket(user: User) -> None:

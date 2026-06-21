@@ -19,7 +19,7 @@ from astrobot.astrology.transits import (
 from astrobot.bot.handlers.natal import _profile_to_birth
 from astrobot.bot.keyboards import horoscope_period_kb, with_back
 from astrobot.bot.responses import edit_or_send, save_and_send_response
-from astrobot.bot.utils import need_profile
+from astrobot.bot.utils import need_profile, user_llm_lock
 from astrobot.db.models import BirthProfile, HoroscopeCache, LLMUsageLog, User
 from astrobot.limits import check_horoscope, paywall_text
 from astrobot.llm.client import get_llm
@@ -114,82 +114,89 @@ async def on_horoscope_period(
             )
             return
 
-    # Check rate limit (applies to both fresh and regen)
-    allowance = await check_horoscope(session, user)
-    if not allowance.allowed:
+    async with user_llm_lock(user.id) as acquired:
+        if not acquired:
+            await call.answer("⏳ Уже считаю гороскоп — секунду…", show_alert=True)
+            return
+
+        # Rate limit under the lock (applies to both fresh and regen): re-read
+        # committed usage so a burst can't each pass the check and waste LLM calls.
+        await session.refresh(user)
+        allowance = await check_horoscope(session, user)
+        if not allowance.allowed:
+            await call.answer()
+            await call.message.answer(
+                paywall_text("horoscope", allowance), reply_markup=with_back([])
+            )
+            return
+
         await call.answer()
-        await call.message.answer(
-            paywall_text("horoscope", allowance), reply_markup=with_back([])
+        progress = await call.message.answer("🔮 Смотрю, какие планеты идут к тебе сейчас…")
+
+        chart = await asyncio.to_thread(build_natal_chart, birth)
+        natal_md = chart_to_markdown(chart)
+
+        report = await asyncio.to_thread(build_transit_report, birth, today, period)
+        transits_md = transit_report_to_markdown(report)
+
+        cached_context = natal_md + "\n\n" + transits_md
+        user_prompt = {
+            "today": "Дай гороскоп на сегодня.",
+            "week": "Дай гороскоп на ближайшую неделю.",
+            "month": "Дай гороскоп на ближайший месяц.",
+        }[period]
+
+        await progress.edit_text("✨ Складываю узор периода…")
+
+        llm = get_llm()
+        response = await llm.complete(
+            system=build_system_horoscope(user),
+            cached_context=cached_context,
+            user_message=user_prompt,
+            max_tokens=2800,
+            kind=f"horoscope_{period}",
         )
-        return
+        text = response.text
 
-    await call.answer()
-    progress = await call.message.answer("🔮 Смотрю, какие планеты идут к тебе сейчас…")
-
-    chart = await asyncio.to_thread(build_natal_chart, birth)
-    natal_md = chart_to_markdown(chart)
-
-    report = await asyncio.to_thread(build_transit_report, birth, today, period)
-    transits_md = transit_report_to_markdown(report)
-
-    cached_context = natal_md + "\n\n" + transits_md
-    user_prompt = {
-        "today": "Дай гороскоп на сегодня.",
-        "week": "Дай гороскоп на ближайшую неделю.",
-        "month": "Дай гороскоп на ближайший месяц.",
-    }[period]
-
-    await progress.edit_text("✨ Складываю узор периода…")
-
-    llm = get_llm()
-    response = await llm.complete(
-        system=build_system_horoscope(user),
-        cached_context=cached_context,
-        user_message=user_prompt,
-        max_tokens=2800,
-        kind=f"horoscope_{period}",
-    )
-    text = response.text
-
-    # Update or create cache entry
-    existing = await session.scalar(
-        select(HoroscopeCache).where(
-            HoroscopeCache.user_id == user.id,
-            HoroscopeCache.period == period,
+        # Update or create cache entry
+        existing = await session.scalar(
+            select(HoroscopeCache).where(
+                HoroscopeCache.user_id == user.id,
+                HoroscopeCache.period == period,
+            )
         )
-    )
-    if existing:
-        existing.computed_for = today
-        existing.brief = text
-        existing.full = text
-    else:
+        if existing:
+            existing.computed_for = today
+            existing.brief = text
+            existing.full = text
+        else:
+            session.add(
+                HoroscopeCache(
+                    user_id=user.id,
+                    period=period,
+                    computed_for=today,
+                    brief=text,
+                    full=text,
+                )
+            )
+
         session.add(
-            HoroscopeCache(
+            LLMUsageLog(
                 user_id=user.id,
-                period=period,
-                computed_for=today,
-                brief=text,
-                full=text,
+                kind=f"horoscope:{period}",
+                model=response.model,
+                input_tokens=response.input_tokens,
+                cached_tokens=response.cached_input_tokens,
+                output_tokens=response.output_tokens,
             )
         )
 
-    session.add(
-        LLMUsageLog(
-            user_id=user.id,
-            kind=f"horoscope:{period}",
-            model=response.model,
-            input_tokens=response.input_tokens,
-            cached_tokens=response.cached_input_tokens,
-            output_tokens=response.output_tokens,
+        await progress.delete()
+        await save_and_send_response(
+            call.message,
+            session,
+            user,
+            f"horoscope:{period}",
+            _with_label(text, label),
+            extra_row=_regen_row(period),
         )
-    )
-
-    await progress.delete()
-    await save_and_send_response(
-        call.message,
-        session,
-        user,
-        f"horoscope:{period}",
-        _with_label(text, label),
-        extra_row=_regen_row(period),
-    )

@@ -20,10 +20,14 @@ from astrobot.bot.keyboards import (
     time_unknown_kb,
 )
 from astrobot.bot.states import Onboarding
+from astrobot.bot.utils import rate_limit_ok
 from astrobot.db.models import BirthProfile, HoroscopeCache, User
 from astrobot.gender import guess_gender
 
 router = Router(name="onboarding")
+
+# Cap geocoding (external Nominatim calls) per user to curb spam / OSM ToS abuse.
+GEOCODE_PER_HOUR = 20
 
 
 def _format_birth_summary(data: dict) -> str:
@@ -79,22 +83,25 @@ async def cmd_start(
 
     ref_code = parse_start_arg(message.text)
     if ref_code and is_new_user:
-        inviter = await try_apply_referral(session, user, ref_code)
-        if inviter is not None:
+        applied = await try_apply_referral(session, user, ref_code)
+        if applied is not None:
+            inviter, inviter_credited = applied
             await session.commit()
             REFERRALS_REGISTERED.inc()
             await message.answer(
                 "🎁 Друг тебя пригласил — я добавила <b>+2 бесплатных вопроса</b>. "
                 "Когда захочешь — приходи спрашивать ✨"
             )
-            try:
-                await bot.send_message(
-                    inviter.tg_user_id,
-                    "🎁 По твоей реферальной ссылке зарегистрировался новый пользователь — "
-                    "тебе <b>+2 бесплатных вопроса</b>! ✨",
-                )
-            except Exception:
-                pass
+            # Only ping/credit the inviter while they're under the anti-farming cap.
+            if inviter_credited:
+                try:
+                    await bot.send_message(
+                        inviter.tg_user_id,
+                        "🎁 По твоей реферальной ссылке зарегистрировался новый пользователь — "
+                        "тебе <b>+2 бесплатных вопроса</b>! ✨",
+                    )
+                except Exception:
+                    pass
 
     profile = await session.get(BirthProfile, user.id)
     if profile is not None:
@@ -256,11 +263,19 @@ async def on_time(message: Message, state: FSMContext) -> None:
 # ─── Шаг 5: город ─────────────────────────────────────────────────────────────
 
 @router.message(Onboarding.waiting_for_city)
-async def on_city(message: Message, state: FSMContext, session: AsyncSession) -> None:
+async def on_city(
+    message: Message, state: FSMContext, session: AsyncSession, user: User
+) -> None:
     query = (message.text or "").strip()
     if len(query) < 2:
         await message.answer(
             "Слишком короткое название. Введи город, например <code>Москва</code>."
+        )
+        return
+
+    if not await rate_limit_ok(f"geo:rl:{user.id}", GEOCODE_PER_HOUR, 3600):
+        await message.answer(
+            "⏳ Слишком много запросов городов подряд. Попробуй через несколько минут."
         )
         return
 

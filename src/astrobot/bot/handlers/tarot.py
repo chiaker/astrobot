@@ -9,8 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from astrobot.bot.keyboards import MENU_BACK_BTN, premium_or_back_kb, promo_row, tarot_entry_kb
 from astrobot.bot.responses import edit_or_send, save_and_send_response
 from astrobot.bot.states import TarotFlow
+from astrobot.bot.utils import user_llm_lock
 from astrobot.db.models import LLMUsageLog, Response, User
-from astrobot.limits import check_question, consume_question_from_priority_bucket, paywall_text
+from astrobot.limits import (
+    check_question,
+    consume_question_from_priority_bucket,
+    paywall_text,
+    reset_premium_questions_if_due,
+)
 from astrobot.llm.client import get_llm
 from astrobot.llm.prompts import build_system_tarot
 from astrobot.metrics import CRISIS_TRIGGERED
@@ -116,36 +122,51 @@ async def on_tarot_question(
 async def _do_tarot(
     target: Message, session: AsyncSession, user: User, question: str | None
 ) -> None:
-    progress = await target.answer("🃏 Тасую колоду и раскладываю карты…")
+    async with user_llm_lock(user.id) as acquired:
+        if not acquired:
+            await target.answer("⏳ Секунду — предыдущий расклад ещё раскрывается.")
+            return
 
-    cards = draw_three()
-    context = cards_to_markdown(cards, question)
-    spread = " · ".join(
-        f"{c.position}: {c.name}{' (перевёрн.)' if c.reversed else ''}" for c in cards
-    )
+        # Authoritative quota gate under the lock (see question handler).
+        await session.refresh(user)
+        reset_premium_questions_if_due(user)
+        allowance = await check_question(session, user)
+        if not allowance.allowed:
+            await target.answer(
+                paywall_text("question", allowance), reply_markup=premium_or_back_kb()
+            )
+            return
 
-    llm = get_llm()
-    response = await llm.complete(
-        system=build_system_tarot(user),
-        cached_context=context,
-        user_message=question or "Сделай общий расклад на ближайшее время.",
-        max_tokens=1500,
-        kind=_KIND,
-    )
-    text = response.text
+        progress = await target.answer("🃏 Тасую колоду и раскладываю карты…")
 
-    consume_question_from_priority_bucket(user)
-    session.add(
-        LLMUsageLog(
-            user_id=user.id,
-            kind=_KIND,
-            model=response.model,
-            input_tokens=response.input_tokens,
-            cached_tokens=response.cached_input_tokens,
-            output_tokens=response.output_tokens,
+        cards = draw_three()
+        context = cards_to_markdown(cards, question)
+        spread = " · ".join(
+            f"{c.position}: {c.name}{' (перевёрн.)' if c.reversed else ''}" for c in cards
         )
-    )
 
-    await progress.delete()
-    header = f"🃏 <b>Расклад:</b> {spread}\n\n"
-    await save_and_send_response(target, session, user, "tarot", header + text, extra_row=_NEW_ROW)
+        llm = get_llm()
+        response = await llm.complete(
+            system=build_system_tarot(user),
+            cached_context=context,
+            user_message=question or "Сделай общий расклад на ближайшее время.",
+            max_tokens=1500,
+            kind=_KIND,
+        )
+        text = response.text
+
+        consume_question_from_priority_bucket(user)
+        session.add(
+            LLMUsageLog(
+                user_id=user.id,
+                kind=_KIND,
+                model=response.model,
+                input_tokens=response.input_tokens,
+                cached_tokens=response.cached_input_tokens,
+                output_tokens=response.output_tokens,
+            )
+        )
+
+        await progress.delete()
+        header = f"🃏 <b>Расклад:</b> {spread}\n\n"
+        await save_and_send_response(target, session, user, "tarot", header + text, extra_row=_NEW_ROW)

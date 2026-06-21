@@ -22,13 +22,14 @@ from astrobot.bot.keyboards import (
 )
 from astrobot.bot.responses import chunk_text, edit_or_send, safe_answer
 from astrobot.bot.states import AskingQuestion
-from astrobot.bot.utils import need_profile
+from astrobot.bot.utils import need_profile, user_llm_lock
 from astrobot.db.models import BirthProfile, LLMUsageLog, QuestionLog, Response, User
 from astrobot.limits import (
     check_question,
     consume_question_from_priority_bucket,
     is_premium,
     paywall_text,
+    reset_premium_questions_if_due,
 )
 from astrobot.llm.client import HistoryMessage, get_llm
 from astrobot.llm.prompts import build_system_question
@@ -77,78 +78,97 @@ async def _answer_question(
     profile: BirthProfile,
     question: str,
 ) -> None:
-    progress = await target.answer("🌟 Прикладываю карту к твоему вопросу…")
+    async with user_llm_lock(user.id) as acquired:
+        if not acquired:
+            await target.answer(
+                "⏳ Секунду — предыдущий вопрос ещё обрабатывается."
+            )
+            return
 
-    birth = _profile_to_birth(profile, name=user.display_name or user_name or "User")
-    chart = build_natal_chart(birth)
-    natal_md = chart_to_markdown(chart)
+        # Authoritative quota gate UNDER the lock: re-read committed state so a
+        # burst of concurrent questions can't each pass the earlier (unlocked)
+        # pre-check and rack up free LLM calls.
+        await session.refresh(user)
+        reset_premium_questions_if_due(user)
+        allowance = await check_question(session, user)
+        if not allowance.allowed:
+            await target.answer(
+                paywall_text("question", allowance), reply_markup=premium_or_back_kb()
+            )
+            return
 
-    history_rows = await session.scalars(
-        select(QuestionLog)
-        .where(QuestionLog.user_id == user.id)
-        .order_by(desc(QuestionLog.created_at))
-        .limit(5)
-    )
-    history_msgs: list[HistoryMessage] = []
-    for row in list(history_rows)[::-1]:
-        history_msgs.append(HistoryMessage(role="user", content=row.question))
-        history_msgs.append(HistoryMessage(role="assistant", content=row.answer))
+        progress = await target.answer("🌟 Прикладываю карту к твоему вопросу…")
 
-    llm = get_llm()
-    response = await llm.complete(
-        system=build_system_question(user),
-        cached_context=natal_md,
-        user_message=question,
-        history=history_msgs,
-        max_tokens=2500,
-        kind="question",
-    )
+        birth = _profile_to_birth(profile, name=user.display_name or user_name or "User")
+        chart = build_natal_chart(birth)
+        natal_md = chart_to_markdown(chart)
 
-    session.add(QuestionLog(user_id=user.id, question=question, answer=response.text))
-    session.add(
-        LLMUsageLog(
+        history_rows = await session.scalars(
+            select(QuestionLog)
+            .where(QuestionLog.user_id == user.id)
+            .order_by(desc(QuestionLog.created_at))
+            .limit(5)
+        )
+        history_msgs: list[HistoryMessage] = []
+        for row in list(history_rows)[::-1]:
+            history_msgs.append(HistoryMessage(role="user", content=row.question))
+            history_msgs.append(HistoryMessage(role="assistant", content=row.answer))
+
+        llm = get_llm()
+        response = await llm.complete(
+            system=build_system_question(user),
+            cached_context=natal_md,
+            user_message=question,
+            history=history_msgs,
+            max_tokens=2500,
+            kind="question",
+        )
+
+        session.add(QuestionLog(user_id=user.id, question=question, answer=response.text))
+        session.add(
+            LLMUsageLog(
+                user_id=user.id,
+                kind="question",
+                model=response.model,
+                input_tokens=response.input_tokens,
+                cached_tokens=response.cached_input_tokens,
+                output_tokens=response.output_tokens,
+            )
+        )
+        resp_row = Response(
             user_id=user.id,
             kind="question",
-            model=response.model,
-            input_tokens=response.input_tokens,
-            cached_tokens=response.cached_input_tokens,
-            output_tokens=response.output_tokens,
+            brief=response.text,
+            full=response.text,
         )
-    )
-    resp_row = Response(
-        user_id=user.id,
-        kind="question",
-        brief=response.text,
-        full=response.text,
-    )
-    session.add(resp_row)
-    consume_question_from_priority_bucket(user)
-    await session.flush()
-    await session.commit()
+        session.add(resp_row)
+        consume_question_from_priority_bucket(user)
+        await session.flush()
+        await session.commit()
 
-    await progress.delete()
-    rendered = md_to_telegram_html(response.text)
-    chunks = chunk_text(rendered)
-    for i, chunk in enumerate(chunks):
-        kb = chat_answer_kb(resp_row.id, show_premium=not is_premium(user)) if i == len(chunks) - 1 else None
-        await safe_answer(target, chunk, reply_markup=kb)
+        await progress.delete()
+        rendered = md_to_telegram_html(response.text)
+        chunks = chunk_text(rendered)
+        for i, chunk in enumerate(chunks):
+            kb = chat_answer_kb(resp_row.id, show_premium=not is_premium(user)) if i == len(chunks) - 1 else None
+            await safe_answer(target, chunk, reply_markup=kb)
 
-    # Soft-upsell for free users near their limit
-    if not is_premium(user):
-        q_left_check = await check_question(session, user)
-        left = max(0, q_left_check.limit - q_left_check.used)
-        if left == 0:
-            await target.answer(
-                "🌙 Это был твой последний бесплатный вопрос. "
-                "Если хочешь продолжать — открой <b>💎 Премиум</b>.",
-                reply_markup=premium_or_back_kb(),
-            )
-        elif left == 1:
-            await target.answer(
-                "🌙 У тебя остался <b>1 вопрос</b> на бесплатном тарифе. "
-                "Премиум раздвигает горизонты ✨",
-                reply_markup=premium_or_back_kb(),
-            )
+        # Soft-upsell for free users near their limit
+        if not is_premium(user):
+            q_left_check = await check_question(session, user)
+            left = max(0, q_left_check.limit - q_left_check.used)
+            if left == 0:
+                await target.answer(
+                    "🌙 Это был твой последний бесплатный вопрос. "
+                    "Если хочешь продолжать — открой <b>💎 Премиум</b>.",
+                    reply_markup=premium_or_back_kb(),
+                )
+            elif left == 1:
+                await target.answer(
+                    "🌙 У тебя остался <b>1 вопрос</b> на бесплатном тарифе. "
+                    "Премиум раздвигает горизонты ✨",
+                    reply_markup=premium_or_back_kb(),
+                )
 
 
 @router.message(AskingQuestion.waiting_for_text)

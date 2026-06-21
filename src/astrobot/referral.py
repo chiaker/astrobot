@@ -3,12 +3,15 @@ from __future__ import annotations
 import re
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.db.models import User
 
 BONUS_QUESTIONS = 2
+# Cap how many successful referrals can earn an inviter a bonus, to stop a single
+# user farming unlimited free questions by self-inviting throwaway accounts.
+MAX_REWARDED_REFERRALS = 7
 
 _CODE_RE = re.compile(r"^[A-Z0-9]{8}$")
 
@@ -37,8 +40,13 @@ async def try_apply_referral(
     session: AsyncSession,
     invitee: User,
     code: str,
-) -> User | None:
-    """Apply referral code to invitee. Returns the inviter on success, None otherwise."""
+) -> tuple[User, bool] | None:
+    """Apply referral code to invitee.
+
+    Returns (inviter, inviter_credited) on success, or None if the code can't be
+    applied. The invitee always gets their welcome bonus; the inviter is credited
+    only while they're still under MAX_REWARDED_REFERRALS (anti-farming cap).
+    """
     if invitee.referred_by_user_id is not None:
         return None
     if invitee.referral_code == code:
@@ -48,10 +56,20 @@ async def try_apply_referral(
     if inviter is None or inviter.id == invitee.id:
         return None
 
+    # Count the inviter's prior referrals BEFORE linking this one.
+    prior_referrals = (
+        await session.scalar(
+            select(func.count(User.id)).where(User.referred_by_user_id == inviter.id)
+        )
+    ) or 0
+
     invitee.referred_by_user_id = inviter.id
     invitee.bonus_questions = (invitee.bonus_questions or 0) + BONUS_QUESTIONS
-    inviter.bonus_questions = (inviter.bonus_questions or 0) + BONUS_QUESTIONS
-    return inviter
+
+    inviter_credited = prior_referrals < MAX_REWARDED_REFERRALS
+    if inviter_credited:
+        inviter.bonus_questions = (inviter.bonus_questions or 0) + BONUS_QUESTIONS
+    return inviter, inviter_credited
 
 
 async def build_share_link(bot_username: str, code: str) -> str:

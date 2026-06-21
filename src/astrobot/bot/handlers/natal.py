@@ -9,7 +9,7 @@ from astrobot.astrology.serializer import chart_to_markdown
 from astrobot.astrology.types import BirthData
 from astrobot.bot.keyboards import natal_paywall_kb
 from astrobot.bot.responses import save_and_send_response
-from astrobot.bot.utils import need_profile
+from astrobot.bot.utils import need_profile, user_llm_lock
 from astrobot.db.models import BirthProfile, LLMUsageLog, User
 from astrobot.limits import check_natal, consume_natal_bonus_if_needed, paywall_text
 from astrobot.llm.client import get_llm
@@ -88,10 +88,16 @@ async def generate_natal(
 
     Called after onboarding so the chart appears immediately after data entry.
     """
-    pre_call_used = (await check_natal(session, user)).used
-    display_name = user.display_name or "User"
-    progress = await target.answer("🌙 Слушаю, что говорят звёзды о тебе…")
-    await _run_natal_generation(target, session, user, profile, display_name, pre_call_used, progress)
+    async with user_llm_lock(user.id) as acquired:
+        if not acquired:
+            return  # a generation is already running for this user
+        await session.refresh(user)
+        pre_call_used = (await check_natal(session, user)).used
+        display_name = user.display_name or "User"
+        progress = await target.answer("🌙 Слушаю, что говорят звёзды о тебе…")
+        await _run_natal_generation(
+            target, session, user, profile, display_name, pre_call_used, progress
+        )
 
 
 @router.callback_query(F.data == "menu:natal")
@@ -108,14 +114,19 @@ async def on_natal(call: CallbackQuery, session: AsyncSession, user: User) -> No
         )
         return
 
-    allowance = await check_natal(session, user)
-    if not allowance.allowed:
-        await target.answer(paywall_text("natal", allowance), reply_markup=natal_paywall_kb())
-        return
+    async with user_llm_lock(user.id) as acquired:
+        if not acquired:
+            await target.answer("⏳ Секунду — карта ещё считается.")
+            return
+        await session.refresh(user)
+        allowance = await check_natal(session, user)
+        if not allowance.allowed:
+            await target.answer(paywall_text("natal", allowance), reply_markup=natal_paywall_kb())
+            return
 
-    display_name = user.display_name or (call.from_user.full_name if call.from_user else None) or "User"
-    progress = await target.answer("🌙 Слушаю, что говорят звёзды о тебе…")
-    await _run_natal_generation(target, session, user, profile, display_name, allowance.used, progress)
+        display_name = user.display_name or (call.from_user.full_name if call.from_user else None) or "User"
+        progress = await target.answer("🌙 Слушаю, что говорят звёзды о тебе…")
+        await _run_natal_generation(target, session, user, profile, display_name, allowance.used, progress)
 
 
 @router.callback_query(F.data == "natal:regen")
@@ -125,17 +136,22 @@ async def on_natal_regen(call: CallbackQuery, session: AsyncSession, user: User)
         await call.answer("Профиль не найден. Пройди /start.", show_alert=True)
         return
 
-    allowance = await check_natal(session, user)
-    if not allowance.allowed:
+    async with user_llm_lock(user.id) as acquired:
+        if not acquired:
+            await call.answer("⏳ Уже пересчитываю — секунду…", show_alert=True)
+            return
+        await session.refresh(user)
+        allowance = await check_natal(session, user)
+        if not allowance.allowed:
+            await call.answer()
+            await call.message.answer(paywall_text("natal", allowance), reply_markup=natal_paywall_kb())
+            return
+
+        profile.cached_natal_brief = None
+        profile.cached_natal_full = None
+        await session.commit()
+
         await call.answer()
-        await call.message.answer(paywall_text("natal", allowance), reply_markup=natal_paywall_kb())
-        return
-
-    profile.cached_natal_brief = None
-    profile.cached_natal_full = None
-    await session.commit()
-
-    await call.answer()
-    display_name = user.display_name or (call.from_user.full_name if call.from_user else None) or "User"
-    progress = await call.message.answer("🌙 Пересчитываю твою карту заново…")
-    await _run_natal_generation(call.message, session, user, profile, display_name, allowance.used, progress)
+        display_name = user.display_name or (call.from_user.full_name if call.from_user else None) or "User"
+        progress = await call.message.answer("🌙 Пересчитываю твою карту заново…")
+        await _run_natal_generation(call.message, session, user, profile, display_name, allowance.used, progress)
