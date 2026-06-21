@@ -133,16 +133,18 @@ async def _profile_text(profile: BirthProfile, user: User, session: AsyncSession
         bonus_line = f"\n🎁 Доп. вопросы из пакета: <b>{bonus}</b>" if bonus > 0 else ""
         free_left = user.free_questions_balance or 0
         free_line = f"\n🆓 Бесплатных вопросов: <b>{free_left}</b>" if free_left > 0 else ""
+        # Only show the reset date if a reset will actually happen before premium
+        # expires. For a single month, the reset coincides with expiry → pointless.
         reset_dt = next_premium_questions_reset(user)
         reset_line = (
             f"\n🔄 Вопросы обновятся: <b>{reset_dt.strftime('%d.%m.%Y')}</b>"
-            if reset_dt
+            if reset_dt and reset_dt < user.premium_until
             else ""
         )
         return base + (
-            f"💎 <b>Премиум до {until}</b>\n"
+            f"💎 <b>Премиум до {until}</b>{reset_line}\n"
             f"💬 Вопросов в этом месяце: <b>{monthly_left} из {monthly_limit}</b>"
-            f"{bonus_line}{free_line}{reset_line}\n"
+            f"{bonus_line}{free_line}\n"
             f"🔮 Гороскопов сегодня: <b>{h_left} из {h_allow.limit}</b>\n\n"
             "Звёзды в твоём распоряжении ✨"
         )

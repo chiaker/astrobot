@@ -11,15 +11,14 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from astrobot.bot.handlers.menu import send_main_menu
 from astrobot.bot.keyboards import MENU_BACK_BTN
 from astrobot.bot.responses import edit_or_send
 from astrobot.bot.states import PaymentFlow
 from astrobot.config import get_settings
-from sqlalchemy import desc, select
-
-from astrobot.bot.handlers.menu import send_main_menu
 from astrobot.db.models import Payment, User
 from astrobot.limits import (
     NATAL_REGEN_PRICE_RUB,

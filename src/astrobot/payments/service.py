@@ -10,10 +10,9 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import structlog
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from astrobot.config import get_settings
 from astrobot.db.models import LLMUsageLog, Payment, User
