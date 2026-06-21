@@ -46,6 +46,7 @@ class User(Base):
     )
     bonus_questions: Mapped[int] = mapped_column(Integer, default=0)
     free_questions_balance: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
+    premium_questions_used: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # Questions asked before this moment don't count against the monthly quota —
     # set on premium purchase so a buyer gets a full fresh allowance.
     questions_reset_at: Mapped[datetime | None] = mapped_column(

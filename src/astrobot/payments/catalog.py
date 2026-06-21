@@ -78,15 +78,12 @@ class Item:
 def _grant_subscription(days: int) -> Callable[[User], None]:
     def grant(user: User) -> None:
         now = datetime.now(UTC)
-        base = (
-            user.premium_until
-            if user.premium_until and user.premium_until > now
-            else now
-        )
+        was_active = bool(user.premium_until and user.premium_until > now)
+        base = user.premium_until if was_active else now
         user.premium_until = base + timedelta(days=days)
-        # Fresh monthly question quota from the moment of purchase, so questions
-        # used on the free tier don't eat into the premium allowance.
-        user.questions_reset_at = now
+        if not was_active:
+            user.questions_reset_at = now
+            user.premium_questions_used = 0
 
     return grant
 

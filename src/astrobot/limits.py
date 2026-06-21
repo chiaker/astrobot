@@ -122,9 +122,12 @@ async def check_question(session: AsyncSession, user: User) -> Allowance:
 
     if t == "premium":
         limit = PREMIUM_LIMITS.question_per_month or 0
-        monthly_used = await _count(
-            session, user.id, "question", hours=24 * 30, not_before=user.questions_reset_at
-        )
+        now = datetime.now(UTC)
+        reset_at = user.questions_reset_at or now
+        if (now - reset_at).days >= 30:
+            user.premium_questions_used = 0
+            user.questions_reset_at = now
+        monthly_used = user.premium_questions_used or 0
         return Allowance(
             allowed=free_bal > 0 or bonus > 0 or monthly_used < limit,
             used=monthly_used,
@@ -143,11 +146,12 @@ async def check_question(session: AsyncSession, user: User) -> Allowance:
 
 
 def consume_question_from_priority_bucket(user: User) -> None:
-    """Consume from free balance first, then bonus pack, then monthly (implicit via log)."""
     if (user.free_questions_balance or 0) > 0:
         user.free_questions_balance -= 1
     elif (user.bonus_questions or 0) > 0:
         user.bonus_questions -= 1
+    else:
+        user.premium_questions_used = (user.premium_questions_used or 0) + 1
 
 
 CHECKS = {

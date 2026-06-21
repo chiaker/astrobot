@@ -1411,6 +1411,7 @@ async def user_edit(
         user.natal_regens_bonus = 0
         user.questions_reset_at = now
         user.free_questions_balance = 2
+        user.premium_questions_used = 0
         msg = "Аккаунт полностью сброшен."
     else:
         # Manual form submission
