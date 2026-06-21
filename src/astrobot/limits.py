@@ -19,6 +19,10 @@ QUESTION_PACK_SIZE = 10
 QUESTION_PACK_30_SIZE = 30
 QUESTION_PACK_30_PRICE_RUB = 1299
 
+# Premium question quota rolls over every this-many days, anchored to the FIRST
+# premium activation (questions_reset_at) — never to later renewals.
+PREMIUM_QUESTION_PERIOD_DAYS = 30
+
 
 @dataclass(frozen=True)
 class LimitSpec:
@@ -127,7 +131,7 @@ async def check_question(session: AsyncSession, user: User) -> Allowance:
         # Pure read: if the monthly window has rolled over, treat usage as 0 for
         # the allowance calc but DON'T mutate the user here. The actual reset is
         # persisted by reset_premium_questions_if_due() in the consume path.
-        due = (now - reset_at).days >= 30
+        due = (now - reset_at).days >= PREMIUM_QUESTION_PERIOD_DAYS
         monthly_used = 0 if due else (user.premium_questions_used or 0)
         return Allowance(
             allowed=free_bal > 0 or bonus > 0 or monthly_used < limit,
@@ -148,15 +152,37 @@ async def check_question(session: AsyncSession, user: User) -> Allowance:
 
 def reset_premium_questions_if_due(user: User) -> None:
     """Explicitly roll over a premium user's monthly question counter when the
-    30-day window has elapsed. Call inside the locked consume path so the reset
-    is persisted with the surrounding commit (check_question stays side-effect free)."""
+    window has elapsed. Call inside the locked consume path so the reset is
+    persisted with the surrounding commit (check_question stays side-effect free).
+
+    The anchor (questions_reset_at) advances by WHOLE periods rather than jumping
+    to `now`, so the reset day stays pinned to the first premium purchase even
+    after gaps (e.g. the user didn't ask anything for two months)."""
     if not is_premium(user):
         return
     now = datetime.now(UTC)
-    reset_at = user.questions_reset_at or now
-    if (now - reset_at).days >= 30:
-        user.premium_questions_used = 0
+    if user.questions_reset_at is None:
         user.questions_reset_at = now
+        return
+    anchor = user.questions_reset_at
+    periods = (now - anchor).days // PREMIUM_QUESTION_PERIOD_DAYS
+    if periods >= 1:
+        user.premium_questions_used = 0
+        user.questions_reset_at = anchor + timedelta(
+            days=PREMIUM_QUESTION_PERIOD_DAYS * periods
+        )
+
+
+def next_premium_questions_reset(user: User) -> datetime | None:
+    """Datetime of the next monthly question reset for a premium user, anchored
+    to the first premium purchase. Returns None for non-premium users or when no
+    anchor is set."""
+    if not is_premium(user) or user.questions_reset_at is None:
+        return None
+    anchor = user.questions_reset_at
+    now = datetime.now(UTC)
+    periods = max(0, (now - anchor).days // PREMIUM_QUESTION_PERIOD_DAYS)
+    return anchor + timedelta(days=PREMIUM_QUESTION_PERIOD_DAYS * (periods + 1))
 
 
 def consume_question_from_priority_bucket(user: User) -> None:

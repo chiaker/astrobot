@@ -44,7 +44,7 @@ def _plans_kb() -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
-                text=f"💳 {p.title} — {p.price_rub} ₽",
+                text=f"💳 {p.title} ({p.duration_label}) — {p.price_rub} ₽",
                 callback_data=f"pay:{p.code}",
             )
         ]
