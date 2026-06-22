@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, time
 
+import structlog
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -21,9 +22,11 @@ from astrobot.bot.keyboards import (
 )
 from astrobot.bot.states import Onboarding
 from astrobot.bot.utils import rate_limit_ok
+from astrobot.config import get_settings
 from astrobot.db.models import BirthProfile, HoroscopeCache, User
 from astrobot.gender import guess_gender
 
+log = structlog.get_logger(__name__)
 router = Router(name="onboarding")
 
 # Cap geocoding (external Nominatim calls) per user to curb spam / OSM ToS abuse.
@@ -122,14 +125,26 @@ async def cmd_start(
     )
 
     hint = f"\nСейчас: <b>{user.display_name}</b>." if user.display_name else ""
-    await message.answer(
+    welcome_text = (
         "🌙 Здравствуй.\n\n"
         "Меня зовут <b>Астра</b>. Я читаю карты звёзд и расскажу о тебе то, "
         "что записано в небе при твоём рождении.\n\n"
         f"Сначала — как тебя зовут?{hint}\n\n"
-        + ONBOARDING_CONSENT,
-        reply_markup=name_skip_kb(),
+        + ONBOARDING_CONSENT
     )
+    animation = get_settings().welcome_animation
+    if animation:
+        try:
+            # GIF/video as a looping animation with the greeting as its caption.
+            await message.answer_animation(
+                animation=animation, caption=welcome_text, reply_markup=name_skip_kb()
+            )
+        except Exception as e:
+            # Bad file_id / unreachable URL → don't block onboarding, fall back to text.
+            log.warning("welcome_animation_failed", error=str(e))
+            await message.answer(welcome_text, reply_markup=name_skip_kb())
+    else:
+        await message.answer(welcome_text, reply_markup=name_skip_kb())
     await state.set_state(Onboarding.waiting_for_name)
 
 

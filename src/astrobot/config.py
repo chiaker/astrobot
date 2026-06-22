@@ -38,6 +38,9 @@ class Settings(BaseSettings):
 
     bot_username: str = Field(default="", alias="BOT_USERNAME")
     ops_chat_id: int | None = Field(default=None, alias="OPS_CHAT_ID")
+    # Optional welcome animation on first /start: a direct gif/mp4 URL or a
+    # Telegram file_id. Empty → text-only greeting (current behaviour).
+    welcome_animation: str = Field(default="", alias="WELCOME_ANIMATION")
 
     # YooKassa (direct REST API)
     yookassa_shop_id: str = Field(default="", alias="YOOKASSA_SHOP_ID")
