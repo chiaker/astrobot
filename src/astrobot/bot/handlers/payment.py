@@ -134,7 +134,7 @@ async def on_premium_inline(call: CallbackQuery, user: User) -> None:
     await call.answer()
 
 
-@router.callback_query(F.data.startswith("pay:"))
+@router.callback_query(F.data.startswith("pay:"), F.data != "pay:cancel")
 async def on_pay(
     call: CallbackQuery,
     session: AsyncSession,
@@ -286,7 +286,9 @@ async def _start_payment(
     await target.answer(
         f"<b>{item.title}</b> — {item.amount_rub} ₽\n\n"
         "Нажми кнопку ниже, чтобы перейти к безопасной оплате через ЮKassa. "
-        "После оплаты вернись в бот — я подтвержу начисление ✨",
+        "После оплаты вернись в бот — я подтвержу начисление ✨\n\n"
+        "⚠️ <b>Обязательно отключи VPN перед оплатой</b> — иначе платёж может не пройти.\n"
+        "Если что-то пошло не так — напиши нам через «🆘 Поддержка» в меню.",
         reply_markup=kb,
     )
 
