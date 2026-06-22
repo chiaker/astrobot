@@ -4,7 +4,7 @@
     # Grafana under /grafana/ — HTTPS via Caddy, no extra public port needed.
     # Pairs with GF_SERVER_ROOT_URL + GF_SERVER_SERVE_FROM_SUB_PATH in the prod
     # compose override (the prefix is kept, not stripped — Grafana serves it).
-    handle /grafana /grafana/* {
+    handle /grafana* {
         reverse_proxy grafana:3000
     }
 

@@ -309,6 +309,7 @@ async def reconcile_payments_job(bot: Bot) -> None:
             # Unresolved + old → consider abandoned, stop showing as pending
             if result in {"pending", "error", "mismatch"} and payment.created_at < stale_before:
                 payment.status = "canceled"
+                payment.cancel_reason = "timeout"
                 await session.commit()
                 log.info("payment_marked_abandoned", payment_id=payment.id)
 
@@ -325,6 +326,7 @@ async def reconcile_payments_job(bot: Bot) -> None:
         )
         for payment in orphans:
             payment.status = "canceled"
+            payment.cancel_reason = "orphan"
         if orphans:
             await session.commit()
             log.info("orphan_pendings_canceled", count=len(orphans))

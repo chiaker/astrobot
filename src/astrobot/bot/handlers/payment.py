@@ -247,6 +247,7 @@ async def _start_payment(
         )
     except Exception as e:
         payment.status = "canceled"
+        payment.cancel_reason = "create_error"
         await session.commit()
         PAYMENTS_FAILED.labels(stage="create").inc()
         log.warning("payment_create_failed", item=item.code, error=str(e))
@@ -305,6 +306,7 @@ async def on_pay_cancel(
     )
     if pending is not None:
         pending.status = "canceled"
+        pending.cancel_reason = "user"
         await session.commit()
 
     await state.clear()

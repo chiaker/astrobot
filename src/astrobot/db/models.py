@@ -225,6 +225,9 @@ class Payment(Base):
     currency: Mapped[str] = mapped_column(String(8), default="RUB")
     # pending | succeeded | canceled | refunded
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    # Why a canceled payment was canceled: user | create_error | yookassa |
+    # timeout | orphan. NULL for non-canceled payments.
+    cancel_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

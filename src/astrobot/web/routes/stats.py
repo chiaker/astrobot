@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import secrets as _secrets
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -86,7 +87,20 @@ def _money(v: float) -> str:
 def _is_prem(pu, now: datetime) -> bool:
     return pu is not None and pu > now
 
+# Timestamps are stored in UTC; the admin panel displays them in Moscow time.
+_MSK = ZoneInfo("Europe/Moscow")
+
+def _msk(dt):
+    """Convert a stored (UTC) datetime to Moscow time for display. Naive datetimes
+    are assumed UTC. Returns None unchanged."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(_MSK)
+
 def _fmt_dt(dt) -> str:
+    dt = _msk(dt)
     return dt.strftime("%d.%m.%Y %H:%M") if dt else "—"
 
 def _fmt_date(d) -> str:
@@ -106,7 +120,7 @@ def _trunc(s, n: int = 80) -> str:
 
 def _tier_badge(pu, now) -> str:
     if _is_prem(pu, now):
-        return f'<span class="badge b-prem">💎 {pu.strftime("%d.%m.%y")}</span>'
+        return f'<span class="badge b-prem">💎 {_msk(pu).strftime("%d.%m.%y")}</span>'
     return '<span class="badge b-free">Free</span>'
 
 def _kind_badge(k: str) -> str:
@@ -764,7 +778,7 @@ def _render_users(users: list, total: int, page: int, search: str, now: datetime
             f"<td>{tier}</td>"
             f"<td class='r'>{u.bonus_questions or 0}</td>"
             f"<td class='r'>{bonus_natal}</td>"
-            f"<td class='small muted'>{u.created_at.strftime('%d.%m.%Y') if u.created_at else '—'}</td>"
+            f"<td class='small muted'>{_msk(u.created_at).strftime('%d.%m.%Y') if u.created_at else '—'}</td>"
             f"<td><a href='/admin/users/{u.id}' class='btn btn-ghost btn-sm'>→</a></td>"
             f"</tr>"
         )
@@ -833,7 +847,7 @@ async def _gather_user_detail(session: AsyncSession, user_id: int):
 
 def _render_user_detail(user, profile, stats: dict, now: datetime, msg: str = "", err: str = "") -> str:
     prem_val = (
-        user.premium_until.strftime("%Y-%m-%dT%H:%M") if user.premium_until else ""
+        _msk(user.premium_until).strftime("%Y-%m-%dT%H:%M") if user.premium_until else ""
     )
     alert = ""
     if msg:
@@ -916,7 +930,7 @@ def _render_user_detail(user, profile, stats: dict, now: datetime, msg: str = ""
   <form method='post' action='/admin/users/{user.id}'>
     <div class='g3'>
       <div class='fg'>
-        <label>Премиум до (дата/время UTC)</label>
+        <label>Премиум до (дата/время МСК)</label>
         <input type='datetime-local' name='premium_until' value='{prem_val}'>
         <div class='note'>Оставь пустым — сбросит премиум. Или используй быстрые кнопки ниже.</div>
       </div>
@@ -989,7 +1003,7 @@ def _render_logs(logs: list, kind: str, now: datetime) -> str:
         f"<td class='r small'>{r['cached_tokens'] or 0}</td>"
         f"<td class='r small'>{r['output_tokens'] or 0}</td>"
         f"<td class='r'><b>{_money(_cost_of(r['input_tokens'], r['cached_tokens'], r['output_tokens'], settings))}</b></td>"
-        f"<td class='small muted'>{r['created_at'].strftime('%d.%m %H:%M') if r['created_at'] else '—'}</td>"
+        f"<td class='small muted'>{_msk(r['created_at']).strftime('%d.%m %H:%M') if r['created_at'] else '—'}</td>"
         f"</tr>"
         for r in logs
     ) or "<tr><td colspan='10' class='muted'>Нет данных.</td></tr>"
@@ -1028,7 +1042,16 @@ def _money_rub(v) -> str:
     return f"{float(v or 0):.0f} ₽"
 
 
-def _pay_status_badge(status: str) -> str:
+_CANCEL_REASON_LABEL = {
+    "user": "юзер отменил",
+    "create_error": "ошибка создания",
+    "yookassa": "отменён в YooKassa",
+    "timeout": "не оплачен (таймаут)",
+    "orphan": "сбой при создании",
+}
+
+
+def _pay_status_badge(status: str, cancel_reason: str | None = None) -> str:
     m = {
         "succeeded": ("b-ok", "✅ Оплачен"),
         "pending": ("b-warn", "⏳ Ожидает"),
@@ -1036,7 +1059,11 @@ def _pay_status_badge(status: str) -> str:
         "refunded": ("b-natal", "↩️ Возврат"),
     }
     cls, lbl = m.get(status, ("b-free", status or "—"))
-    return f'<span class="badge {cls}">{lbl}</span>'
+    badge = f'<span class="badge {cls}">{lbl}</span>'
+    if status == "canceled" and cancel_reason:
+        reason = _CANCEL_REASON_LABEL.get(cancel_reason, cancel_reason)
+        badge += f'<div class="small muted">{reason}</div>'
+    return badge
 
 
 async def _gather_payments(
@@ -1051,6 +1078,7 @@ async def _gather_payments(
             Payment.amount,
             Payment.currency,
             Payment.status,
+            Payment.cancel_reason,
             Payment.email,
             Payment.created_at,
             Payment.paid_at,
@@ -1140,10 +1168,10 @@ def _render_payments(
         f"<td class='mono small'>{r['tg_user_id']}</td>"
         f"<td>{_esc(r['item_code'])}</td>"
         f"<td class='r'><b>{_money_rub(r['amount'])}</b></td>"
-        f"<td>{_pay_status_badge(r['status'])}</td>"
+        f"<td>{_pay_status_badge(r['status'], r['cancel_reason'])}</td>"
         f"<td class='small muted'>{_trunc(r['email'], 28)}</td>"
-        f"<td class='small muted'>{r['created_at'].strftime('%d.%m %H:%M') if r['created_at'] else '—'}</td>"
-        f"<td class='small muted'>{r['paid_at'].strftime('%d.%m %H:%M') if r['paid_at'] else '—'}</td>"
+        f"<td class='small muted'>{_msk(r['created_at']).strftime('%d.%m %H:%M') if r['created_at'] else '—'}</td>"
+        f"<td class='small muted'>{_msk(r['paid_at']).strftime('%d.%m %H:%M') if r['paid_at'] else '—'}</td>"
         f"<td>{_action(r)}</td>"
         f"</tr>"
         for r in rows
@@ -1233,7 +1261,7 @@ def _render_support(rows: list, status: str, msg: str = "", err: str = "") -> st
     for r in rows:
         kind = "↩️ Возврат" if r["kind"] == "refund" else "💬 Вопрос"
         name = _esc(r["display_name"]) if r["display_name"] else "—"
-        created = r["created_at"].strftime("%d.%m.%Y %H:%M") if r["created_at"] else "—"
+        created = _msk(r["created_at"]).strftime("%d.%m.%Y %H:%M") if r["created_at"] else "—"
         pay_link = (
             f" · <a href='/admin/payments'>платёж #{r['payment_id']}</a>"
             if r["payment_id"]
@@ -1241,7 +1269,7 @@ def _render_support(rows: list, status: str, msg: str = "", err: str = "") -> st
         )
         answer_block = ""
         if r["answer"]:
-            ad = r["answered_at"].strftime("%d.%m.%Y %H:%M") if r["answered_at"] else ""
+            ad = _msk(r["answered_at"]).strftime("%d.%m.%Y %H:%M") if r["answered_at"] else ""
             answer_block = (
                 f"<div class='sep'></div><div class='small'><b>Ответ</b> "
                 f"<span class='muted'>{ad}</span><br>{_esc(r['answer'])}</div>"
@@ -1464,7 +1492,12 @@ async def user_edit(
         if premium_until.strip():
             try:
                 dt = datetime.fromisoformat(premium_until.strip())
-                user.premium_until = dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
+                # The datetime-local input is Moscow time → store as UTC.
+                user.premium_until = (
+                    dt.replace(tzinfo=_MSK).astimezone(UTC)
+                    if dt.tzinfo is None
+                    else dt.astimezone(UTC)
+                )
             except ValueError:
                 pass
         else:

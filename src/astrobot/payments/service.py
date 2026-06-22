@@ -260,6 +260,7 @@ async def reconcile_payment(session: AsyncSession, payment: Payment, bot: Bot | 
     if status == "canceled":
         if payment.status != "canceled":
             payment.status = "canceled"
+            payment.cancel_reason = "yookassa"
             await session.commit()
         return "canceled"
 
