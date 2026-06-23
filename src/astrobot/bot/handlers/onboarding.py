@@ -413,7 +413,7 @@ async def on_final_ok(
 
     name_part = f", {user.display_name}" if user.display_name else ""
     await call.message.answer(
-        f"🌙 Запомнила{name_part}. Читаю твою карту… ✨",
+        f"🌙 Запомнила{name_part} ✨",
         reply_markup=ReplyKeyboardRemove(),
     )
     profile = await session.get(BirthProfile, user.id)
