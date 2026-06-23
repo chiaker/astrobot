@@ -5,6 +5,11 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import structlog
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramRetryAfter,
+)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +24,7 @@ from astrobot.astrology.transits import (
 from astrobot.bot.formatting import md_to_telegram_html
 from astrobot.bot.handlers.horoscope import _period_label
 from astrobot.bot.handlers.natal import _profile_to_birth
+from astrobot.bot.keyboards import followup_cta_kb
 from astrobot.config import get_settings
 from astrobot.db.models import (
     BirthProfile,
@@ -382,6 +388,93 @@ async def premium_expiry_reminder_job(bot: Bot) -> None:
                 PUSH_SENT.labels(kind="premium_expiry", result="fail").inc()
 
 
+# ─── Day-2 (48h after registration) follow-up broadcast ───────────────────────
+
+FOLLOWUP_DELAY_HOURS = 48
+FOLLOWUP_BATCH = 300            # max users handled per run (spreads big backlogs)
+FOLLOWUP_SEND_DELAY = 0.05     # ~20 msg/s, well under Telegram's global limit
+
+_FOLLOWUP_TEXT = (
+    "Мы уже прикоснулись к самым ярким граням твоей натальной карты и "
+    "результаты впечатляют! ✨\n\n"
+    "Но это лишь начало увлекательного путешествия к более глубокому пониманию "
+    "себя.\n\n"
+    "Давай заглянем ещё глубже и я отвечу на вопросы, которые действительно "
+    "важны для тебя.\n\n"
+    "Чтобы выбрать интересующую тему, нажми кнопку «Вопросы» ниже или выбери "
+    "нужный раздел в меню."
+)
+
+
+async def _send_followup(bot: Bot, chat_id: int, animation: str) -> None:
+    """Send the follow-up: animation+caption if configured (falling back to text
+    on a bad file_id), else plain text. Lets TelegramRetryAfter/Forbidden bubble up."""
+    kb = followup_cta_kb()
+    if animation:
+        try:
+            await bot.send_animation(
+                chat_id=chat_id, animation=animation, caption=_FOLLOWUP_TEXT, reply_markup=kb
+            )
+            return
+        except (TelegramRetryAfter, TelegramForbiddenError):
+            raise
+        except Exception as e:
+            log.warning("followup_animation_failed", chat_id=chat_id, error=str(e))
+    await bot.send_message(chat_id=chat_id, text=_FOLLOWUP_TEXT, reply_markup=kb)
+
+
+async def day2_followup_job(bot: Bot) -> None:
+    """Once per user, ~48h after registration: send the follow-up nudge. Only to
+    users who completed onboarding (have a BirthProfile), since the copy talks
+    about their natal chart. Deduped via User.followup_sent_at."""
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(hours=FOLLOWUP_DELAY_HOURS)
+    animation = get_settings().followup_animation
+
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        users = list(
+            await session.scalars(
+                select(User)
+                .where(
+                    User.followup_sent_at.is_(None),
+                    User.created_at <= cutoff,
+                    User.id.in_(select(BirthProfile.user_id)),
+                )
+                .order_by(User.created_at)
+                .limit(FOLLOWUP_BATCH)
+            )
+        )
+        for user in users:
+            try:
+                await _send_followup(bot, user.tg_user_id, animation)
+                user.followup_sent_at = now
+                await session.commit()
+                PUSH_SENT.labels(kind="followup", result="ok").inc()
+                log.info("followup_sent", user_id=user.id)
+                await asyncio.sleep(FOLLOWUP_SEND_DELAY)
+            except TelegramRetryAfter as e:
+                # We're being rate-limited — back off and finish the rest next run.
+                await session.rollback()
+                log.warning("followup_rate_limited", seconds=e.retry_after)
+                await asyncio.sleep(e.retry_after + 0.5)
+                break
+            except (TelegramForbiddenError, TelegramBadRequest) as e:
+                # Bot blocked / chat unavailable — mark sent so we don't retry forever.
+                await session.rollback()
+                user.followup_sent_at = now
+                await session.commit()
+                PUSH_SENT.labels(kind="followup", result="fail").inc()
+                log.info("followup_undeliverable", user_id=user.id, error=str(e))
+            except Exception as e:
+                # Unknown error — mark sent to avoid an infinite retry loop.
+                await session.rollback()
+                user.followup_sent_at = now
+                await session.commit()
+                PUSH_SENT.labels(kind="followup", result="fail").inc()
+                log.warning("followup_failed", user_id=user.id, error=str(e))
+
+
 def build_scheduler(bot: Bot) -> AsyncIOScheduler:
     sched = AsyncIOScheduler(timezone="UTC")
     sched.add_job(
@@ -437,6 +530,16 @@ def build_scheduler(bot: Bot) -> AsyncIOScheduler:
         minute=0,
         args=[bot],
         id="premium_expiry_reminder",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    sched.add_job(
+        day2_followup_job,
+        trigger="cron",
+        minute="*/15",
+        args=[bot],
+        id="day2_followup",
         replace_existing=True,
         coalesce=True,
         max_instances=1,

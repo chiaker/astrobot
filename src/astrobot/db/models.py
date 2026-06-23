@@ -57,6 +57,11 @@ class User(Base):
     last_horoscope_push_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # When the day-2 (48h-after-registration) follow-up message was sent.
+    # NULL = not sent yet.
+    followup_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     legal_agreed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

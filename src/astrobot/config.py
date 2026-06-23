@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # Optional welcome animation on first /start: a direct gif/mp4 URL or a
     # Telegram file_id. Empty → text-only greeting (current behaviour).
     welcome_animation: str = Field(default="", alias="WELCOME_ANIMATION")
+    # Optional animation for the 48h-after-registration follow-up. URL or
+    # Telegram file_id. Empty → text-only follow-up.
+    followup_animation: str = Field(default="", alias="FOLLOWUP_ANIMATION")
 
     # YooKassa (direct REST API)
     yookassa_shop_id: str = Field(default="", alias="YOOKASSA_SHOP_ID")

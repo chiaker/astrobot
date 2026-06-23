@@ -250,6 +250,16 @@ def natal_cta_kb() -> InlineKeyboardMarkup:
     )
 
 
+def followup_cta_kb() -> InlineKeyboardMarkup:
+    """Buttons under the 48h-after-registration follow-up message."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Вопросы", callback_data="menu:question")],
+            [MENU_BACK_BTN],
+        ]
+    )
+
+
 def premium_or_back_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
