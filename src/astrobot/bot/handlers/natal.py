@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from astrobot.astrology.chart import build_natal_chart
 from astrobot.astrology.serializer import chart_to_markdown
 from astrobot.astrology.types import BirthData
-from astrobot.bot.keyboards import natal_paywall_kb
+from astrobot.bot.keyboards import natal_cta_kb, natal_paywall_kb
 from astrobot.bot.responses import save_and_send_response
 from astrobot.bot.utils import need_profile, user_llm_lock
 from astrobot.db.models import BirthProfile, LLMUsageLog, User
@@ -18,6 +18,18 @@ from astrobot.llm.client import get_llm
 from astrobot.llm.prompts import build_system_natal
 
 _REGEN_ROW = [InlineKeyboardButton(text="🔄 Пересчитать заново", callback_data="natal:regen")]
+
+# Shown once, right after the first (onboarding) natal chart — nudges the user
+# toward asking a question or exploring plans.
+_NATAL_CTA_TEXT = (
+    "Вот мы и посмотрели самую поверхностную характеристику по твоей карте. "
+    "Уже отлично! 💫 Думаю, нам стоит покопаться глубже\n\n"
+    'Чтобы выбрать вопрос, нажми ниже на кнопку "Вопросы" либо выбери '
+    "соответствующий пункт в меню. В бесплатном тарифе у тебя есть возможность "
+    "спросить меня 2 раза. Еще ты можешь задать свой вопрос, выбрав платный тариф.\n\n"
+    "Я готова помочь тебе раскрыть новые грани твоей карты и найти ответы, "
+    "которые действительно важны. 🙏"
+)
 
 router = Router(name="natal")
 
@@ -102,6 +114,8 @@ async def generate_natal(
         await _run_natal_generation(
             target, session, user, profile, display_name, pre_call_used, progress
         )
+        # Call-to-action after the very first chart (onboarding only).
+        await target.answer(_NATAL_CTA_TEXT, reply_markup=natal_cta_kb())
 
 
 @router.callback_query(F.data == "menu:natal")

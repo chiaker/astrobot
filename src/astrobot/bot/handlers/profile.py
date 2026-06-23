@@ -55,7 +55,6 @@ def _profile_kb(user: User) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=f"⚧ Пол: {gender_label}", callback_data="settings:gender")],
             [InlineKeyboardButton(text="✏️ Изменить данные / сбросить", callback_data="profile:reset")],
             [InlineKeyboardButton(text="🧾 История операций", callback_data="payments:mine")],
-            [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show")],
             [
                 InlineKeyboardButton(text="⚙️ Настройки", callback_data="menu:settings"),
                 InlineKeyboardButton(text="🆘 Поддержка", callback_data="menu:support"),

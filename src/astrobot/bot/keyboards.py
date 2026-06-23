@@ -34,13 +34,12 @@ def with_back(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
 
 
 def promo_row(user: User) -> list[InlineKeyboardButton]:
-    """Soft upsell shown under results: premium for free users, referral for all."""
+    """Soft upsell shown under results: 💎 Премиум for free users, nothing for
+    premium. Referral lives only in the main menu now. MAY BE EMPTY — callers
+    must skip an empty row (Telegram rejects empty keyboard rows)."""
     if is_premium(user):
-        return [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show")]
-    return [
-        InlineKeyboardButton(text="💎 Премиум", callback_data="menu:premium"),
-        InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show"),
-    ]
+        return []
+    return [InlineKeyboardButton(text="💎 Премиум", callback_data="menu:premium")]
 
 
 def main_menu_inline() -> InlineKeyboardMarkup:
@@ -179,10 +178,7 @@ CHAT_EXIT_BTN = InlineKeyboardButton(text="🚪 Выйти из чата", callb
 
 def chat_answer_kb(response_id: int, show_premium: bool = False) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{response_id}"),
-            InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show"),
-        ],
+        [InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{response_id}")],
     ]
     if show_premium:
         rows.append([InlineKeyboardButton(text="💎 Открыть Премиум", callback_data="menu:premium")])
@@ -239,6 +235,17 @@ def horoscope_regen_kb(period: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Пересчитать заново", callback_data=f"horo:regen:{period}")]
+        ]
+    )
+
+
+def natal_cta_kb() -> InlineKeyboardMarkup:
+    """Call-to-action shown once after the first (onboarding) natal chart."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Вопросы", callback_data="menu:question")],
+            [InlineKeyboardButton(text="💎 Тарифы", callback_data="menu:premium")],
+            [MENU_BACK_BTN],
         ]
     )
 

@@ -43,14 +43,14 @@ _NEW_ROW = [InlineKeyboardButton(text="💞 Новый расчёт", callback_d
 
 
 def _last_kb(resp_id: int, user: User) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            _NEW_ROW,
-            [InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{resp_id}")],
-            promo_row(user),
-            [MENU_BACK_BTN],
-        ]
-    )
+    rows: list[list[InlineKeyboardButton]] = [
+        _NEW_ROW,
+        [InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{resp_id}")],
+    ]
+    if (pr := promo_row(user)):
+        rows.append(pr)
+    rows.append([MENU_BACK_BTN])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _start_new(

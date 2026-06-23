@@ -35,7 +35,6 @@ ABOUT_TEXT = (
 def _about_kb() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="💎 Премиум", callback_data="menu:premium")],
-        [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show")],
         [MENU_BACK_BTN],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)

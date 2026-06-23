@@ -50,8 +50,8 @@ def response_actions_kb(
     rows: list[list[InlineKeyboardButton]] = [[save]]
     if extra_row:
         rows.append(extra_row)
-    if user is not None:
-        rows.append(promo_row(user))
+    if user is not None and (pr := promo_row(user)):
+        rows.append(pr)
     rows.append([MENU_BACK_NEW_BTN])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
