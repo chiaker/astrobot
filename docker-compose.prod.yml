@@ -13,13 +13,13 @@ services:
     expose:
       - "8000"
 
-  # Serve Grafana behind Caddy under https://<domain>/grafana/ instead of the
-  # raw :3000 port (which firewalls/networks often block). Caddy reaches it over
-  # the internal compose network, so the loopback-only port binding is enough.
+  # Grafana on its OWN subdomain (GRAFANA_DOMAIN) behind Caddy — serving at the
+  # domain root avoids the serve_from_sub_path auth-endpoint bug. Caddy reaches
+  # it over the internal compose network; the loopback host-port binding stays.
   grafana:
     environment:
-      GF_SERVER_ROOT_URL: "https://${BOT_DOMAIN}/grafana/"
-      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_SERVER_ROOT_URL: "https://${GRAFANA_DOMAIN:-grafana.localhost}/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "false"
 
   caddy:
     image: caddy:2-alpine
@@ -34,6 +34,10 @@ services:
       - "443:443"
     environment:
       BOT_DOMAIN: ${BOT_DOMAIN}
+      # Subdomain for Grafana, e.g. grafana.astrobot.dns.army. Default
+      # grafana.localhost is harmless (Caddy internal cert, no public ACME) when
+      # unset, so the bot's site never breaks.
+      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:-grafana.localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

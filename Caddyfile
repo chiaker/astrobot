@@ -1,20 +1,17 @@
+# Bot (webhook, /admin, /metrics, /health) on the main domain.
 {$BOT_DOMAIN} {
-    encode gzip
+	reverse_proxy app:8000
+	encode gzip
+	log {
+		output stderr
+		format console
+	}
+}
 
-    # Grafana under /grafana/ — HTTPS via Caddy, no extra public port needed.
-    # Pairs with GF_SERVER_ROOT_URL + GF_SERVER_SERVE_FROM_SUB_PATH in the prod
-    # compose override (the prefix is kept, not stripped — Grafana serves it).
-    handle /grafana* {
-        reverse_proxy grafana:3000
-    }
-
-    # Everything else → the bot app (webhook, /admin, /metrics, /health).
-    handle {
-        reverse_proxy app:8000
-    }
-
-    log {
-        output stderr
-        format console
-    }
+# Grafana on its own subdomain (served at root — no sub-path quirks).
+# GRAFANA_DOMAIN defaults to grafana.localhost when unset (internal cert, no
+# public ACME) so this block never breaks the bot's site.
+{$GRAFANA_DOMAIN} {
+	reverse_proxy grafana:3000
+	encode gzip
 }
