@@ -26,7 +26,7 @@ _NATAL_CTA_TEXT = (
     "Уже отлично! 💫 Думаю, нам стоит покопаться глубже\n\n"
     'Чтобы выбрать вопрос, нажми ниже на кнопку "Вопросы" либо выбери '
     "соответствующий пункт в меню. В бесплатном тарифе у тебя есть возможность "
-    "спросить меня 2 раза. Еще ты можешь задать свой вопрос, выбрав платный тариф.\n\n"
+    "спросить меня 2 раза.\n\n"
     "Я готова помочь тебе раскрыть новые грани твоей карты и найти ответы, "
     "которые действительно важны. 🙏"
 )
@@ -103,15 +103,20 @@ async def generate_natal(
     user: User,
     profile: BirthProfile,
 ) -> None:
-    """Generate and send natal chart without paywall/cache checks.
-
-    Called after onboarding so the chart appears immediately after data entry.
+    """Generate and send natal chart after onboarding so it appears right after
+    data entry. Still respects the monthly natal quota: a brand-new user has it
+    free, but re-onboarding after a profile reset (when the chart was already
+    generated this month) hits the paywall — regeneration is paid.
     """
     async with user_llm_lock(user.id) as acquired:
         if not acquired:
             return  # a generation is already running for this user
         await session.refresh(user)
-        pre_call_used = (await check_natal(session, user)).used
+        allowance = await check_natal(session, user)
+        if not allowance.allowed:
+            await target.answer(paywall_text("natal", allowance), reply_markup=natal_paywall_kb())
+            return
+        pre_call_used = allowance.used
         display_name = user.display_name or "User"
         progress = await target.answer("🌙 Слушаю, что говорят звёзды о тебе…")
         # No action keyboard on the onboarding chart — the CTA message sent

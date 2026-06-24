@@ -34,12 +34,11 @@ def with_back(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
 
 
 def promo_row(user: User) -> list[InlineKeyboardButton]:
-    """Soft upsell shown under results: 💎 Премиум for free users, nothing for
-    premium. Referral lives only in the main menu now. MAY BE EMPTY — callers
-    must skip an empty row (Telegram rejects empty keyboard rows)."""
-    if is_premium(user):
-        return []
-    return [InlineKeyboardButton(text="💎 Премиум", callback_data="menu:premium")]
+    """No-op kept for callers. Premium is intentionally offered ONLY from the
+    main menu and at genuine paywalls (when the free quota / subscription runs
+    out) — not sprinkled under every result. ALWAYS EMPTY — callers skip an
+    empty row (Telegram rejects empty keyboard rows)."""
+    return []
 
 
 def main_menu_inline() -> InlineKeyboardMarkup:
@@ -244,7 +243,6 @@ def natal_cta_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="💬 Вопросы", callback_data="menu:question")],
-            [InlineKeyboardButton(text="💎 Тарифы", callback_data="menu:premium")],
             [MENU_BACK_BTN],
         ]
     )

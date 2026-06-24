@@ -194,50 +194,6 @@ def consume_question_from_priority_bucket(user: User) -> None:
         user.premium_questions_used = (user.premium_questions_used or 0) + 1
 
 
-def can_ask_own_question(user: User) -> bool:
-    """Cheap pre-check (no quota math): a free-text ('own') question requires
-    premium OR a purchased question pack — the free 2 are for predefined topics."""
-    return is_premium(user) or (user.bonus_questions or 0) > 0
-
-
-def check_own_question(user: User) -> Allowance:
-    """Quota for an own/custom question. Unlike check_question this NEVER counts
-    free_questions_balance — only a pack (bonus) or premium monthly quota."""
-    t = tier_of(user)
-    bonus = max(0, user.bonus_questions or 0)
-    if t == "premium":
-        limit = PREMIUM_LIMITS.question_per_month or 0
-        now = datetime.now(UTC)
-        reset_at = user.questions_reset_at or now
-        due = (now - reset_at).days >= PREMIUM_QUESTION_PERIOD_DAYS
-        monthly_used = 0 if due else (user.premium_questions_used or 0)
-        return Allowance(
-            allowed=bonus > 0 or monthly_used < limit,
-            used=monthly_used,
-            limit=limit,
-            window="month",
-            tier=t,
-        )
-    return Allowance(allowed=bonus > 0, used=0, limit=0, window="lifetime", tier=t)
-
-
-def consume_own_question_bucket(user: User) -> None:
-    """Consume for an own/custom question: pack first, then premium monthly.
-    Never touches free_questions_balance (the free 2 are for predefined topics)."""
-    if (user.bonus_questions or 0) > 0:
-        user.bonus_questions -= 1
-    else:
-        user.premium_questions_used = (user.premium_questions_used or 0) + 1
-
-
-def own_question_paywall_text() -> str:
-    return (
-        "✍️ <b>Свой вопрос</b> доступен в <b>💎 Премиуме</b> или с пакетом вопросов "
-        f"(<b>{QUESTION_PACK_SIZE} за {QUESTION_PACK_PRICE_RUB} ₽</b>).\n\n"
-        "А готовые вопросы по темам можно задать бесплатно — выбери тему ✨"
-    )
-
-
 CHECKS = {
     "natal": check_natal,
     "horoscope": check_horoscope,

@@ -26,13 +26,9 @@ from astrobot.bot.states import AskingQuestion
 from astrobot.bot.utils import need_profile, user_llm_lock
 from astrobot.db.models import BirthProfile, LLMUsageLog, QuestionLog, Response, User
 from astrobot.limits import (
-    can_ask_own_question,
-    check_own_question,
     check_question,
-    consume_own_question_bucket,
     consume_question_from_priority_bucket,
     is_premium,
-    own_question_paywall_text,
     paywall_text,
     reset_premium_questions_if_due,
 )
@@ -82,7 +78,6 @@ async def _answer_question(
     user: User,
     profile: BirthProfile,
     question: str,
-    is_own: bool = False,
 ) -> None:
     async with user_llm_lock(user.id) as acquired:
         if not acquired:
@@ -93,23 +88,16 @@ async def _answer_question(
 
         # Authoritative quota gate UNDER the lock: re-read committed state so a
         # burst of concurrent questions can't each pass the earlier (unlocked)
-        # pre-check and rack up free LLM calls. Own (free-text) questions use a
-        # stricter gate — premium/pack only, never the free 2 predefined ones.
+        # pre-check and rack up free LLM calls. Predefined and own (free-text)
+        # questions share one quota — both are free on the free tier.
         await session.refresh(user)
         reset_premium_questions_if_due(user)
-        if is_own:
-            if not check_own_question(user).allowed:
-                await target.answer(
-                    own_question_paywall_text(), reply_markup=premium_or_back_kb()
-                )
-                return
-        else:
-            allowance = await check_question(session, user)
-            if not allowance.allowed:
-                await target.answer(
-                    paywall_text("question", allowance), reply_markup=premium_or_back_kb()
-                )
-                return
+        allowance = await check_question(session, user)
+        if not allowance.allowed:
+            await target.answer(
+                paywall_text("question", allowance), reply_markup=premium_or_back_kb()
+            )
+            return
 
         progress = await target.answer("🌟 Прикладываю карту к твоему вопросу…")
 
@@ -158,10 +146,7 @@ async def _answer_question(
             full=response.text,
         )
         session.add(resp_row)
-        if is_own:
-            consume_own_question_bucket(user)
-        else:
-            consume_question_from_priority_bucket(user)
+        consume_question_from_priority_bucket(user)
         await session.flush()
         await session.commit()
 
@@ -169,23 +154,17 @@ async def _answer_question(
         rendered = md_to_telegram_html(response.text)
         chunks = chunk_text(rendered)
         for i, chunk in enumerate(chunks):
-            kb = chat_answer_kb(resp_row.id, show_premium=not is_premium(user)) if i == len(chunks) - 1 else None
+            kb = chat_answer_kb(resp_row.id) if i == len(chunks) - 1 else None
             await safe_answer(target, chunk, reply_markup=kb)
 
-        # Soft-upsell for free users near their predefined-question limit
-        if not is_own and not is_premium(user):
+        # Paywall only when the free quota is actually exhausted.
+        if not is_premium(user):
             q_left_check = await check_question(session, user)
             left = max(0, q_left_check.limit - q_left_check.used)
             if left == 0:
                 await target.answer(
                     "🌙 Это был твой последний бесплатный вопрос. "
                     "Если хочешь продолжать — открой <b>💎 Премиум</b>.",
-                    reply_markup=premium_or_back_kb(),
-                )
-            elif left == 1:
-                await target.answer(
-                    "🌙 У тебя остался <b>1 вопрос</b> на бесплатном тарифе. "
-                    "Премиум раздвигает горизонты ✨",
                     reply_markup=premium_or_back_kb(),
                 )
 
@@ -223,12 +202,8 @@ async def on_question_text(
         await message.answer("Сначала познакомимся — нажми /start.")
         return
 
-    # A typed message is a custom ("own") question — premium/pack only.
-    # Quick pre-check (the authoritative gate is inside _answer_question).
-    if not can_ask_own_question(user):
-        await message.answer(own_question_paywall_text(), reply_markup=premium_or_back_kb())
-        return
-
+    # A typed message is a custom ("own") question — free on every tier, drawing
+    # from the same quota as the predefined topics (gated inside _answer_question).
     # Stay in chat mode (no state.clear) — the next message is a new question.
     await _answer_question(
         message,
@@ -237,7 +212,6 @@ async def on_question_text(
         user,
         profile,
         question,
-        is_own=True,
     )
 
 
@@ -254,14 +228,8 @@ async def on_chat_exit(
 
 
 @router.callback_query(AskingQuestion.waiting_for_text, F.data == "chat:own_question")
-async def on_own_question(call: CallbackQuery, user: User) -> None:
+async def on_own_question(call: CallbackQuery) -> None:
     await call.answer()
-    # Own (free-text) question is premium/pack only.
-    if not can_ask_own_question(user):
-        await call.message.answer(
-            own_question_paywall_text(), reply_markup=premium_or_back_kb()
-        )
-        return
     try:
         await call.message.edit_text(
             "✍️ Напиши свой вопрос:",

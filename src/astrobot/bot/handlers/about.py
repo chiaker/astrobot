@@ -3,7 +3,6 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.types import (
     CallbackQuery,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
 
@@ -33,11 +32,7 @@ ABOUT_TEXT = (
 
 
 def _about_kb() -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text="💎 Премиум", callback_data="menu:premium")],
-        [MENU_BACK_BTN],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return InlineKeyboardMarkup(inline_keyboard=[[MENU_BACK_BTN]])
 
 
 @router.callback_query(F.data == "menu:about")
