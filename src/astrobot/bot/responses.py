@@ -111,6 +111,7 @@ async def _send_chunks(
     resp_id: int,
     extra_row: list[InlineKeyboardButton] | None = None,
     user: User | None = None,
+    show_actions: bool = True,
 ) -> list[int]:
     rendered = md_to_telegram_html(text)
     chunks = chunk_text(rendered)
@@ -120,7 +121,7 @@ async def _send_chunks(
             await asyncio.sleep(INTER_MESSAGE_DELAY)
         kb = (
             response_actions_kb(resp_id, extra_row, user)
-            if i == len(chunks) - 1
+            if show_actions and i == len(chunks) - 1
             else None
         )
         sent = await safe_answer(target, chunk, reply_markup=kb)
@@ -135,6 +136,7 @@ async def save_and_send_response(
     kind: str,
     text: str,
     extra_row: list[InlineKeyboardButton] | None = None,
+    show_actions: bool = True,
 ) -> Response:
     # Single detailed version. brief mirrors full (column kept for favorites
     # dedup / admin preview — no separate short version is generated anymore).
@@ -142,6 +144,8 @@ async def save_and_send_response(
     session.add(resp)
     await session.flush()
 
-    resp.message_ids = await _send_chunks(message, text, resp.id, extra_row, user)
+    resp.message_ids = await _send_chunks(
+        message, text, resp.id, extra_row, user, show_actions
+    )
     await session.commit()
     return resp

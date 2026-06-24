@@ -55,6 +55,7 @@ async def _run_natal_generation(
     display_name: str,
     pre_call_used: int,
     progress: Message,
+    show_actions: bool = True,
 ) -> None:
     """LLM call + cache update + send result. Progress message is deleted after."""
     birth = _profile_to_birth(profile, name=display_name)
@@ -91,7 +92,9 @@ async def _run_natal_generation(
     )
 
     await progress.delete()
-    await save_and_send_response(target, session, user, "natal", text, extra_row=_REGEN_ROW)
+    await save_and_send_response(
+        target, session, user, "natal", text, extra_row=_REGEN_ROW, show_actions=show_actions
+    )
 
 
 async def generate_natal(
@@ -111,8 +114,11 @@ async def generate_natal(
         pre_call_used = (await check_natal(session, user)).used
         display_name = user.display_name or "User"
         progress = await target.answer("🌙 Слушаю, что говорят звёзды о тебе…")
+        # No action keyboard on the onboarding chart — the CTA message sent
+        # right after already provides navigation buttons.
         await _run_natal_generation(
-            target, session, user, profile, display_name, pre_call_used, progress
+            target, session, user, profile, display_name, pre_call_used, progress,
+            show_actions=False,
         )
         # Call-to-action after the very first chart (onboarding only).
         await target.answer(_NATAL_CTA_TEXT, reply_markup=natal_cta_kb())
