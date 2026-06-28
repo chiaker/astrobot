@@ -145,8 +145,12 @@ services:
       - ./src:/app/src
       - ./tests:/app/tests
       - ./alembic.ini:/app/alembic.ini
-    ports:
-      - "8000:8000"
+    # No host port here: in prod the app is scaled to two replicas during a
+    # docker-rollout swap, and two containers can't publish the same host port.
+    # Caddy reaches it over the compose network via `expose: 8000`. Local dev
+    # gets the 8000:8000 mapping from docker-compose.override.yml (auto-loaded).
+    expose:
+      - "8000"
     restart: unless-stopped
     command: ["python", "-m", "astrobot.main"]
 

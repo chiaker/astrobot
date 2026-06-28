@@ -9,7 +9,6 @@ services:
     build: null
     command: ["python", "-m", "astrobot.main", "--mode=webhook"]
     volumes: []
-    ports: []
     expose:
       - "8000"
     # Readiness gate for zero-downtime deploys: docker-rollout waits for this to

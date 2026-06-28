@@ -1,0 +1,11 @@
+# Local-dev only. `docker compose` auto-loads this file when no -f flags are
+# given, so `make`/`docker compose up` publishes the app on localhost:8000.
+#
+# Production deliberately does NOT load it: the deploy sets
+# COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml, which lists files
+# explicitly and therefore skips this override. That keeps the host port off in
+# prod so docker-rollout can run two app replicas during a zero-downtime swap.
+services:
+  app:
+    ports:
+      - "8000:8000"
