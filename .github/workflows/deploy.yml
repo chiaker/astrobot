@@ -72,41 +72,49 @@ jobs:
             git reset --hard origin/main
             export IMAGE_NAME="${{ steps.image.outputs.name }}"
             export IMAGE_TAG="${{ needs.build.outputs.tag }}"
-            COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+            # Drive compose-file selection via env so every `docker compose` AND
+            # the docker-rollout plugin (which shells out to `docker compose`)
+            # pick up both files — no per-version `-f` flag quirks.
+            export COMPOSE_FILE="docker-compose.yml:docker-compose.prod.yml"
 
-            # Install the docker-rollout CLI plugin on first deploy (idempotent).
-            if ! docker rollout --help >/dev/null 2>&1; then
-              mkdir -p "$HOME/.docker/cli-plugins"
-              curl -fsSL https://raw.githubusercontent.com/wowu/docker-rollout/master/docker-rollout \
-                -o "$HOME/.docker/cli-plugins/docker-rollout"
-              chmod +x "$HOME/.docker/cli-plugins/docker-rollout"
+            # Install/refresh the docker-rollout CLI plugin every deploy. A stale
+            # cached version can miss newer behaviour, so always pull latest;
+            # download to a temp file and swap atomically so a network blip can't
+            # leave a half-written plugin. If the download fails, keep the
+            # existing one (deploy still works via COMPOSE_FILE, no `-f` needed).
+            mkdir -p "$HOME/.docker/cli-plugins"
+            if curl -fsSL https://raw.githubusercontent.com/wowu/docker-rollout/master/docker-rollout \
+                 -o "$HOME/.docker/cli-plugins/docker-rollout.tmp"; then
+              chmod +x "$HOME/.docker/cli-plugins/docker-rollout.tmp"
+              mv "$HOME/.docker/cli-plugins/docker-rollout.tmp" "$HOME/.docker/cli-plugins/docker-rollout"
             fi
 
             # Pull the freshly built image (already on ghcr.io — no build here).
-            $COMPOSE pull app migrate
+            docker compose pull app migrate
 
             # Run migrations to completion BEFORE swapping app. Keep these
             # backward-compatible (expand/contract) so the old container keeps
             # working during the brief two-replica overlap. set -e fails the
             # deploy if a migration errors.
-            $COMPOSE run --rm migrate
+            docker compose run --rm migrate
 
             # Ensure infra + ingress are up without disturbing them. --no-recreate
             # leaves the running app and (crucially) the Caddy ingress untouched;
             # --scale migrate=0 stops `up` from spawning a second migrate run.
-            $COMPOSE up -d --no-recreate --scale migrate=0
+            docker compose up -d --no-recreate --scale migrate=0
 
             # Zero-downtime swap of the bot: start a new app replica, wait for its
             # healthcheck, then drain and remove the old one. Caddy load-balances
-            # across both via DNS during the overlap.
-            docker rollout -f docker-compose.yml -f docker-compose.prod.yml app
+            # across both via DNS during the overlap. No `-f` — COMPOSE_FILE drives
+            # file selection, which every docker-rollout version honours.
+            docker rollout app
 
             # Mounted config files (prometheus.yml scrape targets, Caddyfile routes)
             # don't trigger a recreate, so reload them explicitly. caddy reload is
             # zero-downtime; the `|| true` keeps deploy green if the binary/path
             # differs across caddy versions.
-            $COMPOSE restart prometheus
-            $COMPOSE exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true
+            docker compose restart prometheus
+            docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true
 
             # Remove ALL images not used by a running/created container, not just
             # dangling ones — old :<short_sha> tags accumulate otherwise and fill
