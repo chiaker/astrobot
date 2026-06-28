@@ -12,6 +12,17 @@ services:
     ports: []
     expose:
       - "8000"
+    # Readiness gate for zero-downtime deploys: docker-rollout waits for this to
+    # report healthy on the NEW container before it drains and removes the old
+    # one. /health checks DB + Redis, so a container that can't actually serve
+    # never gets promoted. unless-stopped never restarts on "unhealthy" (only on
+    # exit), so a transient dep blip won't bounce a live container.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # Grafana on its OWN subdomain (GRAFANA_DOMAIN) behind Caddy — serving at the
   # domain root avoids the serve_from_sub_path auth-endpoint bug. Caddy reaches

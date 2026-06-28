@@ -1088,6 +1088,19 @@ def _money_rub(v) -> str:
     return f"{float(v or 0):.0f} ₽"
 
 
+def _money_cur(v, currency: str | None) -> str:
+    """Amount with the right unit: ⭐ for Telegram Stars (XTR), ₽ otherwise."""
+    if currency == "XTR":
+        return f"{float(v or 0):.0f} ⭐"
+    return f"{float(v or 0):.0f} ₽"
+
+
+def _pay_method_badge(currency: str | None) -> str:
+    if currency == "XTR":
+        return '<span class="badge b-natal">⭐ Stars</span>'
+    return '<span class="badge b-free">💳 Карта</span>'
+
+
 _CANCEL_REASON_LABEL = {
     "user": "юзер отменил",
     "create_error": "ошибка создания",
@@ -1190,7 +1203,7 @@ def _render_payments(
     def _action(r) -> str:
         if r["status"] != "succeeded":
             return ""
-        amt = _money_rub(r["amount"])
+        amt = _money_cur(r["amount"], r["currency"])
         uid = r["user_id"]
         normal = (
             f"<form method='post' action='/admin/payments/{r['id']}/refund' "
@@ -1212,8 +1225,8 @@ def _render_payments(
         f"<td class='small muted'>{r['id']}</td>"
         f"<td><a href='/admin/users/{r['user_id']}'>{r['user_id']}</a></td>"
         f"<td class='mono small'>{r['tg_user_id']}</td>"
-        f"<td>{_esc(r['item_code'])}</td>"
-        f"<td class='r'><b>{_money_rub(r['amount'])}</b></td>"
+        f"<td>{_esc(r['item_code'])} {_pay_method_badge(r['currency'])}</td>"
+        f"<td class='r'><b>{_money_cur(r['amount'], r['currency'])}</b></td>"
         f"<td>{_pay_status_badge(r['status'], r['cancel_reason'])}</td>"
         f"<td class='small muted'>{_trunc(r['email'], 28)}</td>"
         f"<td class='small muted'>{_msk(r['created_at']).strftime('%d.%m %H:%M') if r['created_at'] else '—'}</td>"

@@ -1,6 +1,21 @@
 # Bot (webhook, /admin, /metrics, /health) on the main domain.
 {$BOT_DOMAIN} {
-	reverse_proxy app:8000
+	# Dynamic upstreams so deploys are zero-downtime: docker-rollout briefly runs
+	# two `app` replicas, and Docker's embedded DNS (127.0.0.11) returns an A
+	# record per replica. Re-resolving every 2s lets Caddy pick up the new
+	# container and drop the old one without a config reload. lb_try_duration +
+	# fail_duration retry a request that lands on a container being torn down.
+	reverse_proxy {
+		dynamic a {
+			name app
+			port 8000
+			refresh 2s
+			resolvers 127.0.0.11
+		}
+		lb_policy round_robin
+		lb_try_duration 5s
+		fail_duration 10s
+	}
 	encode gzip
 	log {
 		output stderr

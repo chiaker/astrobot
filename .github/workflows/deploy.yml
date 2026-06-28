@@ -72,14 +72,42 @@ jobs:
             git reset --hard origin/main
             export IMAGE_NAME="${{ steps.image.outputs.name }}"
             export IMAGE_TAG="${{ needs.build.outputs.tag }}"
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml pull app migrate
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+            COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+
+            # Install the docker-rollout CLI plugin on first deploy (idempotent).
+            if ! docker rollout --help >/dev/null 2>&1; then
+              mkdir -p "$HOME/.docker/cli-plugins"
+              curl -fsSL https://raw.githubusercontent.com/wowu/docker-rollout/master/docker-rollout \
+                -o "$HOME/.docker/cli-plugins/docker-rollout"
+              chmod +x "$HOME/.docker/cli-plugins/docker-rollout"
+            fi
+
+            # Pull the freshly built image (already on ghcr.io — no build here).
+            $COMPOSE pull app migrate
+
+            # Run migrations to completion BEFORE swapping app. Keep these
+            # backward-compatible (expand/contract) so the old container keeps
+            # working during the brief two-replica overlap. set -e fails the
+            # deploy if a migration errors.
+            $COMPOSE run --rm migrate
+
+            # Ensure infra + ingress are up without disturbing them. --no-recreate
+            # leaves the running app and (crucially) the Caddy ingress untouched;
+            # --scale migrate=0 stops `up` from spawning a second migrate run.
+            $COMPOSE up -d --no-recreate --scale migrate=0
+
+            # Zero-downtime swap of the bot: start a new app replica, wait for its
+            # healthcheck, then drain and remove the old one. Caddy load-balances
+            # across both via DNS during the overlap.
+            docker rollout -f docker-compose.yml -f docker-compose.prod.yml app
+
             # Mounted config files (prometheus.yml scrape targets, Caddyfile routes)
-            # don't trigger a recreate on `up -d`, so reload them explicitly.
-            # caddy reload is zero-downtime; the `|| true` keeps deploy green if the
-            # binary/path differs across caddy versions.
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml restart prometheus
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true
+            # don't trigger a recreate, so reload them explicitly. caddy reload is
+            # zero-downtime; the `|| true` keeps deploy green if the binary/path
+            # differs across caddy versions.
+            $COMPOSE restart prometheus
+            $COMPOSE exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true
+
             # Remove ALL images not used by a running/created container, not just
             # dangling ones — old :<short_sha> tags accumulate otherwise and fill
             # /var/lib/docker/overlay2. Rollbacks re-pull from the registry.

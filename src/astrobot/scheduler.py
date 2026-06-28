@@ -319,12 +319,13 @@ async def reconcile_payments_job(bot: Bot) -> None:
                 await session.commit()
                 log.info("payment_marked_abandoned", payment_id=payment.id)
 
-        # Orphans: created but YooKassa payment id never persisted (crash between
-        # create and save) — they can never be reconciled. Cancel old ones.
+        # Orphans: a YooKassa payment created but whose payment id never persisted
+        # (crash between create and save) — can never be reconciled. Cancel old ones.
         orphans = list(
             await session.scalars(
                 select(Payment).where(
                     Payment.status == "pending",
+                    Payment.provider != "telegram_stars",
                     Payment.yookassa_payment_id.is_(None),
                     Payment.created_at < orphan_before,
                 )
@@ -336,6 +337,27 @@ async def reconcile_payments_job(bot: Bot) -> None:
         if orphans:
             await session.commit()
             log.info("orphan_pendings_canceled", count=len(orphans))
+
+        # Telegram Stars: the user has no "cancel" button and the invoice has no
+        # external status to poll, so an unpaid Stars invoice would sit pending
+        # forever. Mark abandoned ones canceled. Harmless if paid later — the
+        # successful_payment grant still applies (it only short-circuits on
+        # an already-succeeded payment, not a canceled one).
+        stars_pending = list(
+            await session.scalars(
+                select(Payment).where(
+                    Payment.status == "pending",
+                    Payment.provider == "telegram_stars",
+                    Payment.created_at < stale_before,
+                )
+            )
+        )
+        for payment in stars_pending:
+            payment.status = "canceled"
+            payment.cancel_reason = "timeout"
+        if stars_pending:
+            await session.commit()
+            log.info("stars_pendings_canceled", count=len(stars_pending))
 
 
 async def premium_expiry_reminder_job(bot: Bot) -> None:
