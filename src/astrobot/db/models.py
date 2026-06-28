@@ -73,6 +73,11 @@ class User(Base):
     push_tz: Mapped[str | None] = mapped_column(String(64), nullable=True)
     push_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
     push_city_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Test / staff accounts flagged here are dropped from the admin Сводка
+    # (statistics & reports) so they don't skew metrics.
+    excluded_from_stats: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -222,6 +227,11 @@ class Payment(Base):
     provider: Mapped[str] = mapped_column(String(32), default="yookassa")
     # Set after the provider responds; unique → idempotency key for the webhook
     yookassa_payment_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True, nullable=True
+    )
+    # Telegram Stars charge id (telegram_payment_charge_id) — used for refunds
+    # via refund_star_payment. NULL for non-Stars payments.
+    telegram_charge_id: Mapped[str | None] = mapped_column(
         String(64), unique=True, index=True, nullable=True
     )
     item_code: Mapped[str] = mapped_column(String(32))

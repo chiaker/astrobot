@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import desc, func, or_, select, true, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.config import get_settings
@@ -277,6 +277,7 @@ def _layout(title: str, body: str, active: str = "") -> str:
         ("💳 Платежи", "/admin/payments", "payments"),
         ("🆘 Поддержка", "/admin/support", "support"),
         ("📋 Логи LLM", "/admin/logs", "logs"),
+        ("🚫 Исключения", "/admin/exclusions", "exclusions"),
     ]
     nav_html = "".join(
         f'<a href="{url}" class="{"active" if k == active else ""}">{lbl}</a>'
@@ -307,19 +308,43 @@ async def _gather_stats(session: AsyncSession) -> dict:
     d7 = now - timedelta(days=7)
     d30 = now - timedelta(days=30)
 
-    total = (await session.scalar(select(func.count(User.id)))) or 0
+    # Users flagged as excluded (test/staff) are dropped from every metric below.
+    excluded_ids = set(
+        (
+            await session.scalars(
+                select(User.id).where(User.excluded_from_stats.is_(True))
+            )
+        ).all()
+    )
+
+    def _excl(user_id_col):
+        """Filter expression dropping excluded users by their user_id column.
+        No-op (always-true) when nothing is excluded."""
+        return user_id_col.notin_(excluded_ids) if excluded_ids else true()
+
+    total = (await session.scalar(select(func.count(User.id)).where(_excl(User.id)))) or 0
     premium = (
         await session.scalar(
             select(func.count(User.id)).where(
-                User.premium_until.isnot(None), User.premium_until > now
+                User.premium_until.isnot(None), User.premium_until > now, _excl(User.id)
             )
         )
     ) or 0
-    new_24h = (await session.scalar(select(func.count(User.id)).where(User.created_at >= h24))) or 0
-    new_7d = (await session.scalar(select(func.count(User.id)).where(User.created_at >= d7))) or 0
+    new_24h = (
+        await session.scalar(
+            select(func.count(User.id)).where(User.created_at >= h24, _excl(User.id))
+        )
+    ) or 0
+    new_7d = (
+        await session.scalar(
+            select(func.count(User.id)).where(User.created_at >= d7, _excl(User.id))
+        )
+    ) or 0
     referred = (
         await session.scalar(
-            select(func.count(User.id)).where(User.referred_by_user_id.isnot(None))
+            select(func.count(User.id)).where(
+                User.referred_by_user_id.isnot(None), _excl(User.id)
+            )
         )
     ) or 0
 
@@ -337,7 +362,7 @@ async def _gather_stats(session: AsyncSession) -> dict:
                 User.tg_user_id,
             )
             .join(User, User.id == LLMUsageLog.user_id)
-            .where(LLMUsageLog.created_at >= d30)
+            .where(LLMUsageLog.created_at >= d30, _excl(LLMUsageLog.user_id))
         )
     ).mappings().all()
 
@@ -376,7 +401,7 @@ async def _gather_stats(session: AsyncSession) -> dict:
                 func.date_trunc("day", User.created_at).label("d"),
                 func.count(User.id).label("n"),
             )
-            .where(User.created_at >= now - timedelta(days=14))
+            .where(User.created_at >= now - timedelta(days=14), _excl(User.id))
             .group_by("d")
             .order_by("d")
         )
@@ -385,17 +410,23 @@ async def _gather_stats(session: AsyncSession) -> dict:
 
     questions_7d = (
         await session.scalar(
-            select(func.count(QuestionLog.id)).where(QuestionLog.created_at >= d7)
+            select(func.count(QuestionLog.id)).where(
+                QuestionLog.created_at >= d7, _excl(QuestionLog.user_id)
+            )
         )
     ) or 0
-    favorites_total = (await session.scalar(select(func.count(Favorite.id)))) or 0
+    favorites_total = (
+        await session.scalar(
+            select(func.count(Favorite.id)).where(_excl(Favorite.user_id))
+        )
+    ) or 0
 
     days14 = [(now - timedelta(days=i)).strftime("%d.%m") for i in range(13, -1, -1)]
 
     # ── Money: revenue (succeeded payments, by paid_at) ──
     async def _revenue(since: datetime | None) -> float:
         q = select(func.coalesce(func.sum(Payment.amount), 0)).where(
-            Payment.status == "succeeded"
+            Payment.status == "succeeded", _excl(Payment.user_id)
         )
         if since is not None:
             q = q.where(Payment.paid_at >= since)
@@ -414,7 +445,11 @@ async def _gather_stats(session: AsyncSession) -> dict:
                 func.coalesce(func.sum(Payment.amount), 0),
                 func.count(Payment.id),
             )
-            .where(Payment.status == "succeeded", Payment.paid_at >= d30)
+            .where(
+                Payment.status == "succeeded",
+                Payment.paid_at >= d30,
+                _excl(Payment.user_id),
+            )
             .group_by(Payment.kind)
         )
     ).all()
@@ -424,7 +459,9 @@ async def _gather_stats(session: AsyncSession) -> dict:
         (
             await session.scalar(
                 select(func.coalesce(func.sum(Payment.amount), 0)).where(
-                    Payment.status == "refunded", Payment.refunded_at >= d30
+                    Payment.status == "refunded",
+                    Payment.refunded_at >= d30,
+                    _excl(Payment.user_id),
                 )
             )
         )
@@ -433,7 +470,9 @@ async def _gather_stats(session: AsyncSession) -> dict:
     refunds_30d_count = (
         await session.scalar(
             select(func.count(Payment.id)).where(
-                Payment.status == "refunded", Payment.refunded_at >= d30
+                Payment.status == "refunded",
+                Payment.refunded_at >= d30,
+                _excl(Payment.user_id),
             )
         )
     ) or 0
@@ -441,19 +480,24 @@ async def _gather_stats(session: AsyncSession) -> dict:
     paying_users = (
         await session.scalar(
             select(func.count(func.distinct(Payment.user_id))).where(
-                Payment.status == "succeeded"
+                Payment.status == "succeeded", _excl(Payment.user_id)
             )
         )
     ) or 0
 
     # ── Subscriptions / onboarding ──
-    profiles = (await session.scalar(select(func.count(BirthProfile.user_id)))) or 0
+    profiles = (
+        await session.scalar(
+            select(func.count(BirthProfile.user_id)).where(_excl(BirthProfile.user_id))
+        )
+    ) or 0
     expiring_7d = (
         await session.scalar(
             select(func.count(User.id)).where(
                 User.premium_until.isnot(None),
                 User.premium_until > now,
                 User.premium_until <= now + timedelta(days=7),
+                _excl(User.id),
             )
         )
     ) or 0
@@ -463,7 +507,7 @@ async def _gather_stats(session: AsyncSession) -> dict:
         return (
             await session.scalar(
                 select(func.count(func.distinct(LLMUsageLog.user_id))).where(
-                    LLMUsageLog.created_at >= since
+                    LLMUsageLog.created_at >= since, _excl(LLMUsageLog.user_id)
                 )
             )
         ) or 0
@@ -902,6 +946,7 @@ def _render_user_detail(user, profile, stats: dict, now: datetime, msg: str = ""
       <div class='di'><div class='dl'>Регенов натала</div><div class='dv'>{natal_bonus}</div></div>
       <div class='di'><div class='dl'>Согласие</div><div class='dv small muted'>{_fmt_dt(user.legal_agreed_at)}</div></div>
       <div class='di'><div class='dl'>Создан</div><div class='dv small muted'>{_fmt_dt(user.created_at)}</div></div>
+      <div class='di'><div class='dl'>В статистике</div><div class='dv'>{'<span class="badge b-warn">🚫 Исключён</span>' if user.excluded_from_stats else 'Учитывается'}</div></div>
     </div>
   </div>
   <div class='card'>
@@ -952,6 +997,7 @@ def _render_user_detail(user, profile, stats: dict, now: datetime, msg: str = ""
       <button type='submit' name='quick' value='add_natal' class='btn btn-g'>+1 натал</button>
       <button type='submit' name='quick' value='reset_prem' class='btn btn-danger btn-sm'>Сбросить премиум</button>
       <button type='submit' name='quick' value='unlimited_natal' class='btn btn-ghost btn-sm'>∞ Natal (тест)</button>
+      {"<button type='submit' name='quick' value='toggle_excluded' class='btn btn-g btn-sm'>↩ Вернуть в статистику</button>" if user.excluded_from_stats else "<button type='submit' name='quick' value='toggle_excluded' class='btn btn-ghost btn-sm'>🚫 Исключить из статистики</button>"}
       <button type='submit' name='quick' value='reset_all' class='btn btn-danger' onclick="return confirm('Полный сброс аккаунта — премиум, бонусы и лимиты. Продолжить?')">⚠ Полный сброс</button>
     </div>
   </form>
@@ -1315,6 +1361,66 @@ def _render_support(rows: list, status: str, msg: str = "", err: str = "") -> st
     return _layout("Поддержка", body, active="support")
 
 
+# ─── exclusions page ─────────────────────────────────────────────────────────
+
+async def _gather_exclusions(session: AsyncSession) -> list:
+    return list(
+        (
+            await session.execute(
+                select(User)
+                .where(User.excluded_from_stats.is_(True))
+                .order_by(User.tg_user_id)
+            )
+        ).scalars().all()
+    )
+
+
+def _render_exclusions(users: list, msg: str = "", err: str = "") -> str:
+    alert = ""
+    if msg:
+        alert = f"<div class='alert alert-ok'>✓ {_esc(msg)}</div>"
+    elif err:
+        alert = f"<div class='alert alert-err'>✗ {_esc(err)}</div>"
+
+    current_ids = "\n".join(str(u.tg_user_id) for u in users)
+    rows = "".join(
+        f"<tr>"
+        f"<td><a href='/admin/users/{u.id}'>{u.id}</a></td>"
+        f"<td class='mono small'>{u.tg_user_id}</td>"
+        f"<td>{_esc(u.display_name) or '<span class=\"muted\">—</span>'}</td>"
+        f"</tr>"
+        for u in users
+    ) or "<tr><td colspan='3' class='muted'>Никто не исключён.</td></tr>"
+
+    body = f"""
+<h1 class='ph'>Исключения из статистики</h1>
+<p class='ph-sub'>Эти пользователи (тест- и служебные аккаунты) не учитываются в Сводке — ни в метриках, ни в деньгах, ни в активности.</p>
+{alert}
+<div class='card'>
+  <form method='post' action='/admin/exclusions'>
+    <div class='fg'>
+      <label>Telegram ID — по одному в строке (или через запятую/пробел)</label>
+      <textarea name='tg_ids' rows='8'
+        style='width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font:inherit;font-family:monospace'
+        placeholder='123456789&#10;987654321'>{_esc(current_ids)}</textarea>
+      <div class='note'>Это полный список. Сохранение перезапишет исключения целиком — пустое поле снимет все. TG ID, которых нет в базе, будут пропущены.</div>
+    </div>
+    <button type='submit' class='btn btn-p'>Сохранить</button>
+  </form>
+</div>
+<div class='card'>
+  <div class='card-head'><span class='card-title'>Сейчас исключены ({len(users)})</span></div>
+  <div class='tbl-wrap'>
+    <table>
+      <thead><tr><th>ID</th><th>TG ID</th><th>Имя</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+  </div>
+</div>
+"""
+    return _layout("Исключения", body, active="exclusions")
+
+
 # ─── login page ──────────────────────────────────────────────────────────────
 
 _LOGIN_PAGE = """<!doctype html><html lang='ru'><head>
@@ -1479,6 +1585,9 @@ async def user_edit(
     elif quick == "add_natal":
         user.natal_regens_bonus = (user.natal_regens_bonus or 0) + 1
         msg = "Добавлен 1 пересчёт натала."
+    elif quick == "toggle_excluded":
+        user.excluded_from_stats = not user.excluded_from_stats
+        msg = "Исключён из статистики." if user.excluded_from_stats else "Возвращён в статистику."
     elif quick == "reset_all":
         user.premium_until = None
         user.bonus_questions = 0
@@ -1637,3 +1746,50 @@ async def support_reply(
         except Exception:
             pass
     return RedirectResponse(url="/admin/support?msg=Ответ отправлен", status_code=303)
+
+
+@router.get("/admin/exclusions", response_class=HTMLResponse)
+async def exclusions_page(
+    request: Request,
+    msg: str = "",
+    err: str = "",
+    session: AsyncSession = Depends(get_session),
+):
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/admin/login", status_code=303)
+    users = await _gather_exclusions(session)
+    return HTMLResponse(_render_exclusions(users, msg=msg, err=err))
+
+
+@router.post("/admin/exclusions", response_class=HTMLResponse)
+async def exclusions_save(
+    request: Request,
+    tg_ids: str = Form(default=""),
+    session: AsyncSession = Depends(get_session),
+):
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    wanted = {int(t) for t in tg_ids.replace(",", " ").split() if t.strip().isdigit()}
+
+    # The textarea is the full list → clear all flags, then set the listed ones.
+    await session.execute(
+        update(User)
+        .where(User.excluded_from_stats.is_(True))
+        .values(excluded_from_stats=False)
+    )
+    matched = 0
+    if wanted:
+        result = await session.execute(
+            update(User)
+            .where(User.tg_user_id.in_(wanted))
+            .values(excluded_from_stats=True)
+        )
+        matched = result.rowcount or 0
+    await session.commit()
+
+    msg = f"Сохранено. Исключено: {matched}."
+    not_found = len(wanted) - matched
+    if not_found > 0:
+        msg += f" Не найдено в базе: {not_found}."
+    return RedirectResponse(url=f"/admin/exclusions?msg={msg}", status_code=303)
