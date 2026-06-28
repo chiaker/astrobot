@@ -1669,10 +1669,6 @@ async def payment_refund(
         return RedirectResponse(
             url="/admin/payments?err=Вернуть можно только оплаченный платёж", status_code=303
         )
-    if not payment.yookassa_payment_id:
-        return RedirectResponse(
-            url="/admin/payments?err=Нет id платежа в YooKassa", status_code=303
-        )
 
     # Policy gate (skipped when admin forces)
     if not force:
@@ -1683,14 +1679,37 @@ async def payment_refund(
                 status_code=303,
             )
 
-    try:
-        await yookassa.create_refund(payment.yookassa_payment_id, float(payment.amount))
-    except Exception:
-        return RedirectResponse(
-            url="/admin/payments?err=YooKassa отклонила возврат", status_code=303
-        )
-
     bot = getattr(request.app.state, "bot", None)
+
+    if payment.provider == "telegram_stars":
+        if not payment.telegram_charge_id:
+            return RedirectResponse(
+                url="/admin/payments?err=Нет id платежа Telegram Stars", status_code=303
+            )
+        user = await session.get(User, payment.user_id)
+        if user is None or bot is None:
+            return RedirectResponse(
+                url="/admin/payments?err=Не удалось вернуть звёзды (нет бота/юзера)",
+                status_code=303,
+            )
+        try:
+            await bot.refund_star_payment(user.tg_user_id, payment.telegram_charge_id)
+        except Exception:
+            return RedirectResponse(
+                url="/admin/payments?err=Telegram отклонил возврат звёзд", status_code=303
+            )
+    else:
+        if not payment.yookassa_payment_id:
+            return RedirectResponse(
+                url="/admin/payments?err=Нет id платежа в YooKassa", status_code=303
+            )
+        try:
+            await yookassa.create_refund(payment.yookassa_payment_id, float(payment.amount))
+        except Exception:
+            return RedirectResponse(
+                url="/admin/payments?err=YooKassa отклонила возврат", status_code=303
+            )
+
     await payment_service.refund_payment(session, payment, bot)
     suffix = " (принудительно)" if force else ""
     return RedirectResponse(url=f"/admin/payments?msg=Возврат выполнен{suffix}", status_code=303)

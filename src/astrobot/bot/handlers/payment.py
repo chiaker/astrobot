@@ -9,7 +9,9 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    LabeledPrice,
     Message,
+    PreCheckoutQuery,
 )
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,8 +31,8 @@ from astrobot.limits import (
     is_premium,
 )
 from astrobot.metrics import PAYMENTS_CREATED, PAYMENTS_FAILED
-from astrobot.payments import yookassa
-from astrobot.payments.catalog import PLANS, build_receipt, get_item
+from astrobot.payments import service, yookassa
+from astrobot.payments.catalog import PLANS, Item, build_receipt, get_item
 from astrobot.redis_client import get_redis
 
 log = structlog.get_logger(__name__)
@@ -43,8 +45,8 @@ def _plans_kb() -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
-                text=f"💳 {p.title} ({p.duration_label}) — {p.price_rub} ₽",
-                callback_data=f"pay:{p.code}",
+                text=f"💎 {p.title} ({p.duration_label}) — {p.price_rub} ₽",
+                callback_data=f"buy:{p.code}",
             )
         ]
         for p in PLANS
@@ -53,7 +55,7 @@ def _plans_kb() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(
                 text=f"🔄 Пересчёт натальной карты — {NATAL_REGEN_PRICE_RUB} ₽",
-                callback_data="pay:natal_regen",
+                callback_data="buy:natal_regen",
             )
         ]
     )
@@ -61,7 +63,7 @@ def _plans_kb() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(
                 text=f"💬 Пакет {QUESTION_PACK_SIZE} вопросов — {QUESTION_PACK_PRICE_RUB} ₽",
-                callback_data="pay:question_pack",
+                callback_data="buy:question_pack",
             )
         ]
     )
@@ -69,7 +71,33 @@ def _plans_kb() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(
                 text=f"💬 Пакет {QUESTION_PACK_30_SIZE} вопросов — {QUESTION_PACK_30_PRICE_RUB} ₽",
-                callback_data="pay:question_pack_30",
+                callback_data="buy:question_pack_30",
+            )
+        ]
+    )
+    rows.append([MENU_BACK_BTN])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _method_kb(item: Item) -> InlineKeyboardMarkup:
+    """Payment-method picker for a chosen item: card (YooKassa, RUB) and/or
+    Telegram Stars (XTR). Card is shown only when YooKassa is configured."""
+    settings = get_settings()
+    rows: list[list[InlineKeyboardButton]] = []
+    if settings.yookassa_shop_id and settings.yookassa_secret_key:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"💳 Картой — {item.amount_rub} ₽",
+                    callback_data=f"pay:{item.code}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=f"⭐ Telegram Stars — {item.amount_rub}",
+                callback_data=f"stars:{item.code}",
             )
         ]
     )
@@ -132,6 +160,22 @@ async def on_premium(call: CallbackQuery, user: User) -> None:
 async def on_premium_inline(call: CallbackQuery, user: User) -> None:
     await edit_or_send(call, _intro_text(user), _plans_kb())
     await call.answer()
+
+
+@router.callback_query(F.data.startswith("buy:"))
+async def on_buy(call: CallbackQuery) -> None:
+    """Show the payment-method picker (card vs Telegram Stars) for an item."""
+    code = call.data.split(":", 1)[1]
+    item = get_item(code)
+    if item is None:
+        await call.answer("Товар не найден", show_alert=True)
+        return
+    await call.answer()
+    await edit_or_send(
+        call,
+        f"<b>{item.title}</b> — {item.amount_rub} ₽\n\nВыбери способ оплаты:",
+        _method_kb(item),
+    )
 
 
 @router.callback_query(F.data.startswith("pay:"), F.data != "pay:cancel")
@@ -318,3 +362,110 @@ async def on_pay_cancel(
         pass
     await call.answer("Оплата отменена")
     await send_main_menu(call.message, user, session)
+
+
+# ─── Telegram Stars (XTR) ──────────────────────────────────────────────────────
+# Native in-Telegram checkout: send_invoice → pre_checkout_query → successful_payment.
+# Priced 1 star = 1 ₽, no email and no external webhook needed.
+
+@router.callback_query(F.data.startswith("stars:"))
+async def on_pay_stars(
+    call: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    code = call.data.split(":", 1)[1]
+    item = get_item(code)
+    if item is None:
+        await call.answer("Товар не найден", show_alert=True)
+        return
+    await call.answer()
+
+    # Anti-spam: one payment creation per 15s per user (shared with the card flow).
+    redis = get_redis()
+    try:
+        allowed = await redis.set(f"pay:cd:{user.id}", "1", ex=15, nx=True)
+    except Exception:
+        allowed = True
+    if not allowed:
+        await call.message.answer(
+            "⏳ Секунду — предыдущий платёж ещё оформляется. Попробуй через несколько секунд."
+        )
+        return
+
+    payment = Payment(
+        user_id=user.id,
+        provider="telegram_stars",
+        item_code=item.code,
+        kind=item.kind,
+        amount=item.amount_rub,
+        currency="XTR",
+        status="pending",
+    )
+    session.add(payment)
+    await session.flush()
+
+    try:
+        await call.message.bot.send_invoice(
+            chat_id=call.message.chat.id,
+            title=item.title[:32],
+            description=f"{item.title} — Астра"[:255],
+            payload=str(payment.id),
+            provider_token="",  # empty for Telegram Stars
+            currency="XTR",
+            prices=[LabeledPrice(label=item.title[:32], amount=item.amount_rub)],
+        )
+    except Exception as e:
+        payment.status = "canceled"
+        payment.cancel_reason = "create_error"
+        await session.commit()
+        PAYMENTS_FAILED.labels(stage="create").inc()
+        log.warning("stars_invoice_failed", item=item.code, error=str(e))
+        from astrobot.alerts import notify_ops
+
+        await notify_ops(
+            call.message.bot,
+            f"🚨 Не удалось выставить счёт в Telegram Stars\n"
+            f"item={item.code}, user_id={user.id}\nОшибка: {type(e).__name__}: {e}",
+        )
+        await call.message.answer(
+            "🌧 Не получилось создать счёт — попробуй ещё раз чуть позже."
+        )
+        return
+
+    await session.commit()
+    PAYMENTS_CREATED.labels(item=item.code).inc()
+
+
+@router.pre_checkout_query()
+async def on_pre_checkout(query: PreCheckoutQuery) -> None:
+    # Telegram requires an answer within 10s; nothing to validate further here.
+    await query.answer(ok=True)
+
+
+@router.message(F.successful_payment)
+async def on_successful_payment(
+    message: Message,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    sp = message.successful_payment
+    try:
+        payment_id = int(sp.invoice_payload)
+    except (TypeError, ValueError):
+        log.warning("stars_payment_bad_payload", payload=sp.invoice_payload)
+        return
+
+    payment = await session.get(Payment, payment_id)
+    if payment is None or payment.user_id != user.id:
+        log.warning(
+            "stars_payment_unknown",
+            payment_id=payment_id,
+            charge=sp.telegram_payment_charge_id,
+        )
+        return
+
+    payment.telegram_charge_id = sp.telegram_payment_charge_id
+    await session.flush()
+    # Provider-agnostic grant: idempotent, applies the benefit and notifies the user.
+    await service.grant_payment(session, payment, message.bot)

@@ -344,7 +344,7 @@ def natal_paywall_kb() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text=f"💳 Купить пересчёт — {NATAL_REGEN_PRICE_RUB} ₽",
-                    callback_data="pay:natal_regen",
+                    callback_data="buy:natal_regen",
                 )
             ],
             [InlineKeyboardButton(text="💎 Открыть Премиум", callback_data="premium:show")],
