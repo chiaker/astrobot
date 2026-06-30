@@ -109,6 +109,16 @@ jobs:
             # file selection, which every docker-rollout version honours.
             docker rollout app
 
+            # Re-assert the Telegram webhook AFTER the old container is gone. The
+            # webhook is otherwise managed by each container's startup, which races
+            # with the dying old container during a rollout and can leave the bot
+            # with no webhook (admin + outbound sends still work, but commands and
+            # inline buttons go dead until a manual restart). This explicit step
+            # runs inside the freshly-promoted container — with the right token,
+            # secret and URL from its env — so the live URL is always registered.
+            # set -e fails the deploy loudly if the webhook can't be set.
+            docker compose exec -T app python -m astrobot.main --set-webhook
+
             # Mounted config files (prometheus.yml scrape targets, Caddyfile routes)
             # don't trigger a recreate, so reload them explicitly. caddy reload is
             # zero-downtime; the `|| true` keeps deploy green if the binary/path
