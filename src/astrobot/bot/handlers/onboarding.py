@@ -79,6 +79,41 @@ def _format_final_summary(data: dict) -> str:
     )
 
 
+async def prompt_for_name(message: Message, state: FSMContext, user: User) -> None:
+    """Send the welcome + 'how should I call you?' prompt and enter the name FSM
+    step. Shared by /start and the broadcast 'go through onboarding' button."""
+    from astrobot.legal.disclaimer import ONBOARDING_CONSENT
+
+    # Pre-fill existing values so repeat-onboarding users can skip steps.
+    await state.update_data(
+        display_name=user.display_name,
+        gender=user.gender,
+        astro_terms=user.astro_terms_enabled,
+    )
+    hint = f"\nСейчас: <b>{user.display_name}</b>." if user.display_name else ""
+    welcome_text = (
+        "🌙 Здравствуй.\n\n"
+        "Меня зовут <b>Астра</b>. Я читаю карты звёзд и расскажу о тебе то, "
+        "что записано в небе при твоём рождении.\n\n"
+        f"Сначала — как тебя зовут?{hint}\n\n"
+        + ONBOARDING_CONSENT
+    )
+    animation = get_settings().welcome_animation
+    if animation:
+        try:
+            # GIF/video as a looping animation with the greeting as its caption.
+            await message.answer_animation(
+                animation=animation, caption=welcome_text, reply_markup=name_skip_kb()
+            )
+        except Exception as e:
+            # Bad file_id / unreachable URL → don't block onboarding, fall back to text.
+            log.warning("welcome_animation_failed", error=str(e))
+            await message.answer(welcome_text, reply_markup=name_skip_kb())
+    else:
+        await message.answer(welcome_text, reply_markup=name_skip_kb())
+    await state.set_state(Onboarding.waiting_for_name)
+
+
 # ─── /start ───────────────────────────────────────────────────────────────────
 
 @router.message(CommandStart())
@@ -126,37 +161,7 @@ async def cmd_start(
         await send_main_menu(message, user, session)
         return
 
-    from astrobot.legal.disclaimer import ONBOARDING_CONSENT
-
-    # Pre-fill existing values so repeat-onboarding users can skip steps
-    await state.update_data(
-        display_name=user.display_name,
-        gender=user.gender,
-        astro_terms=user.astro_terms_enabled,
-    )
-
-    hint = f"\nСейчас: <b>{user.display_name}</b>." if user.display_name else ""
-    welcome_text = (
-        "🌙 Здравствуй.\n\n"
-        "Меня зовут <b>Астра</b>. Я читаю карты звёзд и расскажу о тебе то, "
-        "что записано в небе при твоём рождении.\n\n"
-        f"Сначала — как тебя зовут?{hint}\n\n"
-        + ONBOARDING_CONSENT
-    )
-    animation = get_settings().welcome_animation
-    if animation:
-        try:
-            # GIF/video as a looping animation with the greeting as its caption.
-            await message.answer_animation(
-                animation=animation, caption=welcome_text, reply_markup=name_skip_kb()
-            )
-        except Exception as e:
-            # Bad file_id / unreachable URL → don't block onboarding, fall back to text.
-            log.warning("welcome_animation_failed", error=str(e))
-            await message.answer(welcome_text, reply_markup=name_skip_kb())
-    else:
-        await message.answer(welcome_text, reply_markup=name_skip_kb())
-    await state.set_state(Onboarding.waiting_for_name)
+    await prompt_for_name(message, state, user)
 
 
 @router.message(Command("cancel"))

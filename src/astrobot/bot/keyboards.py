@@ -257,19 +257,28 @@ def followup_cta_kb() -> InlineKeyboardMarkup:
     )
 
 
-# Maps a broadcast button "type" to a fixed bot callback. The "url" and "ask"
-# types are handled separately (they carry per-button data).
+# Maps a broadcast button "type" to a fixed bot callback. These are all
+# broadcast-specific (bcast:*) callbacks that OPEN the target flow as a NEW
+# message — so the broadcast itself is never edited away when the user taps a
+# button. The "url" and "ask" types are handled separately (per-button data).
 _BROADCAST_CALLBACKS = {
-    "premium": "menu:premium",
-    "question_pack": "buy:question_pack",
-    "open_chat": "menu:question",
+    "premium": "bcast:premium",
+    "question_pack": "bcast:buy:question_pack",
+    "open_chat": "bcast:chat",
+    "onboarding": "bcast:onb",
 }
+
+# URL buttons must carry a real scheme — otherwise Telegram rejects the whole
+# message with BUTTON_URL_INVALID, killing the entire broadcast send.
+_URL_SCHEMES = ("http", "https", "tg")
 
 
 def build_broadcast_kb(variant) -> InlineKeyboardMarkup | None:
     """Build the inline keyboard for a BroadcastVariant from its JSON button list.
-    Each button is a dict {type, label, value}. Unknown/empty entries are skipped.
-    Returns None when there are no valid buttons (Telegram rejects empty markup)."""
+    Each button is a dict {type, label, value}. Unknown/empty/invalid entries are
+    skipped. Returns None when there are no valid buttons (Telegram rejects empty
+    markup). A trailing '🔙 Меню' opens the menu as a NEW message so the broadcast
+    stays visible."""
     rows: list[list[InlineKeyboardButton]] = []
     for idx, btn in enumerate(variant.buttons or []):
         if not isinstance(btn, dict):
@@ -280,7 +289,7 @@ def build_broadcast_kb(variant) -> InlineKeyboardMarkup | None:
         if not label:
             continue
         if btype == "url":
-            if value:
+            if value and value.split("://", 1)[0].lower() in _URL_SCHEMES:
                 rows.append([InlineKeyboardButton(text=label, url=value)])
         elif btype == "ask":
             if value:
@@ -293,7 +302,7 @@ def build_broadcast_kb(variant) -> InlineKeyboardMarkup | None:
             )
     if not rows:
         return None
-    rows.append([MENU_BACK_BTN])
+    rows.append([MENU_BACK_NEW_BTN])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

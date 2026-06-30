@@ -29,6 +29,7 @@ _BTN_TYPES: list[tuple[str, str]] = [
     ("premium", "Купить премиум"),
     ("question_pack", "Докупить вопросы"),
     ("open_chat", "Открыть чат"),
+    ("onboarding", "Пройти онбординг"),
 ]
 
 _STATUS_LABELS = {

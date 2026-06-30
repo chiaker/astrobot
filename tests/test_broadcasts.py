@@ -85,6 +85,7 @@ def test_build_kb_button_types():
             {"type": "premium", "label": "Премиум", "value": ""},
             {"type": "question_pack", "label": "Вопросы", "value": ""},
             {"type": "open_chat", "label": "Чат", "value": ""},
+            {"type": "onboarding", "label": "Онбординг", "value": ""},
         ],
     )
     kb = build_broadcast_kb(v)
@@ -93,10 +94,14 @@ def test_build_kb_button_types():
     assert url_btn.url == "https://x.io"
     cbs = _callbacks(kb)
     assert "bcast:ask:7:1" in cbs
-    assert "menu:premium" in cbs
-    assert "buy:question_pack" in cbs
-    assert "menu:question" in cbs
-    assert "menu:open" in cbs  # trailing back-to-menu row
+    # All action buttons route through bcast:* so they open as a NEW message and
+    # never edit the broadcast away.
+    assert "bcast:premium" in cbs
+    assert "bcast:buy:question_pack" in cbs
+    assert "bcast:chat" in cbs
+    assert "bcast:onb" in cbs
+    assert "menu:new" in cbs  # trailing back-to-menu sends a fresh message
+    assert "menu:open" not in cbs
 
 
 def test_build_kb_skips_invalid_and_returns_none_when_empty():
@@ -110,6 +115,22 @@ def test_build_kb_skips_invalid_and_returns_none_when_empty():
         ],
     )
     assert build_broadcast_kb(v) is None
+
+
+def test_build_kb_rejects_url_without_scheme():
+    # A bare/placeholder URL (no scheme) would trigger BUTTON_URL_INVALID and
+    # kill the whole send — it must be skipped, not rendered.
+    bad = BroadcastVariant(
+        id=1, buttons=[{"type": "url", "label": "Старт", "value": "t.me/<bot>?start=onb"}]
+    )
+    assert build_broadcast_kb(bad) is None
+    good = BroadcastVariant(
+        id=1, buttons=[{"type": "url", "label": "Старт", "value": "https://t.me/bot?start=onb"}]
+    )
+    kb = build_broadcast_kb(good)
+    assert kb is not None and any(
+        b.url == "https://t.me/bot?start=onb" for row in kb.inline_keyboard for b in row
+    )
 
 
 # ─── _variant_question (the ask-button handler parser) ─────────────────────────
