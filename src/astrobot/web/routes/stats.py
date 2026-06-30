@@ -210,6 +210,8 @@ th{text-align:left;padding:8px 12px;color:#64748b;font-size:10px;font-weight:700
 td{padding:9px 12px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
 tr:last-child td{border-bottom:none}
 tbody tr:hover td{background:#faf7ff}
+tbody tr.clickrow{cursor:pointer}
+tbody tr.clickrow a{color:inherit}
 .r{text-align:right}
 
 .badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:8px;font-size:11px;font-weight:600;color:#fff;white-space:nowrap}
@@ -816,8 +818,8 @@ def _render_users(users: list, total: int, page: int, search: str, now: datetime
             else str(u.natal_regens_bonus or 0)
         )
         rows.append(
-            f"<tr>"
-            f"<td><a href='/admin/users/{u.id}'>{u.id}</a></td>"
+            f"<tr class='clickrow' onclick=\"location.href='/admin/users/{u.id}'\">"
+            f"<td>{u.id}</td>"
             f"<td class='mono small'>{u.tg_user_id}</td>"
             f"<td>{name}</td>"
             f"<td>{gender_icon}</td>"
@@ -825,7 +827,7 @@ def _render_users(users: list, total: int, page: int, search: str, now: datetime
             f"<td class='r'>{u.bonus_questions or 0}</td>"
             f"<td class='r'>{bonus_natal}</td>"
             f"<td class='small muted'>{_msk(u.created_at).strftime('%d.%m.%Y') if u.created_at else '—'}</td>"
-            f"<td><a href='/admin/users/{u.id}' class='btn btn-ghost btn-sm'>→</a></td>"
+            f"<td class='muted'>→</td>"
             f"</tr>"
         )
 

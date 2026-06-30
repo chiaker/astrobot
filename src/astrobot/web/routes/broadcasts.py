@@ -157,13 +157,13 @@ def _render_list(rows: list[Broadcast]) -> str:
         trs = []
         for b in rows:
             trs.append(
-                "<tr>"
+                f"<tr class='clickrow' onclick=\"location.href='/admin/broadcasts/{b.id}'\">"
                 f"<td>#{b.id}</td>"
                 f"<td>{_esc(b.name)}</td>"
                 f"<td>{_status_badge(b.status)}</td>"
                 f"<td>{_fmt_msk(b.scheduled_at)}</td>"
                 f"<td>{b.sent_count} / {b.failed_count}</td>"
-                f"<td><a href='/admin/broadcasts/{b.id}' class='btn btn-ghost btn-sm'>→</a></td>"
+                f"<td class='muted'>→</td>"
                 "</tr>"
             )
         body.append(
