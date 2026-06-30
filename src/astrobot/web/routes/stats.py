@@ -17,6 +17,7 @@ from astrobot.db.models import (
     LLMUsageLog,
     Payment,
     QuestionLog,
+    Subscription,
     SupportTicket,
     User,
 )
@@ -277,6 +278,7 @@ def _layout(title: str, body: str, active: str = "") -> str:
         ("💳 Платежи", "/admin/payments", "payments"),
         ("🆘 Поддержка", "/admin/support", "support"),
         ("📋 Логи LLM", "/admin/logs", "logs"),
+        ("📣 Рассылки", "/admin/broadcasts", "broadcasts"),
         ("🚫 Исключения", "/admin/exclusions", "exclusions"),
     ]
     nav_html = "".join(
@@ -885,7 +887,16 @@ async def _gather_user_detail(session: AsyncSession, user_id: int):
         await session.scalar(select(func.count(QuestionLog.id)).where(QuestionLog.user_id == user_id))
     ) or 0
 
-    stats = {"llm": llm_by_kind, "favorites": fav_count, "questions": q_count}
+    sub = await session.scalar(
+        select(Subscription).where(Subscription.user_id == user_id)
+    )
+
+    stats = {
+        "llm": llm_by_kind,
+        "favorites": fav_count,
+        "questions": q_count,
+        "subscription": sub,
+    }
     return user, profile, stats
 
 
@@ -898,6 +909,16 @@ def _render_user_detail(user, profile, stats: dict, now: datetime, msg: str = ""
         alert = f"<div class='alert alert-ok'>✓ {_esc(msg)}</div>"
     if err:
         alert = f"<div class='alert alert-err'>✗ {_esc(err)}</div>"
+
+    sub = stats.get("subscription")
+    if sub is None:
+        sub_str = "—"
+    else:
+        prov = "⭐ Stars" if sub.provider == "telegram_stars" else "💳 Карта"
+        if sub.status == "active":
+            sub_str = f"🔁 {prov}, активна до {_fmt_dt(sub.current_period_end)}"
+        else:
+            sub_str = f"✖ {prov}, отменена ({_fmt_dt(sub.current_period_end)})"
 
     gender_str = {"m": "♂ Мужской", "f": "♀ Женский"}.get(user.gender or "", "—")
     natal_bonus = (
@@ -942,6 +963,7 @@ def _render_user_detail(user, profile, stats: dict, now: datetime, msg: str = ""
       <div class='di'><div class='dl'>Астротермины</div><div class='dv'>{'Вкл' if user.astro_terms_enabled else 'Выкл'}</div></div>
       <div class='di'><div class='dl'>Реф-код</div><div class='dv mono'>{user.referral_code or '—'}</div></div>
       <div class='di'><div class='dl'>Премиум до</div><div class='dv'>{_fmt_dt(user.premium_until)}</div></div>
+      <div class='di'><div class='dl'>Подписка</div><div class='dv small'>{sub_str}</div></div>
       <div class='di'><div class='dl'>Бонус вопросов</div><div class='dv'>{user.bonus_questions or 0}</div></div>
       <div class='di'><div class='dl'>Регенов натала</div><div class='dv'>{natal_bonus}</div></div>
       <div class='di'><div class='dl'>Согласие</div><div class='dv small muted'>{_fmt_dt(user.legal_agreed_at)}</div></div>

@@ -24,23 +24,28 @@ from astrobot.astrology.transits import (
 from astrobot.bot.formatting import md_to_telegram_html
 from astrobot.bot.handlers.horoscope import _period_label
 from astrobot.bot.handlers.natal import _profile_to_birth
-from astrobot.bot.keyboards import followup_cta_kb
+from astrobot.bot.keyboards import build_broadcast_kb, followup_cta_kb
 from astrobot.config import get_settings
 from astrobot.db.models import (
     BirthProfile,
+    Broadcast,
+    BroadcastVariant,
     HoroscopeCache,
     LLMUsageLog,
     LunarEvent,
     Payment,
+    Subscription,
     User,
 )
 from astrobot.db.session import get_sessionmaker
-from astrobot.limits import is_premium
+from astrobot.limits import is_premium, segment_of
 from astrobot.llm.client import get_llm
 from astrobot.llm.prompts import build_system_horoscope
 from astrobot.lunar import compute_phases, horizon_dates, phase_text
 from astrobot.metrics import PUSH_SENT
 from astrobot.payments import service as payment_service
+from astrobot.payments import yookassa
+from astrobot.payments.catalog import build_receipt, get_item
 from astrobot.redis_client import get_redis
 
 if TYPE_CHECKING:
@@ -372,12 +377,18 @@ async def premium_expiry_reminder_job(bot: Bot) -> None:
 
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as session:
+        # Users with an active auto-renewing subscription don't get a "renew
+        # manually" nudge — it renews on its own.
+        active_sub_users = select(Subscription.user_id).where(
+            Subscription.status == "active"
+        )
         users = list(
             await session.scalars(
                 select(User)
                 .where(User.premium_until.isnot(None))
                 .where(User.premium_until > now)
                 .where(User.premium_until <= horizon)
+                .where(User.id.notin_(active_sub_users))
             )
         )
         kb = InlineKeyboardMarkup(
@@ -408,6 +419,107 @@ async def premium_expiry_reminder_job(bot: Bot) -> None:
                 await session.rollback()
                 log.warning("premium_reminder_failed", user_id=user.id, error=str(e))
                 PUSH_SENT.labels(kind="premium_expiry", result="fail").inc()
+
+
+async def _cancel_failed_subscription(
+    session: AsyncSession, sub: Subscription, user: User, bot: Bot
+) -> None:
+    """One-attempt policy: a failed renewal charge cancels the subscription.
+    Premium keeps running until current_period_end, then lapses."""
+    sub.status = "canceled"
+    sub.next_charge_at = None
+    sub.canceled_at = datetime.now(UTC)
+    await session.commit()
+    log.info("subscription_charge_failed_canceled", user_id=user.id)
+    try:
+        await bot.send_message(
+            chat_id=user.tg_user_id,
+            text=(
+                "⚠️ Не получилось продлить премиум — списание с карты не прошло.\n\n"
+                "Автоподписка отключена. Премиум останется активным до конца "
+                "оплаченного срока. Оформить заново можно в разделе 💎 Премиум."
+            ),
+        )
+    except Exception as e:
+        log.warning("sub_cancel_notify_failed", user_id=user.id, error=str(e))
+
+
+async def charge_due_card_subscriptions_job(bot: Bot) -> None:
+    """Hourly: charge YooKassa card subscriptions whose period is ending, using
+    the saved card token. One attempt per cycle — on decline/error the
+    subscription is canceled (per product decision). Stars subscriptions renew on
+    Telegram's side and are not handled here."""
+    now = datetime.now(UTC)
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        subs = list(
+            await session.scalars(
+                select(Subscription).where(
+                    Subscription.provider == "yookassa",
+                    Subscription.status == "active",
+                    Subscription.next_charge_at.isnot(None),
+                    Subscription.next_charge_at <= now,
+                )
+            )
+        )
+        for sub in subs:
+            user = await session.get(User, sub.user_id)
+            item = get_item(sub.plan_code)
+            if user is None or item is None or not sub.yookassa_payment_method_id:
+                continue
+
+            # Clear next_charge_at up front so an overlapping run can't double
+            # charge; a successful reconcile re-arms it via upsert_subscription.
+            sub.next_charge_at = None
+            payment = Payment(
+                user_id=user.id,
+                provider="yookassa",
+                item_code=item.code,
+                kind=item.kind,
+                amount=item.amount_rub,
+                currency="RUB",
+                status="pending",
+                email=user.email,
+            )
+            session.add(payment)
+            await session.flush()
+
+            try:
+                resp = await yookassa.create_recurring_payment(
+                    amount_rub=item.amount_rub,
+                    description=f"{item.title} — Астра (автопродление)",
+                    metadata={
+                        "payment_id": str(payment.id),
+                        "tg_user_id": str(user.tg_user_id),
+                        "item_code": item.code,
+                    },
+                    receipt=build_receipt(user.email or "", item),
+                    payment_method_id=sub.yookassa_payment_method_id,
+                )
+            except Exception as e:
+                log.warning("subscription_charge_error", user_id=user.id, error=str(e))
+                payment.status = "canceled"
+                payment.cancel_reason = "create_error"
+                await _cancel_failed_subscription(session, sub, user, bot)
+                continue
+
+            payment.yookassa_payment_id = resp.get("id")
+            await session.commit()
+            status = resp.get("status")
+
+            if status in {"succeeded", "pending", "waiting_for_capture"}:
+                # reconcile_payment fetches the authoritative state, grants on
+                # success, and re-arms next_charge_at via upsert_subscription.
+                # "pending" is left for the 5-min reconcile job to finish.
+                try:
+                    result = await payment_service.reconcile_payment(session, payment, bot)
+                except Exception as e:
+                    log.warning("subscription_reconcile_error", user_id=user.id, error=str(e))
+                    result = "error"
+                if result in {"canceled", "error", "mismatch"}:
+                    await _cancel_failed_subscription(session, sub, user, bot)
+            else:
+                await _cancel_failed_subscription(session, sub, user, bot)
 
 
 # ─── Day-2 (48h after registration) follow-up broadcast ───────────────────────
@@ -497,6 +609,141 @@ async def day2_followup_job(bot: Bot) -> None:
                 log.warning("followup_failed", user_id=user.id, error=str(e))
 
 
+# ─── Admin-authored broadcast campaigns ───────────────────────────────────────
+
+BROADCAST_BATCH = 300          # users scanned per pass (resumable via cursor)
+BROADCAST_SEND_DELAY = 0.05    # ~20 msg/s, well under Telegram's global limit
+
+
+def _variant_has_content(variant) -> bool:
+    return bool((variant.text or "").strip() or (variant.animation or "").strip())
+
+
+async def _send_broadcast_variant(bot: Bot, chat_id: int, variant) -> None:
+    """Send a broadcast variant: animation+caption if configured (falling back to
+    text on a bad file_id), else plain text. Lets TelegramRetryAfter/Forbidden
+    bubble up to the per-user handler."""
+    kb = build_broadcast_kb(variant)
+    text = variant.text or ""
+    if variant.animation:
+        try:
+            await bot.send_animation(
+                chat_id=chat_id, animation=variant.animation, caption=text, reply_markup=kb
+            )
+            return
+        except (TelegramRetryAfter, TelegramForbiddenError):
+            raise
+        except Exception as e:
+            log.warning("broadcast_animation_failed", chat_id=chat_id, error=str(e))
+    await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
+
+
+async def _run_broadcast(bot: Bot, broadcast_id: int) -> None:
+    """Drain one 'sending' broadcast in resumable batches. Each user is committed
+    individually (cursor + counters) so a crash never double-sends, and a
+    rate-limit pauses the campaign until the next dispatch tick."""
+    sessionmaker = get_sessionmaker()
+    while True:
+        async with sessionmaker() as session:
+            broadcast = await session.get(Broadcast, broadcast_id)
+            if broadcast is None or broadcast.status != "sending":
+                return
+            # Load variants with an explicit query — the lazy `broadcast.variants`
+            # relationship can't be accessed in async context.
+            variant_rows = await session.scalars(
+                select(BroadcastVariant).where(
+                    BroadcastVariant.broadcast_id == broadcast_id
+                )
+            )
+            variants = {
+                v.segment: v
+                for v in variant_rows
+                if v.enabled and _variant_has_content(v)
+            }
+            cursor = broadcast.cursor_user_id or 0
+            users = list(
+                await session.scalars(
+                    select(User)
+                    .where(User.id > cursor)
+                    .order_by(User.id)
+                    .limit(BROADCAST_BATCH)
+                )
+            )
+            if not users:
+                broadcast.status = "sent"
+                broadcast.sent_at = datetime.now(UTC)
+                await session.commit()
+                log.info(
+                    "broadcast_done",
+                    broadcast_id=broadcast_id,
+                    sent=broadcast.sent_count,
+                    failed=broadcast.failed_count,
+                )
+                return
+
+            ids = [u.id for u in users]
+            onboarded = set(
+                await session.scalars(
+                    select(BirthProfile.user_id).where(BirthProfile.user_id.in_(ids))
+                )
+            )
+            for user in users:
+                variant = variants.get(segment_of(user, user.id in onboarded))
+                if variant is not None:
+                    try:
+                        await _send_broadcast_variant(bot, user.tg_user_id, variant)
+                        broadcast.sent_count += 1
+                        PUSH_SENT.labels(kind="broadcast", result="ok").inc()
+                    except TelegramRetryAfter as e:
+                        # Don't advance the cursor past this user — retry next run.
+                        await session.rollback()
+                        log.warning("broadcast_rate_limited", seconds=e.retry_after)
+                        await asyncio.sleep(e.retry_after + 0.5)
+                        return
+                    except (TelegramForbiddenError, TelegramBadRequest) as e:
+                        broadcast.failed_count += 1
+                        PUSH_SENT.labels(kind="broadcast", result="fail").inc()
+                        log.info("broadcast_undeliverable", user_id=user.id, error=str(e))
+                    except Exception as e:
+                        broadcast.failed_count += 1
+                        PUSH_SENT.labels(kind="broadcast", result="fail").inc()
+                        log.warning("broadcast_failed", user_id=user.id, error=str(e))
+                    await asyncio.sleep(BROADCAST_SEND_DELAY)
+                broadcast.cursor_user_id = user.id
+                await session.commit()
+
+
+async def broadcast_dispatch_job(bot: Bot) -> None:
+    """Promote due scheduled broadcasts to 'sending', then drain any in progress."""
+    now = datetime.now(UTC)
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        due = list(
+            await session.scalars(
+                select(Broadcast).where(
+                    Broadcast.status == "scheduled",
+                    Broadcast.scheduled_at.isnot(None),
+                    Broadcast.scheduled_at <= now,
+                )
+            )
+        )
+        for b in due:
+            b.status = "sending"
+        if due:
+            await session.commit()
+
+        sending_ids = list(
+            await session.scalars(
+                select(Broadcast.id)
+                .where(Broadcast.status == "sending")
+                .order_by(Broadcast.id)
+            )
+        )
+
+    for broadcast_id in sending_ids:
+        await _run_broadcast(bot, broadcast_id)
+
+
 def build_scheduler(bot: Bot) -> AsyncIOScheduler:
     sched = AsyncIOScheduler(timezone="UTC")
     sched.add_job(
@@ -562,6 +809,26 @@ def build_scheduler(bot: Bot) -> AsyncIOScheduler:
         minute="*/15",
         args=[bot],
         id="day2_followup",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    sched.add_job(
+        charge_due_card_subscriptions_job,
+        trigger="cron",
+        minute=30,
+        args=[bot],
+        id="charge_card_subs",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    sched.add_job(
+        broadcast_dispatch_job,
+        trigger="cron",
+        minute="*",
+        args=[bot],
+        id="broadcast_dispatch",
         replace_existing=True,
         coalesce=True,
         max_instances=1,

@@ -6,7 +6,6 @@ from aiogram.types import (
 )
 
 from astrobot.db.models import User
-from astrobot.limits import is_premium
 
 MENU_NATAL = "🌟 Натальная карта"
 MENU_HOROSCOPE = "🔮 Гороскоп"
@@ -256,6 +255,46 @@ def followup_cta_kb() -> InlineKeyboardMarkup:
             [MENU_BACK_BTN],
         ]
     )
+
+
+# Maps a broadcast button "type" to a fixed bot callback. The "url" and "ask"
+# types are handled separately (they carry per-button data).
+_BROADCAST_CALLBACKS = {
+    "premium": "menu:premium",
+    "question_pack": "buy:question_pack",
+    "open_chat": "menu:question",
+}
+
+
+def build_broadcast_kb(variant) -> InlineKeyboardMarkup | None:
+    """Build the inline keyboard for a BroadcastVariant from its JSON button list.
+    Each button is a dict {type, label, value}. Unknown/empty entries are skipped.
+    Returns None when there are no valid buttons (Telegram rejects empty markup)."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for idx, btn in enumerate(variant.buttons or []):
+        if not isinstance(btn, dict):
+            continue
+        btype = (btn.get("type") or "").strip()
+        label = (btn.get("label") or "").strip()
+        value = (btn.get("value") or "").strip()
+        if not label:
+            continue
+        if btype == "url":
+            if value:
+                rows.append([InlineKeyboardButton(text=label, url=value)])
+        elif btype == "ask":
+            if value:
+                rows.append(
+                    [InlineKeyboardButton(text=label, callback_data=f"bcast:ask:{variant.id}:{idx}")]
+                )
+        elif btype in _BROADCAST_CALLBACKS:
+            rows.append(
+                [InlineKeyboardButton(text=label, callback_data=_BROADCAST_CALLBACKS[btype])]
+            )
+    if not rows:
+        return None
+    rows.append([MENU_BACK_BTN])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def premium_or_back_kb() -> InlineKeyboardMarkup:

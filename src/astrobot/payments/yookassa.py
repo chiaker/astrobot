@@ -97,10 +97,15 @@ async def create_payment(
     metadata: dict,
     receipt: dict | None,
     return_url: str,
+    save_payment_method: bool = False,
 ) -> dict:
     """Create a YooKassa payment. Returns the raw payment JSON.
 
     Caller reads `id`, `confirmation.confirmation_url`, `status` from the result.
+
+    save_payment_method=True asks YooKassa to tokenize the card for later
+    off-session charges; after the payment succeeds the saved token id is exposed
+    as `payment_method.id` and reused via create_recurring_payment.
     """
     body: dict = {
         "amount": {"value": f"{amount_rub:.2f}", "currency": "RUB"},
@@ -109,11 +114,44 @@ async def create_payment(
         "description": description[:128],
         "metadata": metadata,
     }
+    if save_payment_method:
+        body["save_payment_method"] = True
     if receipt is not None:
         body["receipt"] = receipt
 
     headers = {"Idempotence-Key": uuid4().hex}
     return await _request("POST", "/payments", op="create_payment", headers=headers, json=body)
+
+
+async def create_recurring_payment(
+    *,
+    amount_rub: float,
+    description: str,
+    metadata: dict,
+    receipt: dict | None,
+    payment_method_id: str,
+) -> dict:
+    """Charge a saved card token off-session (subscription renewal).
+
+    No `confirmation` block — the saved `payment_method_id` authorizes the charge
+    without user interaction. Returns the raw payment JSON; `status` is usually
+    `succeeded` immediately, but may be `pending` (then the webhook/reconcile job
+    resolves it).
+    """
+    body: dict = {
+        "amount": {"value": f"{amount_rub:.2f}", "currency": "RUB"},
+        "capture": True,
+        "payment_method_id": payment_method_id,
+        "description": description[:128],
+        "metadata": metadata,
+    }
+    if receipt is not None:
+        body["receipt"] = receipt
+
+    headers = {"Idempotence-Key": uuid4().hex}
+    return await _request(
+        "POST", "/payments", op="create_recurring_payment", headers=headers, json=body
+    )
 
 
 async def get_payment(payment_id: str) -> dict:

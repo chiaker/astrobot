@@ -21,7 +21,7 @@ from astrobot.bot.keyboards import MENU_BACK_BTN
 from astrobot.bot.responses import edit_or_send
 from astrobot.bot.states import PaymentFlow
 from astrobot.config import get_settings
-from astrobot.db.models import Payment, User
+from astrobot.db.models import Payment, Subscription, User
 from astrobot.limits import (
     NATAL_REGEN_PRICE_RUB,
     QUESTION_PACK_30_PRICE_RUB,
@@ -40,8 +40,11 @@ router = Router(name="payment")
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# Telegram Stars subscriptions support exactly one period: 30 days (2592000s).
+STARS_SUBSCRIPTION_PERIOD_SEC = 2592000
 
-def _plans_kb() -> InlineKeyboardMarkup:
+
+def _plans_kb(active_sub: Subscription | None = None) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
@@ -51,6 +54,14 @@ def _plans_kb() -> InlineKeyboardMarkup:
         ]
         for p in PLANS
     ]
+    if active_sub is not None:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✖ Отменить автопродление", callback_data="sub:cancel"
+                )
+            ]
+        )
     rows.append(
         [
             InlineKeyboardButton(
@@ -117,15 +128,24 @@ _PACKS_SECTION = (
 )
 
 
-def _intro_text(user: User) -> str:
+def _intro_text(user: User, sub: Subscription | None = None) -> str:
     if is_premium(user) and user.premium_until:
         until = user.premium_until.strftime("%d.%m.%Y")
+        if sub is not None:
+            renew = sub.current_period_end.strftime("%d.%m.%Y")
+            sub_line = (
+                f"♻️ <b>Подписка активна</b> — продлится автоматически <b>{renew}</b>.\n"
+                "Отменить автопродление можно кнопкой ниже; премиум доработает "
+                "оплаченный срок.\n\n"
+            )
+        else:
+            sub_line = "Можно продлить — следующий платёж сложится к текущему сроку.\n\n"
         return (
             "💎 <b>Премиум активен</b>\n\n"
             f"Действует до <b>{until}</b>. Звёзды в твоём распоряжении ✨\n\n"
             f"Что входит:\n{_PLAN_FEATURES}\n\n"
-            "Можно продлить — следующий платёж сложится к текущему сроку.\n\n"
-            "— — —\n\n"
+            + sub_line
+            + "— — —\n\n"
             + _PACKS_SECTION
         )
 
@@ -150,16 +170,52 @@ def _intro_text(user: User) -> str:
     return "\n".join(lines)
 
 
+async def _active_subscription(
+    session: AsyncSession, user: User
+) -> Subscription | None:
+    return await session.scalar(
+        select(Subscription).where(
+            Subscription.user_id == user.id,
+            Subscription.status == "active",
+        )
+    )
+
+
 @router.callback_query(F.data == "menu:premium")
-async def on_premium(call: CallbackQuery, user: User) -> None:
+async def on_premium(call: CallbackQuery, session: AsyncSession, user: User) -> None:
     await call.answer()
-    await edit_or_send(call, _intro_text(user), _plans_kb())
+    sub = await _active_subscription(session, user)
+    await edit_or_send(call, _intro_text(user, sub), _plans_kb(sub))
 
 
 @router.callback_query(F.data == "premium:show")
-async def on_premium_inline(call: CallbackQuery, user: User) -> None:
-    await edit_or_send(call, _intro_text(user), _plans_kb())
+async def on_premium_inline(
+    call: CallbackQuery, session: AsyncSession, user: User
+) -> None:
+    sub = await _active_subscription(session, user)
+    await edit_or_send(call, _intro_text(user, sub), _plans_kb(sub))
     await call.answer()
+
+
+@router.callback_query(F.data == "sub:cancel")
+async def on_sub_cancel(
+    call: CallbackQuery, session: AsyncSession, user: User
+) -> None:
+    sub = await service.cancel_subscription(session, user, call.bot)
+    if sub is None:
+        await call.answer("Активной подписки нет", show_alert=True)
+        return
+    until = (
+        user.premium_until.strftime("%d.%m.%Y") if user.premium_until else "конца срока"
+    )
+    await call.answer("Автопродление отключено")
+    await edit_or_send(
+        call,
+        "✖ <b>Автопродление отключено.</b>\n\n"
+        f"Премиум останется активным до <b>{until}</b>, после чего не продлится. "
+        "Снова оформить подписку можно в любой момент.",
+        _plans_kb(),
+    )
 
 
 @router.callback_query(F.data.startswith("buy:"))
@@ -288,6 +344,9 @@ async def _start_payment(
             },
             receipt=build_receipt(user.email or "", item),
             return_url=settings.yookassa_return_url_effective,
+            # Recurring plan → tokenize the card so renewals can be charged
+            # off-session (the token id is captured from the webhook on success).
+            save_payment_method=item.recurring,
         )
     except Exception as e:
         payment.status = "canceled"
@@ -327,11 +386,18 @@ async def _start_payment(
             [InlineKeyboardButton(text="❌ Отменить", callback_data="pay:cancel")],
         ]
     )
+    recurring_note = (
+        f"\n\n♻️ Это <b>подписка</b>: каждые 30 дней автоматически спишется "
+        f"{item.amount_rub} ₽, пока не отменишь в разделе 💎 Премиум."
+        if item.recurring
+        else ""
+    )
     await target.answer(
         f"<b>{item.title}</b> — {item.amount_rub} ₽\n\n"
         "Нажми кнопку ниже, чтобы перейти к безопасной оплате через ЮKassa. "
-        "После оплаты вернись в бот — я подтвержу начисление ✨\n\n"
-        "⚠️ <b>Обязательно отключи VPN перед оплатой</b> — иначе платёж может не пройти.\n"
+        "После оплаты вернись в бот — я подтвержу начисление ✨"
+        + recurring_note
+        + "\n\n⚠️ <b>Обязательно отключи VPN перед оплатой</b> — иначе платёж может не пройти.\n"
         "Если что-то пошло не так — напиши нам через кнопку 🆘Поддержки в профиле.",
         reply_markup=kb,
     )
@@ -406,6 +472,14 @@ async def on_pay_stars(
     await session.flush()
 
     try:
+        # Recurring plan → native Telegram Stars subscription (auto-renews every
+        # 30 days until canceled). Telegram sends a fresh successful_payment on
+        # each renewal. Non-recurring items stay one-time invoices.
+        extra = (
+            {"subscription_period": STARS_SUBSCRIPTION_PERIOD_SEC}
+            if item.recurring
+            else {}
+        )
         await call.message.bot.send_invoice(
             chat_id=call.message.chat.id,
             title=item.title[:32],
@@ -414,6 +488,7 @@ async def on_pay_stars(
             provider_token="",  # empty for Telegram Stars
             currency="XTR",
             prices=[LabeledPrice(label=item.title[:32], amount=item.amount_rub)],
+            **extra,
         )
     except Exception as e:
         payment.status = "canceled"
@@ -443,6 +518,45 @@ async def on_pre_checkout(query: PreCheckoutQuery) -> None:
     await query.answer(ok=True)
 
 
+async def _payment_for_stars_renewal(
+    session: AsyncSession, user: User, sp
+) -> Payment | None:
+    """Build a fresh Payment row for a Telegram Stars subscription renewal.
+
+    Returns None if this renewal was already processed (Telegram can redeliver),
+    keyed off the unique per-charge telegram_charge_id.
+    """
+    dup = await session.scalar(
+        select(Payment).where(
+            Payment.telegram_charge_id == sp.telegram_payment_charge_id
+        )
+    )
+    if dup is not None:
+        return None
+    # Recover the plan from the original invoice payload; default to the monthly
+    # subscription (the only Stars-recurring plan).
+    item_code = "month"
+    try:
+        orig = await session.get(Payment, int(sp.invoice_payload))
+    except (TypeError, ValueError):
+        orig = None
+    if orig is not None:
+        item_code = orig.item_code
+    item = get_item(item_code)
+    payment = Payment(
+        user_id=user.id,
+        provider="telegram_stars",
+        item_code=item_code,
+        kind=item.kind if item else "subscription",
+        amount=item.amount_rub if item else 0,
+        currency="XTR",
+        status="pending",
+    )
+    session.add(payment)
+    await session.flush()
+    return payment
+
+
 @router.message(F.successful_payment)
 async def on_successful_payment(
     message: Message,
@@ -450,22 +564,44 @@ async def on_successful_payment(
     user: User,
 ) -> None:
     sp = message.successful_payment
-    try:
-        payment_id = int(sp.invoice_payload)
-    except (TypeError, ValueError):
-        log.warning("stars_payment_bad_payload", payload=sp.invoice_payload)
-        return
+    is_renewal = bool(sp.is_recurring and not sp.is_first_recurring)
 
-    payment = await session.get(Payment, payment_id)
-    if payment is None or payment.user_id != user.id:
-        log.warning(
-            "stars_payment_unknown",
-            payment_id=payment_id,
-            charge=sp.telegram_payment_charge_id,
-        )
-        return
+    if is_renewal:
+        # Telegram auto-charged a subscription renewal. The original Payment is
+        # already succeeded, so record this charge as a new Payment and grant it.
+        payment = await _payment_for_stars_renewal(session, user, sp)
+        if payment is None:
+            return  # already processed
+    else:
+        try:
+            payment_id = int(sp.invoice_payload)
+        except (TypeError, ValueError):
+            log.warning("stars_payment_bad_payload", payload=sp.invoice_payload)
+            return
+        payment = await session.get(Payment, payment_id)
+        if payment is None or payment.user_id != user.id:
+            log.warning(
+                "stars_payment_unknown",
+                payment_id=payment_id,
+                charge=sp.telegram_payment_charge_id,
+            )
+            return
 
     payment.telegram_charge_id = sp.telegram_payment_charge_id
     await session.flush()
     # Provider-agnostic grant: idempotent, applies the benefit and notifies the user.
-    await service.grant_payment(session, payment, message.bot)
+    granted = await service.grant_payment(session, payment, message.bot)
+
+    # Maintain the auto-renewing subscription row for recurring (monthly) plans.
+    item = get_item(payment.item_code)
+    if granted and item is not None and item.recurring:
+        period_end = sp.subscription_expiration_date or user.premium_until
+        if period_end is not None:
+            await service.upsert_subscription(
+                session,
+                user,
+                provider="telegram_stars",
+                plan_code=payment.item_code,
+                period_end=period_end,
+                telegram_charge_id=sp.telegram_payment_charge_id,
+            )

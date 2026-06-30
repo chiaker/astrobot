@@ -185,6 +185,56 @@ def next_premium_questions_reset(user: User) -> datetime | None:
     return anchor + timedelta(days=PREMIUM_QUESTION_PERIOD_DAYS * (periods + 1))
 
 
+# ─── Broadcast segmentation ───────────────────────────────────────────────────
+
+# Mutually exclusive audience segments for the broadcast constructor. Each user
+# maps to exactly one. Order is the canonical display order in the admin UI.
+BROADCAST_SEGMENTS: tuple[str, ...] = (
+    "not_onboarded",
+    "free_has_questions",
+    "free_used_up",
+    "premium_active",
+    "premium_no_questions",
+)
+
+BROADCAST_SEGMENT_LABELS: dict[str, str] = {
+    "not_onboarded": "Не прошли онбординг",
+    "free_has_questions": "Бесплатные — есть вопросы",
+    "free_used_up": "Бесплатные — вопросы кончились",
+    "premium_active": "Премиум — есть вопросы",
+    "premium_no_questions": "Премиум — вопросы кончились",
+}
+
+
+def _has_questions(user: User) -> bool:
+    """Pure check (no DB) of whether the user has at least one question to spend.
+    Mirrors check_question's allowance logic, including the premium monthly
+    rollover, but without mutating the user."""
+    free_bal = user.free_questions_balance or 0
+    bonus = max(0, user.bonus_questions or 0)
+    if free_bal > 0 or bonus > 0:
+        return True
+    if is_premium(user):
+        limit = PREMIUM_LIMITS.question_per_month or 0
+        now = datetime.now(UTC)
+        reset_at = user.questions_reset_at or now
+        due = (now - reset_at).days >= PREMIUM_QUESTION_PERIOD_DAYS
+        monthly_used = 0 if due else (user.premium_questions_used or 0)
+        return monthly_used < limit
+    return False
+
+
+def segment_of(user: User, has_profile: bool) -> str:
+    """Classify a user into exactly one BROADCAST_SEGMENTS value. has_profile is
+    whether a BirthProfile exists (the onboarding-completed marker)."""
+    if not has_profile:
+        return "not_onboarded"
+    has_q = _has_questions(user)
+    if is_premium(user):
+        return "premium_active" if has_q else "premium_no_questions"
+    return "free_has_questions" if has_q else "free_used_up"
+
+
 def consume_question_from_priority_bucket(user: User) -> None:
     if (user.free_questions_balance or 0) > 0:
         user.free_questions_balance -= 1

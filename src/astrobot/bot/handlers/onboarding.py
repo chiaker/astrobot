@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime, time
 
 import structlog
@@ -28,6 +29,16 @@ from astrobot.gender import guess_gender
 
 log = structlog.get_logger(__name__)
 router = Router(name="onboarding")
+
+# A name is a single word of letters only (Cyrillic/Latin), optionally with an
+# internal hyphen or apostrophe (Анна-Мария, D'Артаньян). This rejects commands
+# like "/menu", digits, and phrases like "меня зовут олег" (spaces → multi-word).
+_NAME_RE = re.compile(r"^[^\W\d_]+(?:[-'][^\W\d_]+)*$", re.UNICODE)
+
+_NAME_HINT = (
+    "Напиши, пожалуйста, только <b>имя</b> — одним словом, без лишних символов, "
+    "цифр и команд (например: <i>Олег</i>). Или нажми «Пропустить»."
+)
 
 # Cap geocoding (external Nominatim calls) per user to curb spam / OSM ToS abuse.
 GEOCODE_PER_HOUR = 20
@@ -166,8 +177,10 @@ async def on_name(message: Message, state: FSMContext) -> None:
     # this keeps the value safe inside HTML messages and the LLM system prompt.
     name = "".join(ch for ch in name if ch not in "<>" and (ch == " " or ch.isprintable()))
     name = name.strip()
-    if len(name) < 1 or len(name) > 64:
-        await message.answer("Напиши имя (до 64 символов), или нажми «Пропустить».")
+    # A real name is one word of letters only. Re-ask (with a clarification) on
+    # commands like "/menu", digits, or phrases like "меня зовут олег".
+    if len(name) > 64 or not _NAME_RE.match(name):
+        await message.answer(_NAME_HINT, reply_markup=name_skip_kb())
         return
     await state.update_data(display_name=name)
 

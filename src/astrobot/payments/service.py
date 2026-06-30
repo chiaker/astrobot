@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.config import get_settings
-from astrobot.db.models import LLMUsageLog, Payment, User
+from astrobot.db.models import LLMUsageLog, Payment, Subscription, User
 from astrobot.limits import QUESTION_PACK_SIZE
 from astrobot.metrics import PAYMENTS_REFUNDED, PAYMENTS_SUCCEEDED
 from astrobot.payments import yookassa
@@ -55,6 +55,89 @@ def _refund_text(payment: Payment) -> str:
 _MENU_KB = InlineKeyboardMarkup(
     inline_keyboard=[[InlineKeyboardButton(text="🔮 Открыть меню", callback_data="menu:open")]]
 )
+
+
+def _confirmation_kb(payment: Payment, user: User) -> InlineKeyboardMarkup:
+    """Post-purchase keyboard. After a subscription is granted, nudge the user to
+    set up the morning horoscope (push:setup_start → profile.py) unless it's
+    already on."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if payment.kind == "subscription" and not user.push_horoscope_enabled:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🌅 Настроить утренний гороскоп",
+                    callback_data="push:setup_start",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="🔮 Открыть меню", callback_data="menu:open")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def upsert_subscription(
+    session: AsyncSession,
+    user: User,
+    *,
+    provider: str,
+    plan_code: str,
+    period_end: datetime,
+    payment_method_id: str | None = None,
+    telegram_charge_id: str | None = None,
+) -> Subscription:
+    """Create or refresh the user's auto-renewing subscription after a first or
+    renewal charge. One row per user (reused on re-subscribe). For YooKassa the
+    next charge is scheduled at period_end; Stars renewals are driven by Telegram
+    so next_charge_at stays NULL."""
+    sub = await session.scalar(
+        select(Subscription).where(Subscription.user_id == user.id)
+    )
+    if sub is None:
+        sub = Subscription(user_id=user.id)
+        session.add(sub)
+    sub.provider = provider
+    sub.plan_code = plan_code
+    sub.status = "active"
+    sub.current_period_end = period_end
+    sub.next_charge_at = period_end if provider == "yookassa" else None
+    sub.canceled_at = None
+    if payment_method_id is not None:
+        sub.yookassa_payment_method_id = payment_method_id
+    if telegram_charge_id is not None:
+        sub.telegram_charge_id = telegram_charge_id
+    await session.commit()
+    log.info("subscription_upserted", user_id=user.id, provider=provider, plan=plan_code)
+    return sub
+
+
+async def cancel_subscription(
+    session: AsyncSession, user: User, bot: Bot | None
+) -> Subscription | None:
+    """Stop auto-renewal. Premium keeps running until current_period_end and then
+    lapses. For Stars we also cancel the Telegram-side subscription so it won't
+    recharge. Returns the subscription (or None if there was none)."""
+    sub = await session.scalar(
+        select(Subscription).where(Subscription.user_id == user.id)
+    )
+    if sub is None or sub.status != "active":
+        return sub
+    if sub.provider == "telegram_stars" and sub.telegram_charge_id and bot is not None:
+        try:
+            await bot.edit_user_star_subscription(
+                user_id=user.tg_user_id,
+                telegram_payment_charge_id=sub.telegram_charge_id,
+                is_canceled=True,
+            )
+        except Exception as e:
+            log.warning("stars_sub_cancel_failed", user_id=user.id, error=str(e))
+    sub.status = "canceled"
+    sub.next_charge_at = None
+    sub.canceled_at = datetime.now(UTC)
+    await session.commit()
+    log.info("subscription_canceled", user_id=user.id, provider=sub.provider)
+    return sub
 
 
 async def _push(bot: Bot | None, chat_id: int, text: str, reply_markup=None) -> None:
@@ -121,7 +204,10 @@ async def grant_payment(session: AsyncSession, payment: Payment, bot: Bot | None
     PAYMENTS_SUCCEEDED.labels(item=row.item_code).inc()
     log.info("payment_granted", payment_id=row.id, item=row.item_code)
 
-    await _push(bot, user.tg_user_id, _confirmation_text(row, user), reply_markup=_MENU_KB)
+    await _push(
+        bot, user.tg_user_id, _confirmation_text(row, user),
+        reply_markup=_confirmation_kb(row, user),
+    )
     return True
 
 
@@ -254,7 +340,21 @@ async def reconcile_payment(session: AsyncSession, payment: Payment, bot: Bot | 
                 f"item={payment.item_code}\nоплачено={paid}₽, ожидалось={expected}.",
             )
             return "mismatch"
-        await grant_payment(session, payment, bot)
+        granted = await grant_payment(session, payment, bot)
+        # First card payment of a subscription: capture the saved-card token (now
+        # exposed on the fetched payment) so the scheduler can charge renewals.
+        if granted and item is not None and item.recurring and payment.provider == "yookassa":
+            pm_id = (fetched.get("payment_method") or {}).get("id")
+            user = await session.get(User, payment.user_id)
+            if pm_id and user is not None and user.premium_until is not None:
+                await upsert_subscription(
+                    session,
+                    user,
+                    provider="yookassa",
+                    plan_code=payment.item_code,
+                    period_end=user.premium_until,
+                    payment_method_id=pm_id,
+                )
         return "granted"
 
     if status == "canceled":

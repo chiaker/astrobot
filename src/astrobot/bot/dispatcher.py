@@ -23,6 +23,7 @@ def build_dispatcher() -> Dispatcher:
     from astrobot.bot import errors
     from astrobot.bot.handlers import (
         about,
+        broadcast,
         compatibility,
         fallback,
         favorites,
@@ -58,6 +59,7 @@ def build_dispatcher() -> Dispatcher:
     dp.include_router(natal.router)
     dp.include_router(horoscope.router)
     dp.include_router(question.router)
+    dp.include_router(broadcast.router)
     dp.include_router(tarot.router)
     dp.include_router(compatibility.router)
     dp.include_router(payment.router)

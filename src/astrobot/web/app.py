@@ -12,7 +12,7 @@ from astrobot.bot.dispatcher import build_bot, build_dispatcher
 from astrobot.config import get_settings
 from astrobot.logging_setup import configure_logging
 from astrobot.scheduler import build_scheduler
-from astrobot.web.routes import health, metrics, payments, stats, telegram
+from astrobot.web.routes import broadcasts, health, metrics, payments, stats, telegram
 
 log = structlog.get_logger(__name__)
 
@@ -109,6 +109,7 @@ def create_app() -> FastAPI:
     app.include_router(telegram.router)
     app.include_router(payments.router)
     app.include_router(stats.router)
+    app.include_router(broadcasts.router)
     return app
 
 

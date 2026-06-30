@@ -222,6 +222,15 @@ async def on_my_payments(call: CallbackQuery, session: AsyncSession, user: User)
 
 # ─── Push horoscope setup ─────────────────────────────────────────────────────
 
+_PUSH_CITY_PROMPT = (
+    "🌅 Настраиваем утренний гороскоп.\n\n"
+    "Напиши, в каком городе ты сейчас живёшь — "
+    "это нужно для точного определения часового пояса. "
+    "Место рождения может не совпадать с текущим.\n\n"
+    "<i>Например: Москва, Санкт-Петербург, Алматы</i>"
+)
+
+
 @router.callback_query(F.data == "settings:push_horoscope")
 async def on_push_horoscope_toggle(
     call: CallbackQuery,
@@ -253,13 +262,38 @@ async def on_push_horoscope_toggle(
     # No push settings yet — start setup
     await call.answer()
     await state.set_state(PushSetup.waiting_for_city)
-    await call.message.answer(
-        "🌅 Настраиваем утренний гороскоп.\n\n"
-        "Напиши, в каком городе ты сейчас живёшь — "
-        "это нужно для точного определения часового пояса. "
-        "Место рождения может не совпадать с текущим.\n\n"
-        "<i>Например: Москва, Санкт-Петербург, Алматы</i>"
-    )
+    await call.message.answer(_PUSH_CITY_PROMPT)
+
+
+@router.callback_query(F.data == "push:setup_start")
+async def on_push_setup_start(
+    call: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    """Entry point from the post-purchase offer (service._confirmation_kb):
+    enable the morning horoscope, reusing the PushSetup flow when not configured
+    yet. Unlike the settings toggle, it never disables — it only moves toward on."""
+    if not is_premium(user):
+        await call.answer("Доступно только в Премиуме", show_alert=True)
+        return
+    if user.push_horoscope_enabled:
+        await call.answer("Утренний гороскоп уже включён")
+        return
+    if user.push_tz and user.push_city_name:
+        user.push_horoscope_enabled = True
+        await session.commit()
+        hour = user.push_hour if user.push_hour is not None else 9
+        await call.answer(f"Включён · {hour}:00")
+        await call.message.answer(
+            f"🌅 Утренний гороскоп включён — буду присылать в <b>{hour}:00</b> "
+            f"по времени <b>{user.push_city_name}</b>."
+        )
+        return
+    await call.answer()
+    await state.set_state(PushSetup.waiting_for_city)
+    await call.message.answer(_PUSH_CITY_PROMPT)
 
 
 @router.message(PushSetup.waiting_for_city)

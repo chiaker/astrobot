@@ -27,6 +27,10 @@ class Plan:
     duration_days: int
     duration_label: str
     bullets: tuple[str, ...]
+    # True → auto-renewing subscription (Stars native + YooKassa card autopay).
+    # Only the 30-day plan can be a Stars subscription (Telegram's only period),
+    # so longer plans stay one-time prepaid.
+    recurring: bool = False
 
 
 _PREMIUM_BULLETS = (
@@ -44,6 +48,7 @@ PLANS: tuple[Plan, ...] = (
         duration_days=30,
         duration_label="30 дней",
         bullets=_PREMIUM_BULLETS,
+        recurring=True,
     ),
     Plan(
         code="half",
@@ -73,6 +78,7 @@ class Item:
     grant: Callable[[User], None]
     revoke: Callable[[User], None]
     duration_days: int = 0  # subscriptions only; used for refund consumption math
+    recurring: bool = False  # auto-renewing subscription (see Plan.recurring)
 
 
 def _grant_subscription(days: int) -> Callable[[User], None]:
@@ -134,6 +140,7 @@ def _build_items() -> dict[str, Item]:
             grant=_grant_subscription(p.duration_days),
             revoke=_revoke_subscription(p.duration_days),
             duration_days=p.duration_days,
+            recurring=p.recurring,
         )
     items["natal_regen"] = Item(
         code="natal_regen",

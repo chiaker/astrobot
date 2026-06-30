@@ -100,6 +100,9 @@ class User(Base):
     payments: Mapped[list[Payment]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    subscription: Mapped[Subscription | None] = relationship(
+        back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
     support_tickets: Mapped[list[SupportTicket]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
@@ -258,6 +261,52 @@ class Payment(Base):
     user: Mapped[User] = relationship(back_populates="payments")
 
 
+class Subscription(Base):
+    """A recurring premium subscription. At most one row per user (reused on
+    re-subscribe). Premium gating still lives on User.premium_until — this row
+    just drives the auto-renewal that extends it.
+
+    Telegram Stars renewals are push-based (Telegram charges and notifies us);
+    YooKassa renewals are pulled by charge_due_card_subscriptions_job using the
+    saved card token.
+    """
+
+    __tablename__ = "subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    provider: Mapped[str] = mapped_column(String(16))  # telegram_stars | yookassa
+    plan_code: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    # YooKassa saved-card token, used to charge renewals without user action.
+    yookassa_payment_method_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    # Stars charge id of the active subscription — needed to cancel it via
+    # edit_user_star_subscription.
+    telegram_charge_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Mirror of premium_until at subscription granularity.
+    current_period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # YooKassa: when the scheduler should attempt the next charge. NULL for Stars
+    # (Telegram drives renewals) and for canceled subscriptions.
+    next_charge_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    canceled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped[User] = relationship(back_populates="subscription")
+
+
 class SupportTicket(Base):
     __tablename__ = "support_tickets"
 
@@ -278,6 +327,62 @@ class SupportTicket(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="support_tickets")
+
+
+class Broadcast(Base):
+    """An admin-authored broadcast campaign. One campaign fans out to several
+    user segments, each with its own text / animation / buttons (BroadcastVariant).
+    The dispatch job scans users by ascending id (resumable via cursor_user_id),
+    classifies each into a segment, and sends the matching enabled variant."""
+
+    __tablename__ = "broadcasts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    # draft | scheduled | sending | sent | canceled
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    # When the dispatch job should start sending (UTC). Admin enters MSK.
+    scheduled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    # Resume cursor: highest User.id already processed for this broadcast.
+    cursor_user_id: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    sent_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    failed_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    variants: Mapped[list[BroadcastVariant]] = relationship(
+        back_populates="broadcast",
+        cascade="all, delete-orphan",
+        order_by="BroadcastVariant.id",
+    )
+
+
+class BroadcastVariant(Base):
+    """Per-segment content for a Broadcast. buttons is a JSON list of
+    {type, label, value} dicts (see astrobot.bot.keyboards.build_broadcast_kb)."""
+
+    __tablename__ = "broadcast_variants"
+    __table_args__ = (
+        UniqueConstraint("broadcast_id", "segment", name="uq_broadcast_variant_segment"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    broadcast_id: Mapped[int] = mapped_column(
+        ForeignKey("broadcasts.id", ondelete="CASCADE"), index=True
+    )
+    segment: Mapped[str] = mapped_column(String(32))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    text: Mapped[str] = mapped_column(Text, default="", server_default="")
+    animation: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    buttons: Mapped[list] = mapped_column(JSON, default=list)
+
+    broadcast: Mapped[Broadcast] = relationship(back_populates="variants")
 
 
 class LLMUsageLog(Base):
