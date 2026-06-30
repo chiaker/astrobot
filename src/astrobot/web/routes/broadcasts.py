@@ -59,11 +59,12 @@ _BC_STYLE = """
 .bc-lbl{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin:0 0 4px}
 .bc-toggle{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#334155;cursor:pointer;user-select:none}
 .bc-text{width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;
-  font-family:inherit;line-height:1.55;resize:none;height:60px;background:#fff;
+  font-family:inherit;line-height:1.55;resize:none;height:60px;background:#fff;color:#1e293b;
+  caret-color:#7c3aed;
   transition:height .15s ease,box-shadow .15s ease,border-color .15s ease;overflow:hidden}
-.bc-text:focus{outline:none;border-color:#7c3aed;box-shadow:0 0 0 3px #ede9fe;min-height:180px}
+.bc-text:focus{outline:none;border-color:#c4b5fd;box-shadow:0 0 0 3px #ede9fe;min-height:180px}
 .bc-in{width:100%;padding:8px 11px;border:1px solid #e2e8f0;border-radius:6px;font-size:14px;
-  font-family:inherit;background:#fff}
+  font-family:inherit;background:#fff;color:#1e293b;caret-color:#7c3aed}
 .bc-sel{padding:8px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;background:#fff;width:100%}
 .bc-in:focus,.bc-sel:focus{outline:none;border-color:#7c3aed;box-shadow:0 0 0 2px #ede9fe}
 .bc-btns-head{font-size:11px;color:#94a3b8;margin:16px 0 2px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
