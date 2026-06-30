@@ -81,12 +81,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await polling_task
             except (asyncio.CancelledError, Exception):
                 pass
-        if settings.run_mode == "webhook":
-            try:
-                await bot.delete_webhook()
-                log.info("webhook_deleted")
-            except Exception as e:
-                log.warning("webhook_delete_failed", error=str(e))
+        # Deliberately DO NOT delete the webhook on shutdown. During a
+        # zero-downtime deploy (docker rollout) the new container starts and
+        # calls set_webhook BEFORE the old container is drained — if the old one
+        # deleted the webhook here, it would wipe the one the new container just
+        # set, leaving the bot with no webhook until a manual restart. The
+        # webhook is persistent Telegram-side state; each startup re-asserts it
+        # (idempotent, same URL), so leaving it in place across restarts is
+        # correct and lossless (pending updates stay queued for the next start).
         await bot.session.close()
 
 

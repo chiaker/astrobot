@@ -39,6 +39,60 @@ _STATUS_LABELS = {
     "canceled": ("Отменена", "#dc2626"),
 }
 
+# Left-edge accent colour per segment card (matches the segment's vibe).
+_SEG_COLORS = {
+    "not_onboarded": "#64748b",
+    "free_has_questions": "#10b981",
+    "free_used_up": "#94a3b8",
+    "premium_active": "#7c3aed",
+    "premium_no_questions": "#d97706",
+}
+
+# Page-local styling for the constructor (the shared admin CSS has no textarea
+# rules). The message textarea is compact at rest and expands on focus; the
+# small script below also auto-grows it to fit the text while you're editing,
+# then it collapses again on blur.
+_BC_STYLE = """
+.bc-seg{position:relative;overflow:hidden;transition:opacity .15s ease}
+.bc-seg.off{opacity:.5}
+.bc-seg::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--seg,#7c3aed)}
+.bc-lbl{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin:0 0 4px}
+.bc-toggle{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#334155;cursor:pointer;user-select:none}
+.bc-text{width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;
+  font-family:inherit;line-height:1.55;resize:none;height:60px;background:#fff;
+  transition:height .15s ease,box-shadow .15s ease,border-color .15s ease;overflow:hidden}
+.bc-text:focus{outline:none;border-color:#7c3aed;box-shadow:0 0 0 3px #ede9fe;min-height:180px}
+.bc-in{width:100%;padding:8px 11px;border:1px solid #e2e8f0;border-radius:6px;font-size:14px;
+  font-family:inherit;background:#fff}
+.bc-sel{padding:8px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;background:#fff;width:100%}
+.bc-in:focus,.bc-sel:focus{outline:none;border-color:#7c3aed;box-shadow:0 0 0 2px #ede9fe}
+.bc-btns-head{font-size:11px;color:#94a3b8;margin:16px 0 2px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+.bc-btnrow{display:grid;grid-template-columns:180px 1fr 1.6fr;gap:8px;margin-top:8px;align-items:center}
+.bc-btnrow .bc-lbl{margin:0}
+@media(max-width:760px){.bc-btnrow{grid-template-columns:1fr}.bc-btnrow .bc-lbl{display:none}}
+.bc-hint{font-size:12px;color:#94a3b8;margin:8px 0 0}
+.bc-stat{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:#475569;margin:4px 0 0}
+.bc-stat b{color:#1e293b}
+.bc-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+"""
+
+_BC_SCRIPT = """
+(function(){
+  function grow(t){t.style.height='auto';t.style.height=Math.min(t.scrollHeight+2,600)+'px';}
+  document.querySelectorAll('textarea.bc-text').forEach(function(t){
+    t.addEventListener('focus',function(){grow(t);});
+    t.addEventListener('input',function(){grow(t);});
+    t.addEventListener('blur',function(){t.style.height='';});
+  });
+  document.querySelectorAll('input.bc-enable').forEach(function(c){
+    c.addEventListener('change',function(){
+      var card=c.closest('.bc-seg');
+      if(card){card.classList.toggle('off',!c.checked);}
+    });
+  });
+})();
+"""
+
 
 def _auth_redirect(request: Request) -> RedirectResponse | None:
     if not request.session.get("authenticated"):
@@ -125,7 +179,7 @@ def _btn_type_select(name: str, current: str) -> str:
         f"<option value='{v}'{' selected' if v == current else ''}>{_esc(lbl)}</option>"
         for v, lbl in _BTN_TYPES
     )
-    return f"<select name='{name}'>{opts}</select>"
+    return f"<select class='bc-sel' name='{name}'>{opts}</select>"
 
 
 def _render_segment_card(seg: str, variant: BroadcastVariant | None, count: int) -> str:
@@ -133,37 +187,47 @@ def _render_segment_card(seg: str, variant: BroadcastVariant | None, count: int)
     text = variant.text if variant else ""
     animation = variant.animation if variant else ""
     buttons = list(variant.buttons) if (variant and variant.buttons) else []
+    color = _SEG_COLORS.get(seg, "#7c3aed")
+    off = "" if enabled else " off"
 
-    btn_rows = []
+    btn_rows = [
+        "<div class='bc-btnrow'>"
+        "<div class='bc-lbl'>Тип</div>"
+        "<div class='bc-lbl'>Текст кнопки</div>"
+        "<div class='bc-lbl'>URL / текст вопроса</div>"
+        "</div>"
+    ]
     for i in range(MAX_BUTTONS):
         b = buttons[i] if i < len(buttons) and isinstance(buttons[i], dict) else {}
         btype = b.get("type", "none") or "none"
         label = b.get("label", "")
         value = b.get("value", "")
         btn_rows.append(
-            "<div style='display:flex;gap:6px;margin-top:6px'>"
+            "<div class='bc-btnrow'>"
             f"{_btn_type_select(f'seg_{seg}_btn{i}_type', btype)}"
-            f"<input type='text' name='seg_{seg}_btn{i}_label' placeholder='Текст кнопки' "
-            f"value='{_esc(label)}' style='flex:1'>"
-            f"<input type='text' name='seg_{seg}_btn{i}_value' placeholder='URL / текст вопроса' "
-            f"value='{_esc(value)}' style='flex:2'>"
+            f"<input class='bc-in' type='text' name='seg_{seg}_btn{i}_label' "
+            f"placeholder='Текст кнопки' value='{_esc(label)}'>"
+            f"<input class='bc-in' type='text' name='seg_{seg}_btn{i}_value' "
+            f"placeholder='URL или текст вопроса' value='{_esc(value)}'>"
             "</div>"
         )
 
     return (
-        "<div class='card'>"
+        f"<div class='card bc-seg{off}' style='--seg:{color}'>"
         "<div class='card-head'>"
         f"<span class='card-title'>{_esc(BROADCAST_SEGMENT_LABELS[seg])}</span>"
         f"<span class='badge' style='background:#475569'>≈ {count} чел.</span>"
         "</div>"
-        f"<label style='display:flex;align-items:center;gap:8px;margin-bottom:8px'>"
-        f"<input type='checkbox' name='seg_{seg}_enabled'{' checked' if enabled else ''}> "
-        "Включить этот сегмент</label>"
-        f"<textarea name='seg_{seg}_text' rows='4' placeholder='Текст сообщения' "
-        f"style='width:100%'>{_esc(text)}</textarea>"
-        f"<input type='text' name='seg_{seg}_animation' placeholder='file_id или URL гифки (необязательно)' "
-        f"value='{_esc(animation)}' style='width:100%;margin-top:6px'>"
-        "<div style='font-size:12px;color:#64748b;margin-top:10px'>Кнопки (до 3):</div>"
+        f"<label class='bc-toggle'>"
+        f"<input type='checkbox' class='bc-enable' name='seg_{seg}_enabled'"
+        f"{' checked' if enabled else ''}> Включить этот сегмент</label>"
+        "<div class='bc-lbl' style='margin-top:14px'>Текст сообщения</div>"
+        f"<textarea class='bc-text' name='seg_{seg}_text' "
+        f"placeholder='Текст сообщения…'>{_esc(text)}</textarea>"
+        "<div class='bc-lbl' style='margin-top:14px'>Анимация (file_id или URL гифки)</div>"
+        f"<input class='bc-in' type='text' name='seg_{seg}_animation' "
+        f"placeholder='необязательно' value='{_esc(animation)}'>"
+        "<div class='bc-btns-head'>Кнопки (до 3)</div>"
         + "".join(btn_rows)
         + "</div>"
     )
@@ -177,20 +241,22 @@ def _render_editor(
     msg: str,
     err: str,
 ) -> str:
-    parts: list[str] = []
+    parts: list[str] = [f"<style>{_BC_STYLE}</style>"]
     if msg:
-        parts.append(f"<div class='card' style='border-color:#059669'>{_esc(msg)}</div>")
+        parts.append(f"<div class='alert alert-ok'>{_esc(msg)}</div>")
     if err:
-        parts.append(f"<div class='card' style='border-color:#dc2626'>{_esc(err)}</div>")
+        parts.append(f"<div class='alert alert-err'>{_esc(err)}</div>")
 
     parts.append(
         "<div class='card'><div class='card-head'>"
         f"<span class='card-title'>Рассылка #{b.id} — {_esc(b.name)}</span>"
         f"{_status_badge(b.status)}</div>"
-        f"<p style='margin:0;color:#64748b'>Запланировано (МСК): <b>{_fmt_msk(b.scheduled_at)}</b> · "
-        f"Отправлено: <b>{b.sent_count}</b> · Ошибок: <b>{b.failed_count}</b></p>"
-        "<p style='margin:8px 0 0;font-size:12px;color:#94a3b8'>"
-        "Каждый пользователь получает вариант ровно одного сегмента. "
+        "<div class='bc-stat'>"
+        f"<span>🕒 Запланировано (МСК): <b>{_fmt_msk(b.scheduled_at)}</b></span>"
+        f"<span>✅ Отправлено: <b>{b.sent_count}</b></span>"
+        f"<span>⚠️ Ошибок: <b>{b.failed_count}</b></span>"
+        "</div>"
+        "<p class='bc-hint'>Каждый пользователь получает вариант ровно одного сегмента. "
         "Кнопка «Спросить Астру» сразу задаёт вопрос (тратит 1 вопрос) — ставь её только сегментам с вопросами."
         "</p></div>"
     )
@@ -206,7 +272,8 @@ def _render_editor(
         parts.append(
             f"<form method='post' action='/admin/broadcasts/{b.id}'>"
             + seg_cards
-            + "<button type='submit' class='btn btn-p'>💾 Сохранить</button></form>"
+            + "<div class='card'><button type='submit' class='btn btn-p'>"
+            "💾 Сохранить все сегменты</button></div></form>"
         )
     else:
         parts.append(seg_cards)
@@ -219,13 +286,14 @@ def _render_editor(
     parts.append(
         "<div class='card'><div class='card-head'>"
         "<span class='card-title'>Тест-отправка себе</span></div>"
-        f"<form method='post' action='/admin/broadcasts/{b.id}/test' "
-        "style='display:flex;gap:8px;align-items:center;flex-wrap:wrap'>"
-        f"<select name='segment'>{seg_opts}</select>"
-        f"<input type='number' name='tg_id' placeholder='Telegram ID' "
-        f"value='{default_tg if default_tg else ''}' required>"
+        f"<form method='post' action='/admin/broadcasts/{b.id}/test' class='bc-actions'>"
+        f"<select class='bc-sel' name='segment' style='width:auto'>{seg_opts}</select>"
+        f"<input class='bc-in' type='number' name='tg_id' placeholder='Telegram ID' "
+        f"style='width:auto' value='{default_tg if default_tg else ''}' required>"
         "<button type='submit' class='btn btn-ghost'>📨 Отправить тест</button>"
-        "</form></div>"
+        "</form>"
+        "<p class='bc-hint'>Отправит вариант выбранного сегмента в указанный чат — проверь вид и кнопки перед запуском.</p>"
+        "</div>"
     )
 
     # Launch / schedule
@@ -238,30 +306,35 @@ def _render_editor(
                 .strftime("%Y-%m-%dT%H:%M")
             )
         confirm = "return confirm('Запустить рассылку по выбранным сегментам?')"
-        parts.append(
+        launch = [
             "<div class='card'><div class='card-head'>"
             "<span class='card-title'>Запуск</span></div>"
             f"<form method='post' action='/admin/broadcasts/{b.id}/schedule' "
-            f"style='display:flex;gap:8px;align-items:center;flex-wrap:wrap' onsubmit=\"{confirm}\">"
-            "<label>Время МСК:</label>"
-            f"<input type='datetime-local' name='when' value='{sched_val}' required>"
+            f"class='bc-actions' onsubmit=\"{confirm}\">"
+            "<span class='bc-lbl' style='margin:0'>Время МСК</span>"
+            f"<input class='bc-in' type='datetime-local' name='when' style='width:auto' "
+            f"value='{sched_val}' required>"
             "<button type='submit' class='btn btn-p'>🕒 Запланировать</button>"
             "</form>"
             f"<form method='post' action='/admin/broadcasts/{b.id}/send-now' "
-            f"style='margin-top:8px' onsubmit=\"{confirm}\">"
+            f"style='margin-top:10px' onsubmit=\"{confirm}\">"
             "<button type='submit' class='btn btn-g'>🚀 Отправить сейчас</button>"
             "</form>"
-        )
+        ]
         if b.status == "scheduled":
-            parts.append(
-                f"<form method='post' action='/admin/broadcasts/{b.id}/cancel' style='margin-top:8px'>"
+            launch.append(
+                f"<form method='post' action='/admin/broadcasts/{b.id}/cancel' style='margin-top:10px'>"
                 "<button type='submit' class='btn btn-danger'>✖ Отменить запуск</button></form>"
             )
-        parts.append("</div>")
+        launch.append("</div>")
+        parts.append("".join(launch))
     elif b.status == "sending":
         parts.append("<div class='card'><p>Рассылка отправляется…</p></div>")
 
-    parts.append("<p style='margin-top:12px'><a href='/admin/broadcasts' class='btn btn-ghost'>← К списку</a></p>")
+    parts.append(
+        "<p style='margin-top:12px'><a href='/admin/broadcasts' class='btn btn-ghost'>← К списку</a></p>"
+    )
+    parts.append(f"<script>{_BC_SCRIPT}</script>")
     return _layout(f"Рассылка #{b.id}", "".join(parts), active="broadcasts")
 
 
