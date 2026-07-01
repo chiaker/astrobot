@@ -346,7 +346,9 @@ async def _start_payment(
             return_url=settings.yookassa_return_url_effective,
             # Recurring plan → tokenize the card so renewals can be charged
             # off-session (the token id is captured from the webhook on success).
-            save_payment_method=item.recurring,
+            # Gated by recurring_enabled: requesting save_payment_method on a shop
+            # without recurring enabled makes YooKassa reject the create call.
+            save_payment_method=item.recurring and settings.recurring_enabled,
         )
     except Exception as e:
         payment.status = "canceled"
@@ -474,10 +476,11 @@ async def on_pay_stars(
     try:
         # Recurring plan → native Telegram Stars subscription (auto-renews every
         # 30 days until canceled). Telegram sends a fresh successful_payment on
-        # each renewal. Non-recurring items stay one-time invoices.
+        # each renewal. Non-recurring items — and everything while recurring is
+        # disabled — stay one-time invoices.
         extra = (
             {"subscription_period": STARS_SUBSCRIPTION_PERIOD_SEC}
-            if item.recurring
+            if item.recurring and get_settings().recurring_enabled
             else {}
         )
         await call.message.bot.send_invoice(

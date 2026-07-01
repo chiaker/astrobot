@@ -343,7 +343,14 @@ async def reconcile_payment(session: AsyncSession, payment: Payment, bot: Bot | 
         granted = await grant_payment(session, payment, bot)
         # First card payment of a subscription: capture the saved-card token (now
         # exposed on the fetched payment) so the scheduler can charge renewals.
-        if granted and item is not None and item.recurring and payment.provider == "yookassa":
+        # Skipped when recurring is disabled (no token is saved anyway).
+        if (
+            granted
+            and item is not None
+            and item.recurring
+            and payment.provider == "yookassa"
+            and get_settings().recurring_enabled
+        ):
             pm_id = (fetched.get("payment_method") or {}).get("id")
             user = await session.get(User, payment.user_id)
             if pm_id and user is not None and user.premium_until is not None:

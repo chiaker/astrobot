@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     # Required by YooKassa on each receipt item: 1=без НДС (НПД/УСН), 4=НДС 20% (ОСН)
     yookassa_vat_code: int = Field(default=1, alias="YOOKASSA_VAT_CODE")
 
+    # Auto-renewing subscriptions (recurring payments). Keep OFF until YooKassa
+    # enables recurring for the shop: with it off, the monthly plan is sold as a
+    # one-time payment (no saved card token, no Stars subscription, no
+    # auto-charge), which avoids the create-payment error from requesting
+    # save_payment_method on a shop that doesn't allow it.
+    recurring_enabled: bool = Field(default=False, alias="RECURRING_ENABLED")
+
     # Refund policy
     refund_window_days: int = Field(default=14, alias="REFUND_WINDOW_DAYS")
     refund_max_consumed_pct: int = Field(default=25, alias="REFUND_MAX_CONSUMED_PCT")
