@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
+# request.form() yields *Starlette* UploadFile instances; fastapi.UploadFile is a
+# subclass, so isinstance against it is always False. Check the base class.
+from starlette.datastructures import UploadFile
 
 from astrobot.config import get_settings
 from astrobot.db.models import BirthProfile, Broadcast, BroadcastVariant, User
@@ -34,6 +37,17 @@ _BTN_TYPES: list[tuple[str, str]] = [
     ("open_chat", "Открыть чат"),
     ("onboarding", "Пройти онбординг"),
 ]
+
+# Fallback button captions so a fixed-action button (which needs no URL/question)
+# saves even when the admin picks the type without typing a caption.
+_DEFAULT_BTN_LABELS = {
+    "url": "Открыть ссылку",
+    "ask": "🌙 Спросить Астру",
+    "premium": "💎 Купить премиум",
+    "question_pack": "💬 Докупить вопросы",
+    "open_chat": "💬 Открыть чат",
+    "onboarding": "✨ Пройти онбординг",
+}
 
 _STATUS_LABELS = {
     "draft": ("Черновик", "#64748b"),
@@ -95,6 +109,43 @@ _BC_SCRIPT = """
       if(card){card.classList.toggle('off',!c.checked);}
     });
   });
+
+  // Autosave: debounced POST of the whole form on any change (files save
+  // immediately). No page reload — a small status line reflects the state.
+  var form=document.getElementById('bc-form');
+  if(form){
+    var status=document.getElementById('bc-save-status');
+    var timer=null, saving=false, again=false;
+    function set(t){ if(status){ status.textContent=t; } }
+    function markFiles(){
+      form.querySelectorAll("input[type='file']").forEach(function(f){
+        if(f.files && f.files.length){
+          var note=f.previousElementSibling;
+          if(!note || !note.classList || !note.classList.contains('bc-saved-file')){
+            note=document.createElement('div');
+            note.className='bc-hint bc-saved-file';
+            f.parentNode.insertBefore(note,f);
+          }
+          note.innerHTML='Загружено: <b>'+f.files[0].name.replace(/[<>&]/g,'')+'</b>';
+          f.value='';  // don't re-upload the same file on the next autosave
+        }
+      });
+    }
+    function save(){
+      if(saving){ again=true; return; }
+      saving=true; set('Сохранение…');
+      fetch(form.action,{method:'POST',body:new FormData(form)})
+        .then(function(r){ if(r.ok){ set('Сохранено ✓'); markFiles(); } else { set('Ошибка сохранения'); } })
+        .catch(function(){ set('Ошибка сети — не сохранено'); })
+        .finally(function(){ saving=false; if(again){ again=false; save(); } });
+    }
+    function schedule(){ set('Изменения…'); clearTimeout(timer); timer=setTimeout(save,900); }
+    form.addEventListener('input', schedule);
+    form.addEventListener('change', function(e){
+      if(e.target && e.target.type==='file'){ clearTimeout(timer); save(); }
+      else { schedule(); }
+    });
+  }
 })();
 """
 
@@ -294,10 +345,14 @@ def _render_editor(
     )
     if editable:
         parts.append(
-            f"<form method='post' enctype='multipart/form-data' action='/admin/broadcasts/{b.id}'>"
+            f"<form id='bc-form' method='post' enctype='multipart/form-data' "
+            f"action='/admin/broadcasts/{b.id}'>"
             + seg_cards
-            + "<div class='card'><button type='submit' class='btn btn-p'>"
-            "💾 Сохранить все сегменты</button></div></form>"
+            + "<div class='card bc-actions'>"
+            "<button type='submit' class='btn btn-p'>💾 Сохранить</button>"
+            "<span id='bc-save-status' class='bc-hint' style='margin:0'>"
+            "Изменения сохраняются автоматически</span>"
+            "</div></form>"
         )
     else:
         parts.append(seg_cards)
@@ -461,7 +516,16 @@ async def broadcast_save(
             btype = (form.get(f"seg_{seg}_btn{i}_type") or "none").strip()
             label = (form.get(f"seg_{seg}_btn{i}_label") or "").strip()
             value = (form.get(f"seg_{seg}_btn{i}_value") or "").strip()
-            if btype != "none" and label:
+            if btype == "none":
+                continue
+            # url/ask need their URL/question; drop the row if it's missing.
+            if btype in ("url", "ask") and not value:
+                continue
+            # Fixed-action buttons (premium, onboarding, …) save on type alone —
+            # fall back to a default caption when none was typed.
+            if not label:
+                label = _DEFAULT_BTN_LABELS.get(btype, "")
+            if label:
                 buttons.append({"type": btype, "label": label, "value": value})
 
         variant = variants.get(seg)

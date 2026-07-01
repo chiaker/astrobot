@@ -95,8 +95,8 @@ def test_build_kb_button_types():
     cbs = _callbacks(kb)
     assert "bcast:ask:7:1" in cbs
     # All action buttons route through bcast:* so they open as a NEW message and
-    # never edit the broadcast away.
-    assert "bcast:premium" in cbs
+    # never edit the broadcast away. "premium" opens the month-plan purchase.
+    assert "bcast:buy:month" in cbs
     assert "bcast:buy:question_pack" in cbs
     assert "bcast:chat" in cbs
     assert "bcast:onb" in cbs

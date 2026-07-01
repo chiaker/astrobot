@@ -7,12 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.handlers.menu import send_main_menu
 from astrobot.bot.handlers.onboarding import prompt_for_name
-from astrobot.bot.handlers.payment import (
-    _active_subscription,
-    _intro_text,
-    _method_kb,
-    _plans_kb,
-)
+from astrobot.bot.handlers.payment import _method_kb
 from astrobot.bot.handlers.question import _answer_question
 from astrobot.bot.keyboards import premium_or_back_kb, topics_kb
 from astrobot.bot.states import AskingQuestion
@@ -88,15 +83,6 @@ async def on_broadcast_ask(
 # The handlers below open existing flows as a NEW message (call.message.answer)
 # rather than editing in place, so the broadcast itself is never replaced when a
 # user taps one of its buttons.
-
-@router.callback_query(F.data == "bcast:premium")
-async def on_broadcast_premium(
-    call: CallbackQuery, session: AsyncSession, user: User
-) -> None:
-    await call.answer()
-    sub = await _active_subscription(session, user)
-    await call.message.answer(_intro_text(user, sub), reply_markup=_plans_kb(sub))
-
 
 @router.callback_query(F.data.startswith("bcast:buy:"))
 async def on_broadcast_buy(call: CallbackQuery) -> None:

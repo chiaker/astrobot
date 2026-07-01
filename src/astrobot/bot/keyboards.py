@@ -262,7 +262,9 @@ def followup_cta_kb() -> InlineKeyboardMarkup:
 # message — so the broadcast itself is never edited away when the user taps a
 # button. The "url" and "ask" types are handled separately (per-button data).
 _BROADCAST_CALLBACKS = {
-    "premium": "bcast:premium",
+    # "premium" opens the month subscription purchase directly (method picker),
+    # mirroring "question_pack" which opens the 10-question pack purchase.
+    "premium": "bcast:buy:month",
     "question_pack": "bcast:buy:question_pack",
     "open_chat": "bcast:chat",
     "onboarding": "bcast:onb",
