@@ -391,7 +391,7 @@ async def _start_payment(
     recurring_note = (
         f"\n\n♻️ Это <b>подписка</b>: каждые 30 дней автоматически спишется "
         f"{item.amount_rub} ₽, пока не отменишь в разделе 💎 Премиум."
-        if item.recurring
+        if item.recurring and settings.recurring_enabled
         else ""
     )
     await target.answer(
