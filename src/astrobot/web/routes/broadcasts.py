@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from astrobot.config import get_settings
 from astrobot.db.models import BirthProfile, Broadcast, BroadcastVariant, User
@@ -20,6 +21,8 @@ from astrobot.web.routes.stats import _MSK, _esc, _layout
 router = APIRouter(tags=["admin"])
 
 MAX_BUTTONS = 3
+MAX_ANIM_MB = 20
+MAX_ANIM_BYTES = MAX_ANIM_MB * 1024 * 1024
 
 # (value, label) for the button-type <select>. "none" = empty row (skipped).
 _BTN_TYPES: list[tuple[str, str]] = [
@@ -187,10 +190,28 @@ def _btn_type_select(name: str, current: str) -> str:
 def _render_segment_card(seg: str, variant: BroadcastVariant | None, count: int) -> str:
     enabled = variant.enabled if variant else False
     text = variant.text if variant else ""
-    animation = variant.animation if variant else ""
     buttons = list(variant.buttons) if (variant and variant.buttons) else []
     color = _SEG_COLORS.get(seg, "#7c3aed")
     off = "" if enabled else " off"
+
+    # Show the current animation (uploaded filename, or a legacy file_id/URL) with
+    # an option to remove it. `variant.animation_data` is deferred, so we detect
+    # presence via the small metadata columns only — never touch the blob here.
+    if variant and variant.animation_name:
+        anim_name = variant.animation_name
+    elif variant and variant.animation:
+        anim_name = "загружена ранее"
+    else:
+        anim_name = ""
+    if anim_name:
+        anim_status = (
+            f"<div class='bc-hint'>Текущая анимация: <b>{_esc(anim_name)}</b> · "
+            "загрузи новый файл, чтобы заменить</div>"
+            f"<label class='bc-toggle' style='margin-top:6px'>"
+            f"<input type='checkbox' name='seg_{seg}_animation_clear'> Удалить анимацию</label>"
+        )
+    else:
+        anim_status = ""
 
     btn_rows = [
         "<div class='bc-btnrow'>"
@@ -226,9 +247,10 @@ def _render_segment_card(seg: str, variant: BroadcastVariant | None, count: int)
         "<div class='bc-lbl' style='margin-top:14px'>Текст сообщения</div>"
         f"<textarea class='bc-text' name='seg_{seg}_text' "
         f"placeholder='Текст сообщения…'>{_esc(text)}</textarea>"
-        "<div class='bc-lbl' style='margin-top:14px'>Анимация (file_id или URL гифки)</div>"
-        f"<input class='bc-in' type='text' name='seg_{seg}_animation' "
-        f"placeholder='необязательно' value='{_esc(animation)}'>"
+        f"<div class='bc-lbl' style='margin-top:14px'>Анимация — GIF или MP4 (до {MAX_ANIM_MB} МБ, необязательно)</div>"
+        + anim_status
+        + f"<input class='bc-in' type='file' name='seg_{seg}_animation_file' "
+        "accept='image/gif,video/mp4,image/*,video/*'>"
         "<div class='bc-btns-head'>Кнопки (до 3)</div>"
         + "".join(btn_rows)
         + "</div>"
@@ -272,7 +294,7 @@ def _render_editor(
     )
     if editable:
         parts.append(
-            f"<form method='post' action='/admin/broadcasts/{b.id}'>"
+            f"<form method='post' enctype='multipart/form-data' action='/admin/broadcasts/{b.id}'>"
             + seg_cards
             + "<div class='card'><button type='submit' class='btn btn-p'>"
             "💾 Сохранить все сегменты</button></div></form>"
@@ -343,10 +365,27 @@ def _render_editor(
 # ─── helpers ──────────────────────────────────────────────────────────────────
 
 async def _load_variants(session: AsyncSession, broadcast_id: int) -> dict[str, BroadcastVariant]:
+    """Load variants WITHOUT the animation blob (defer) — the editor/save pages
+    only need metadata, and the bytes can be several MB each. Never read
+    `.animation_data` on these instances (async lazy-load would raise)."""
     rows = await session.scalars(
-        select(BroadcastVariant).where(BroadcastVariant.broadcast_id == broadcast_id)
+        select(BroadcastVariant)
+        .where(BroadcastVariant.broadcast_id == broadcast_id)
+        .options(defer(BroadcastVariant.animation_data))
     )
     return {v.segment: v for v in rows}
+
+
+async def _load_variant_with_blob(
+    session: AsyncSession, broadcast_id: int, segment: str
+) -> BroadcastVariant | None:
+    """Load a single variant WITH the animation bytes — needed for sending."""
+    return await session.scalar(
+        select(BroadcastVariant).where(
+            BroadcastVariant.broadcast_id == broadcast_id,
+            BroadcastVariant.segment == segment,
+        )
+    )
 
 
 # ─── routes ───────────────────────────────────────────────────────────────────
@@ -412,11 +451,11 @@ async def broadcast_save(
 
     form = await request.form()
     variants = await _load_variants(session, broadcast_id)
+    errors: list[str] = []
 
     for seg in BROADCAST_SEGMENTS:
         enabled = form.get(f"seg_{seg}_enabled") == "on"
         text = (form.get(f"seg_{seg}_text") or "").strip()
-        animation = (form.get(f"seg_{seg}_animation") or "").strip()
         buttons: list[dict] = []
         for i in range(MAX_BUTTONS):
             btype = (form.get(f"seg_{seg}_btn{i}_type") or "none").strip()
@@ -431,10 +470,31 @@ async def broadcast_save(
             session.add(variant)
         variant.enabled = enabled
         variant.text = text
-        variant.animation = animation
         variant.buttons = buttons
 
+        # Animation: a newly uploaded file replaces the current one; a checked
+        # "remove" box clears it; otherwise the existing animation is untouched.
+        upload = form.get(f"seg_{seg}_animation_file")
+        if isinstance(upload, UploadFile) and upload.filename:
+            data = await upload.read()
+            if len(data) > MAX_ANIM_BYTES:
+                errors.append(
+                    f"{BROADCAST_SEGMENT_LABELS[seg]}: файл больше {MAX_ANIM_MB} МБ — не сохранён"
+                )
+            elif data:
+                variant.animation_data = data
+                variant.animation_name = upload.filename[:255]
+                variant.animation = ""  # drop stale cached file_id → re-cache on next send
+        elif form.get(f"seg_{seg}_animation_clear") == "on":
+            variant.animation_data = None
+            variant.animation_name = None
+            variant.animation = ""
+
     await session.commit()
+    if errors:
+        return RedirectResponse(
+            url=f"/admin/broadcasts/{broadcast_id}?err=" + "; ".join(errors), status_code=303
+        )
     return RedirectResponse(
         url=f"/admin/broadcasts/{broadcast_id}?msg=Сохранено.", status_code=303
     )
@@ -450,9 +510,9 @@ async def broadcast_test(
 ):
     if (r := _auth_redirect(request)) is not None:
         return r
-    variants = await _load_variants(session, broadcast_id)
-    variant = variants.get(segment)
-    if variant is None or not (variant.text or variant.animation):
+    # Load WITH the animation bytes — the send path reads them.
+    variant = await _load_variant_with_blob(session, broadcast_id, segment)
+    if variant is None or not (variant.text or variant.animation or variant.animation_data):
         return RedirectResponse(
             url=f"/admin/broadcasts/{broadcast_id}?err=У этого сегмента нет наполнения.",
             status_code=303,
@@ -462,7 +522,11 @@ async def broadcast_test(
 
     bot = request.app.state.bot
     try:
-        await _send_broadcast_variant(bot, tg_id, variant)
+        new_file_id = await _send_broadcast_variant(bot, tg_id, variant)
+        # Cache the file_id from the first upload so real sends skip re-uploading.
+        if new_file_id and not variant.animation:
+            variant.animation = new_file_id
+            await session.commit()
         out = f"msg=Тест отправлен в чат {tg_id}."
     except Exception as e:  # noqa: BLE001 — surface any send error to the admin
         out = f"err=Не удалось отправить: {e}"

@@ -10,6 +10,7 @@ from aiogram.exceptions import (
     TelegramForbiddenError,
     TelegramRetryAfter,
 )
+from aiogram.types import BufferedInputFile
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -616,26 +617,54 @@ BROADCAST_SEND_DELAY = 0.05    # ~20 msg/s, well under Telegram's global limit
 
 
 def _variant_has_content(variant) -> bool:
-    return bool((variant.text or "").strip() or (variant.animation or "").strip())
+    # animation_name is set whenever an animation was uploaded and is a small,
+    # always-loaded column — so this never needs the (potentially deferred) blob.
+    return bool(
+        (variant.text or "").strip()
+        or (variant.animation or "").strip()
+        or variant.animation_name
+    )
 
 
-async def _send_broadcast_variant(bot: Bot, chat_id: int, variant) -> None:
-    """Send a broadcast variant: animation+caption if configured (falling back to
-    text on a bad file_id), else plain text. Lets TelegramRetryAfter/Forbidden
+async def _send_broadcast_variant(bot: Bot, chat_id: int, variant) -> str | None:
+    """Send a broadcast variant: animation+caption if configured, else plain text.
+    Returns a freshly obtained Telegram file_id when an uploaded file was sent for
+    the first time (so the caller can cache it into `variant.animation` and skip
+    re-uploading on later sends), otherwise None. Lets TelegramRetryAfter/Forbidden
     bubble up to the per-user handler."""
     kb = build_broadcast_kb(variant)
     text = variant.text or ""
+
+    # Fast path: a known file_id (cached from a prior send) or legacy URL.
     if variant.animation:
         try:
             await bot.send_animation(
                 chat_id=chat_id, animation=variant.animation, caption=text, reply_markup=kb
             )
-            return
+            return None
         except (TelegramRetryAfter, TelegramForbiddenError):
             raise
         except Exception as e:
             log.warning("broadcast_animation_failed", chat_id=chat_id, error=str(e))
+
+    # Uploaded bytes with no cached file_id yet: upload once, return the file_id.
+    elif variant.animation_data:
+        upload = BufferedInputFile(
+            bytes(variant.animation_data), filename=variant.animation_name or "animation.mp4"
+        )
+        try:
+            msg = await bot.send_animation(
+                chat_id=chat_id, animation=upload, caption=text, reply_markup=kb
+            )
+            media = msg.animation or msg.document or msg.video
+            return media.file_id if media else None
+        except (TelegramRetryAfter, TelegramForbiddenError):
+            raise
+        except Exception as e:
+            log.warning("broadcast_animation_upload_failed", chat_id=chat_id, error=str(e))
+
     await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
+    return None
 
 
 async def _run_broadcast(bot: Bot, broadcast_id: int) -> None:
@@ -691,7 +720,13 @@ async def _run_broadcast(bot: Bot, broadcast_id: int) -> None:
                 variant = variants.get(segment_of(user, user.id in onboarded))
                 if variant is not None:
                     try:
-                        await _send_broadcast_variant(bot, user.tg_user_id, variant)
+                        new_file_id = await _send_broadcast_variant(
+                            bot, user.tg_user_id, variant
+                        )
+                        # Cache the file_id after the first upload so the rest of
+                        # the batch reuses it instead of re-uploading the bytes.
+                        if new_file_id and not variant.animation:
+                            variant.animation = new_file_id
                         broadcast.sent_count += 1
                         PUSH_SENT.labels(kind="broadcast", result="ok").inc()
                     except TelegramRetryAfter as e:

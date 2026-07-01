@@ -11,6 +11,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -379,7 +380,14 @@ class BroadcastVariant(Base):
     segment: Mapped[str] = mapped_column(String(32))
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     text: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # A Telegram file_id (auto-cached from the first send of an uploaded file) or
+    # a legacy pasted file_id/URL. Empty until known.
     animation: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    # The uploaded animation bytes (source of truth; survives redeploys). On the
+    # first send its file_id is cached into `animation` so later sends skip the
+    # re-upload. animation_name preserves the original filename for Telegram.
+    animation_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    animation_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     buttons: Mapped[list] = mapped_column(JSON, default=list)
 
     broadcast: Mapped[Broadcast] = relationship(back_populates="variants")
