@@ -774,10 +774,12 @@ async def _gather_users(
         # simpler: use text search on tg_user_id string
         from sqlalchemy import String as SAStr
         from sqlalchemy import cast
+        uname = f"%{search.lstrip('@')}%"  # match @username with or without the @
         flt = or_(
             cast(User.tg_user_id, SAStr).like(term),
             User.display_name.ilike(term),
             User.referral_code.ilike(term),
+            User.username.ilike(uname),
         )
         base = base.where(flt)
         cnt_q = cnt_q.where(flt)
@@ -848,7 +850,7 @@ def _render_users(users: list, total: int, page: int, search: str, now: datetime
 <p class='ph-sub'>Всего: {total}</p>
 <form method='get' action='/admin/users'>
   <div class='search-row'>
-    <input name='search' placeholder='TG ID, имя или реф-код…' value='{_esc(search)}'>
+    <input name='search' placeholder='TG ID, @username, имя или реф-код…' value='{_esc(search)}'>
     <button type='submit' class='btn btn-p'>Найти</button>
     <a href='/admin/users' class='btn btn-ghost'>Сброс</a>
   </div>
@@ -960,6 +962,7 @@ def _render_user_detail(user, profile, stats: dict, now: datetime, msg: str = ""
     </div>
     <div class='dg'>
       <div class='di'><div class='dl'>TG ID</div><div class='dv mono'>{user.tg_user_id}</div></div>
+      <div class='di'><div class='dl'>Username</div><div class='dv'>{('@' + _esc(user.username)) if user.username else '—'}</div></div>
       <div class='di'><div class='dl'>Имя</div><div class='dv'>{_esc(user.display_name) or '—'}</div></div>
       <div class='di'><div class='dl'>Пол</div><div class='dv'>{gender_str}</div></div>
       <div class='di'><div class='dl'>Астротермины</div><div class='dv'>{'Вкл' if user.astro_terms_enabled else 'Выкл'}</div></div>
@@ -1024,6 +1027,18 @@ def _render_user_detail(user, profile, stats: dict, now: datetime, msg: str = ""
       {"<button type='submit' name='quick' value='toggle_excluded' class='btn btn-g btn-sm'>↩ Вернуть в статистику</button>" if user.excluded_from_stats else "<button type='submit' name='quick' value='toggle_excluded' class='btn btn-ghost btn-sm'>🚫 Исключить из статистики</button>"}
       <button type='submit' name='quick' value='reset_all' class='btn btn-danger' onclick="return confirm('Полный сброс аккаунта — премиум, бонусы и лимиты. Продолжить?')">⚠ Полный сброс</button>
     </div>
+  </form>
+</div>
+
+<div class='card'>
+  <div class='card-head'><span class='card-title'>💬 Сообщение от поддержки</span></div>
+  <form method='post' action='/admin/users/{user.id}/message'>
+    <div class='fg'>
+      <label>Написать пользователю в бот</label>
+      <textarea name='text' rows='4' style='width:100%;padding:8px 11px;border:1px solid #e2e8f0;border-radius:6px;font-size:14px' placeholder='Например: Всё починили — можешь снова пользоваться ботом ✨' required></textarea>
+      <div class='note'>Придёт в чат с ботом как сообщение от поддержки. Можно без обращения пользователя. Разрешён HTML (&lt;b&gt;, ссылки).</div>
+    </div>
+    <button type='submit' class='btn btn-p'>📨 Отправить пользователю</button>
   </form>
 </div>
 """
@@ -1650,6 +1665,44 @@ async def user_edit(
     return RedirectResponse(
         url=f"/admin/users/{user_id}?msg={msg}", status_code=303
     )
+
+
+@router.post("/admin/users/{user_id}/message")
+async def user_message(
+    request: Request,
+    user_id: int,
+    text: str = Form(default=""),
+    session: AsyncSession = Depends(get_session),
+):
+    """Send a one-off message to a specific user from support — even if they never
+    opened a ticket (e.g. "we fixed it, try again")."""
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/admin/login", status_code=303)
+    user = await session.get(User, user_id)
+    if user is None:
+        return RedirectResponse(url="/admin/users", status_code=303)
+    body = text.strip()
+    if not body:
+        return RedirectResponse(
+            url=f"/admin/users/{user_id}?err=Пустое сообщение.", status_code=303
+        )
+    bot = getattr(request.app.state, "bot", None)
+    if bot is None:
+        return RedirectResponse(
+            url=f"/admin/users/{user_id}?err=Бот недоступен.", status_code=303
+        )
+    header = "💬 <b>Поддержка Астры</b>\n\n"
+    try:
+        await bot.send_message(user.tg_user_id, header + body)
+        out = "msg=Сообщение отправлено."
+    except Exception:
+        # Most likely malformed HTML — resend with the body escaped as plain text.
+        try:
+            await bot.send_message(user.tg_user_id, header + html.escape(body))
+            out = "msg=Сообщение отправлено (как обычный текст)."
+        except Exception as e:  # noqa: BLE001 — surface the real error to the admin
+            out = f"err=Не удалось отправить: {e}"
+    return RedirectResponse(url=f"/admin/users/{user_id}?{out}", status_code=303)
 
 
 @router.get("/admin/logs", response_class=HTMLResponse)
