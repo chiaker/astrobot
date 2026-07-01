@@ -626,6 +626,24 @@ def _variant_has_content(variant) -> bool:
     )
 
 
+def _animation_filename(data: bytes, fallback: str | None) -> str:
+    """Pick a filename whose extension matches the ACTUAL bytes. aiogram derives
+    the upload's content-type from the extension, and Telegram uses that to decide
+    animation vs document — so a 'gif' name on MP4 bytes (very common) makes it a
+    plain file. Sniff the magic bytes and normalise the extension."""
+    head = data[:16]
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return "animation.gif"
+    if head[4:8] == b"ftyp":  # ISO base media (MP4/MOV)
+        return "animation.mp4"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "animation.webp"
+    ext = (fallback or "").lower().rsplit(".", 1)[-1]
+    if ext in ("gif", "mp4", "webp", "webm"):
+        return fallback  # trust a known-good original extension
+    return "animation.mp4"
+
+
 async def _send_broadcast_variant(bot: Bot, chat_id: int, variant) -> str | None:
     """Send a broadcast variant: animation+caption if configured, else plain text.
     Returns a freshly obtained Telegram file_id when an uploaded file was sent for
@@ -649,14 +667,17 @@ async def _send_broadcast_variant(bot: Bot, chat_id: int, variant) -> str | None
 
     # Uploaded bytes with no cached file_id yet: upload once, return the file_id.
     elif variant.animation_data:
+        data = bytes(variant.animation_data)
         upload = BufferedInputFile(
-            bytes(variant.animation_data), filename=variant.animation_name or "animation.mp4"
+            data, filename=_animation_filename(data, variant.animation_name)
         )
         try:
             msg = await bot.send_animation(
                 chat_id=chat_id, animation=upload, caption=text, reply_markup=kb
             )
-            media = msg.animation or msg.document or msg.video
+            # Cache ONLY when Telegram treated it as an animation/video. If it fell
+            # back to a document, don't cache that id — re-upload next time instead.
+            media = msg.animation or msg.video
             return media.file_id if media else None
         except (TelegramRetryAfter, TelegramForbiddenError):
             raise
