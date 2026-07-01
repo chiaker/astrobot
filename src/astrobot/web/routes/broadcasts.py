@@ -313,6 +313,7 @@ def _render_editor(
     variants: dict[str, BroadcastVariant],
     counts: dict[str, int],
     default_tg: int | None,
+    recipients: list[tuple[int, str]],
     msg: str,
     err: str,
 ) -> str:
@@ -362,16 +363,21 @@ def _render_editor(
         f"<option value='{seg}'>{_esc(BROADCAST_SEGMENT_LABELS[seg])}</option>"
         for seg in BROADCAST_SEGMENTS
     )
+    rcpt_opts = "<option value=''>— по Telegram ID —</option>" + "".join(
+        f"<option value='{tgid}'>{_esc(label)}</option>" for tgid, label in recipients
+    )
     parts.append(
         "<div class='card'><div class='card-head'>"
         "<span class='card-title'>Тест-отправка себе</span></div>"
         f"<form method='post' action='/admin/broadcasts/{b.id}/test' class='bc-actions'>"
         f"<select class='bc-sel' name='segment' style='width:auto'>{seg_opts}</select>"
-        f"<input class='bc-in' type='number' name='tg_id' placeholder='Telegram ID' "
-        f"style='width:auto' value='{default_tg if default_tg else ''}' required>"
+        f"<select class='bc-sel' name='recipient' style='width:auto'>{rcpt_opts}</select>"
+        f"<input class='bc-in' type='number' name='tg_id' placeholder='или Telegram ID' "
+        f"style='width:auto' value='{default_tg if default_tg else ''}'>"
         "<button type='submit' class='btn btn-ghost'>📨 Отправить тест</button>"
         "</form>"
-        "<p class='bc-hint'>Отправит вариант выбранного сегмента в указанный чат — проверь вид и кнопки перед запуском.</p>"
+        "<p class='bc-hint'>Выбери получателя из исключённых пользователей (по @username) "
+        "или укажи Telegram ID. Придёт вариант выбранного сегмента — проверь вид и кнопки перед запуском.</p>"
         "</div>"
     )
 
@@ -431,6 +437,26 @@ async def _load_variants(session: AsyncSession, broadcast_id: int) -> dict[str, 
     return {v.segment: v for v in rows}
 
 
+async def _excluded_recipients(session: AsyncSession) -> list[tuple[int, str]]:
+    """Excluded (test/staff) users as (tg_user_id, label) for the test-send picker.
+    Labeled by @username when known, else display name / id."""
+    rows = await session.scalars(
+        select(User)
+        .where(User.excluded_from_stats.is_(True))
+        .order_by(User.username, User.id)
+    )
+    out: list[tuple[int, str]] = []
+    for u in rows:
+        if u.username:
+            label = f"@{u.username}"
+        elif u.display_name:
+            label = f"{u.display_name} (#{u.id})"
+        else:
+            label = f"#{u.id} · {u.tg_user_id}"
+        out.append((u.tg_user_id, label))
+    return out
+
+
 async def _load_variant_with_blob(
     session: AsyncSession, broadcast_id: int, segment: str
 ) -> BroadcastVariant | None:
@@ -483,8 +509,11 @@ async def broadcast_editor(
         return HTMLResponse(_layout("404", "<p>Рассылка не найдена.</p>"), status_code=404)
     variants = await _load_variants(session, broadcast_id)
     counts = await _segment_counts(session)
+    recipients = await _excluded_recipients(session)
     default_tg = get_settings().ops_chat_id
-    return HTMLResponse(_render_editor(b, variants, counts, default_tg, msg, err))
+    return HTMLResponse(
+        _render_editor(b, variants, counts, default_tg, recipients, msg, err)
+    )
 
 
 @router.post("/admin/broadcasts/{broadcast_id}")
@@ -569,11 +598,25 @@ async def broadcast_test(
     request: Request,
     broadcast_id: int,
     segment: str = Form(...),
-    tg_id: int = Form(...),
+    recipient: str = Form(default=""),  # tg_user_id chosen from the excluded-users list
+    tg_id: str = Form(default=""),  # or a manually typed Telegram ID
     session: AsyncSession = Depends(get_session),
 ):
     if (r := _auth_redirect(request)) is not None:
         return r
+    raw = recipient.strip() or tg_id.strip()
+    if not raw:
+        return RedirectResponse(
+            url=f"/admin/broadcasts/{broadcast_id}?err=Укажи получателя (из списка или Telegram ID).",
+            status_code=303,
+        )
+    try:
+        target = int(raw)
+    except ValueError:
+        return RedirectResponse(
+            url=f"/admin/broadcasts/{broadcast_id}?err=Некорректный получатель.", status_code=303
+        )
+
     # Load WITH the animation bytes — the send path reads them.
     variant = await _load_variant_with_blob(session, broadcast_id, segment)
     if variant is None or not (variant.text or variant.animation or variant.animation_data):
@@ -586,12 +629,12 @@ async def broadcast_test(
 
     bot = request.app.state.bot
     try:
-        new_file_id = await _send_broadcast_variant(bot, tg_id, variant)
+        new_file_id = await _send_broadcast_variant(bot, target, variant)
         # Cache the file_id from the first upload so real sends skip re-uploading.
         if new_file_id and not variant.animation:
             variant.animation = new_file_id
             await session.commit()
-        out = f"msg=Тест отправлен в чат {tg_id}."
+        out = f"msg=Тест отправлен в чат {target}."
     except Exception as e:  # noqa: BLE001 — surface any send error to the admin
         out = f"err=Не удалось отправить: {e}"
     return RedirectResponse(url=f"/admin/broadcasts/{broadcast_id}?{out}", status_code=303)

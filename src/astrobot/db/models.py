@@ -31,6 +31,9 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tg_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    # Telegram @username (without the @), refreshed on each interaction. NULL if
+    # the account has no username set.
+    username: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     lang: Mapped[str] = mapped_column(String(8), default="ru")
     default_response: Mapped[str] = mapped_column(String(8), default="brief")
     premium_until: Mapped[datetime | None] = mapped_column(

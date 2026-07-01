@@ -94,12 +94,17 @@ class UserMiddleware(BaseMiddleware):
         if is_new_user:
             user = User(
                 tg_user_id=tg_user.id,
+                username=tg_user.username,
                 lang=tg_user.language_code or "ru",
                 referral_code=await _unique_code(session),
             )
             session.add(user)
             await session.commit()
             await session.refresh(user)
+        elif user.username != tg_user.username:
+            # Keep the stored @username fresh (they can change or add/remove it).
+            user.username = tg_user.username
+            await session.commit()
 
         data["user"] = user
         data["is_new_user"] = is_new_user
