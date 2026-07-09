@@ -103,6 +103,13 @@ class MaxContext(PlatformContext):
         self._callback = callback
         if message is None and callback is None:
             raise ValueError("MaxContext требует message или callback")
+        # MAX lets a callback be "answered" exactly once (ack/answer/edit all count).
+        # We defer the ack: edit() is itself the answer; a standalone ack happens in
+        # finish() only if the handler changed nothing. This makes answer_callback()
+        # order-independent (handlers call it before or after edit()).
+        self._responded = False
+        self._ack_requested = False
+        self._ack_text: str | None = None
 
     @property
     def _event(self) -> Any:
@@ -168,16 +175,29 @@ class MaxContext(PlatformContext):
             await self._callback.edit(
                 text, attachments=_attachments(kb) or [], format=TextFormat.HTML
             )
+            self._responded = True  # the edit IS the callback's answer
             return SentMessage(message_id=_callback_message_id(self._callback))
         # У обычного сообщения нет edit — отправляем новое (как fallback в TG).
         return await self.reply(text, kb)
 
     async def answer_callback(self, text: str | None = None, *, alert: bool = False) -> None:
+        # Deferred: don't answer the callback now (that would consume the single
+        # allowed response and make a following edit() a no-op). Just remember the
+        # intent; finish() acks later iff nothing else responded.
         if self._callback is not None:
-            # ack() acknowledges WITHOUT touching the message. Do NOT use answer():
-            # answer() re-renders the message (with attachments=None it strips the
-            # keyboard), so an answer() after edit() wipes the just-set keyboard.
-            await self._callback.ack(notification=text)
+            self._ack_requested = True
+            self._ack_text = text
+
+    async def finish(self) -> None:
+        """Flush a pending callback ack. Called by the dispatcher after each handler.
+
+        If the handler already responded (edit), the callback is answered — do
+        nothing. Otherwise ack it (with the notification text, if any) so the MAX
+        client clears the button's pending state."""
+        if self._callback is None or self._responded:
+            return
+        await self._callback.ack(notification=self._ack_text)
+        self._responded = True
 
     async def send_photo(
         self, media: Media, caption: str | None = None, kb: Keyboard | None = None

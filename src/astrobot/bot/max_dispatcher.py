@@ -121,11 +121,21 @@ class ContextMiddleware(BaseMiddleware):
         self._bot = bot
 
     async def __call__(self, handler, event, data):
+        ctx = None
         if isinstance(event, MessageCallback):
-            data["ctx"] = MaxContext(bot=self._bot, callback=event)
+            ctx = MaxContext(bot=self._bot, callback=event)
         elif isinstance(event, MessageCreated):
-            data["ctx"] = MaxContext(bot=self._bot, message=event)
-        return await handler(event, data)
+            ctx = MaxContext(bot=self._bot, message=event)
+        if ctx is not None:
+            data["ctx"] = ctx
+        try:
+            return await handler(event, data)
+        finally:
+            # Flush a deferred callback ack (no-op unless it was a callback the
+            # handler didn't otherwise answer) — even on error, so the button's
+            # pending state always clears.
+            if ctx is not None:
+                await ctx.finish()
 
 
 # ─────────────────────────── dispatcher ───────────────────────────
