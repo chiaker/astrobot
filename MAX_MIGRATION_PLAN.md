@@ -17,6 +17,42 @@
 
 ---
 
+## ✅ Веха: слой платформы валидирован ВЖИВУЮ на MAX (09.07.2026)
+
+На тестовом MAX-боте «Astra» (`@id231129141847_bot`, user_id 367426944) прогнан
+живой смоук через наш адаптер `MaxContext` + нейтральные клавиатуры:
+`/start` → меню, нажатия по всем 10 кнопкам — все callback'и обработаны, `payload`
+и `user_id` извлечены верно, **ноль ошибок**. Подтверждено вживую:
+- поля событий maxapi (`callback.payload`, `callback.user.user_id`,
+  `message.sender.user_id`, `recipient.chat_id`, `body.mid`) — совпадают с `max.py`;
+- нейтральная `Keyboard` → MAX-разметка (`to_markup`) рендерится в MAX;
+- `MaxContext.reply / edit / answer_callback` работают.
+- MAX API: база `botapi.max.ru`, авторизация — заголовок `Authorization: <token>`
+  (query-параметр `access_token` устарел). `Bot(token, format=TextFormat.HTML)`
+  задаёт формат глобально; `disable_link_preview` поддерживается на `answer`.
+
+Тезис «одна кодовая база, две платформы» доказан на реальном MAX. Осталось: реальный
+MAX-рантайм в коде (не смоук-скрипт) + доперевод хендлеров на `ctx` + MAX-инфра.
+
+**Обновление — реальный рантайм валидирован с БД (09.07.2026):** `bot/max_dispatcher.py`
+(maxapi Bot+Dispatcher + middleware DbSession/User-по-MAX-id/Context, переиспользует общие
+`ctx`-тела menu/about/legal) запущен вживую против одноразовых Postgres+Redis + твой токен.
+Меню/about/referral + навигация работают, **юзер создан в БД** (max_user_id в колонке
+`tg_user_id` на отдельной MAX-БД), реф-код прочитан из БД. Ошибок ноль.
+
+Выученные нюансы MAX (зашиты в `max.py`):
+- callback «отвечается» РОВНО ОДИН раз (ack/answer/edit — любой первый). Поэтому ack
+  **отложенный**: `answer_callback()` лишь запоминает намерение, `edit()` сам является
+  ответом, а диспетчер зовёт `ctx.finish()` после хендлера (ack, только если ничего не
+  ответило). Иначе ack до edit делает edit no-op.
+- `MessageCallback.answer()` перерисовывает сообщение (с `attachments=None` стирает
+  клавиатуру) — использовать `ack(notification=...)`, не `answer()`.
+- Реф-ссылка в `about.on_referral_show` пока `t.me/...` — нужен платформо-зависимый формат
+  (входит в «deep-link рефералов», §9a).
+
+Смоук-окружение на сервере (`root@45.136.175.136`): образ `astrobot-smoke:latest`,
+клон ветки `/root/smoke/astrobot`, скрипт `/root/smoke/max_smoke.py`. Прод не тронут.
+
 ## 1. Целевая архитектура
 
 ```
