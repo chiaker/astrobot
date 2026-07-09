@@ -3,13 +3,15 @@ from __future__ import annotations
 import asyncio
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.astrology.chart import build_natal_chart
 from astrobot.astrology.serializer import chart_to_markdown
 from astrobot.astrology.types import BirthData
 from astrobot.bot.keyboards import natal_cta_kb, natal_paywall_kb
+from astrobot.bot.platform import Button
+from astrobot.bot.platform.telegram import to_markup
 from astrobot.bot.responses import save_and_send_response
 from astrobot.bot.utils import need_profile, user_llm_lock
 from astrobot.db.models import BirthProfile, LLMUsageLog, User
@@ -17,7 +19,7 @@ from astrobot.limits import check_natal, consume_natal_bonus_if_needed, paywall_
 from astrobot.llm.client import get_llm
 from astrobot.llm.prompts import build_system_natal
 
-_REGEN_ROW = [InlineKeyboardButton(text="🔄 Пересчитать заново", callback_data="natal:regen")]
+_REGEN_ROW = [Button(text="🔄 Пересчитать заново", payload="natal:regen")]
 
 # Shown once, right after the first (onboarding) natal chart — nudges the user
 # toward asking a question or exploring plans.
@@ -114,7 +116,7 @@ async def generate_natal(
         await session.refresh(user)
         allowance = await check_natal(session, user)
         if not allowance.allowed:
-            await target.answer(paywall_text("natal", allowance), reply_markup=natal_paywall_kb())
+            await target.answer(paywall_text("natal", allowance), reply_markup=to_markup(natal_paywall_kb()))
             return
         pre_call_used = allowance.used
         display_name = user.display_name or "User"
@@ -126,7 +128,7 @@ async def generate_natal(
             show_actions=False,
         )
         # Call-to-action after the very first chart (onboarding only).
-        await target.answer(_NATAL_CTA_TEXT, reply_markup=natal_cta_kb())
+        await target.answer(_NATAL_CTA_TEXT, reply_markup=to_markup(natal_cta_kb()))
 
 
 @router.callback_query(F.data == "menu:natal")
@@ -150,7 +152,7 @@ async def on_natal(call: CallbackQuery, session: AsyncSession, user: User) -> No
         await session.refresh(user)
         allowance = await check_natal(session, user)
         if not allowance.allowed:
-            await target.answer(paywall_text("natal", allowance), reply_markup=natal_paywall_kb())
+            await target.answer(paywall_text("natal", allowance), reply_markup=to_markup(natal_paywall_kb()))
             return
 
         display_name = user.display_name or (call.from_user.full_name if call.from_user else None) or "User"
@@ -173,7 +175,7 @@ async def on_natal_regen(call: CallbackQuery, session: AsyncSession, user: User)
         allowance = await check_natal(session, user)
         if not allowance.allowed:
             await call.answer()
-            await call.message.answer(paywall_text("natal", allowance), reply_markup=natal_paywall_kb())
+            await call.message.answer(paywall_text("natal", allowance), reply_markup=to_markup(natal_paywall_kb()))
             return
 
         profile.cached_natal_brief = None

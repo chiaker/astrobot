@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+from aiogram.types import CallbackQuery
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.formatting import md_to_telegram_html
 from astrobot.bot.keyboards import MENU_BACK_BTN, with_back
+from astrobot.bot.platform import Button, Keyboard
 from astrobot.bot.responses import chunk_text, edit_or_send, safe_answer
 from astrobot.db.models import Favorite, Response, User
 from astrobot.limits import is_premium
@@ -91,19 +88,13 @@ async def on_save(
     await call.answer("⭐ Сохранено в избранное")
 
 
-def _list_kb(items: list[Favorite]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
+def _list_kb(items: list[Favorite]) -> Keyboard:
+    rows: list[list[Button]] = []
     for f in items:
         date = f.created_at.strftime("%d.%m")
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"{f.label} • {date}", callback_data=f"fav:view:{f.id}"
-                )
-            ]
-        )
+        rows.append([Button(text=f"{f.label} • {date}", payload=f"fav:view:{f.id}")])
     rows.append([MENU_BACK_BTN])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return Keyboard.from_rows(rows)
 
 
 @router.callback_query(F.data == "menu:favorites")
@@ -150,13 +141,9 @@ async def on_view(
         return
 
     await call.answer()
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🗑 Удалить из избранного", callback_data=f"fav:del:{fav.id}"
-                )
-            ],
+    kb = Keyboard.from_rows(
+        [
+            [Button(text="🗑 Удалить из избранного", payload=f"fav:del:{fav.id}")],
             [MENU_BACK_BTN],
         ]
     )

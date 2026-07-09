@@ -10,6 +10,7 @@ from astrobot.bot.handlers.onboarding import prompt_for_name
 from astrobot.bot.handlers.payment import _method_kb
 from astrobot.bot.handlers.question import _answer_question
 from astrobot.bot.keyboards import premium_or_back_kb, topics_kb
+from astrobot.bot.platform.telegram import to_markup
 from astrobot.bot.states import AskingQuestion
 from astrobot.bot.utils import need_profile
 from astrobot.db.models import BirthProfile, BroadcastVariant, User
@@ -64,7 +65,7 @@ async def on_broadcast_ask(
     allowance = await check_question(session, user)
     if not allowance.allowed:
         await call.message.answer(
-            paywall_text("question", allowance), reply_markup=premium_or_back_kb()
+            paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb())
         )
         return
 
@@ -93,7 +94,7 @@ async def on_broadcast_buy(call: CallbackQuery) -> None:
         return
     await call.message.answer(
         f"<b>{item.title}</b> — {item.amount_rub} ₽\n\nВыбери способ оплаты:",
-        reply_markup=_method_kb(item),
+        reply_markup=to_markup(_method_kb(item)),
     )
 
 
@@ -111,12 +112,12 @@ async def on_broadcast_chat(
     allowance = await check_question(session, user)
     if not allowance.allowed:
         await call.message.answer(
-            paywall_text("question", allowance), reply_markup=premium_or_back_kb()
+            paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb())
         )
         return
     await state.set_state(AskingQuestion.waiting_for_text)
     await call.message.answer(
-        "🌙 Выбери тему — или напиши свой вопрос:", reply_markup=topics_kb()
+        "🌙 Выбери тему — или напиши свой вопрос:", reply_markup=to_markup(topics_kb())
     )
 
 

@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from aiogram.types import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
-
+from astrobot.bot.platform import Button, Keyboard
 from astrobot.db.models import User
 
 MENU_NATAL = "🌟 Натальная карта"
@@ -17,79 +13,77 @@ MENU_FAVORITES = "⭐ Избранное"
 MENU_SETTINGS = "⚙️ Настройки"
 
 # Returns to the main menu by EDITING the current message into it (navigation).
-MENU_BACK_BTN = InlineKeyboardButton(text="🔙 Меню", callback_data="menu:open")
+MENU_BACK_BTN = Button(text="🔙 Меню", payload="menu:open")
 # Returns to the menu as a NEW message, keeping the current one (under results,
 # so a generated reading isn't replaced by the menu).
-MENU_BACK_NEW_BTN = InlineKeyboardButton(text="🔙 Меню", callback_data="menu:new")
+MENU_BACK_NEW_BTN = Button(text="🔙 Меню", payload="menu:new")
 
 
-def menu_back_row() -> list[InlineKeyboardButton]:
+def menu_back_row() -> list[Button]:
     return [MENU_BACK_BTN]
 
 
-def with_back(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
+def with_back(rows: list[list[Button]]) -> Keyboard:
     """Append a '🔙 Меню' row to the given keyboard rows."""
-    return InlineKeyboardMarkup(inline_keyboard=[*rows, [MENU_BACK_BTN]])
+    return Keyboard.from_rows([*rows, [MENU_BACK_BTN]])
 
 
-def promo_row(user: User) -> list[InlineKeyboardButton]:
+def promo_row(user: User) -> list[Button]:
     """No-op kept for callers. Premium is intentionally offered ONLY from the
     main menu and at genuine paywalls (when the free quota / subscription runs
     out) — not sprinkled under every result. ALWAYS EMPTY — callers skip an
-    empty row (Telegram rejects empty keyboard rows)."""
+    empty row (both SDKs reject empty keyboard rows)."""
     return []
 
 
-def main_menu_inline() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def main_menu_inline() -> Keyboard:
+    return Keyboard.from_rows(
+        [
             [
-                InlineKeyboardButton(text=MENU_HOROSCOPE, callback_data="menu:horoscope"),
-                InlineKeyboardButton(text=MENU_NATAL, callback_data="menu:natal"),
+                Button(text=MENU_HOROSCOPE, payload="menu:horoscope"),
+                Button(text=MENU_NATAL, payload="menu:natal"),
             ],
             [
-                InlineKeyboardButton(text=MENU_QUESTION, callback_data="menu:question"),
-                InlineKeyboardButton(text="🃏 Таро", callback_data="menu:tarot"),
+                Button(text=MENU_QUESTION, payload="menu:question"),
+                Button(text="🃏 Таро", payload="menu:tarot"),
             ],
             [
-                InlineKeyboardButton(text="💞 Совместимость", callback_data="menu:compatibility"),
-                InlineKeyboardButton(text=MENU_FAVORITES, callback_data="menu:favorites"),
+                Button(text="💞 Совместимость", payload="menu:compatibility"),
+                Button(text=MENU_FAVORITES, payload="menu:favorites"),
             ],
             [
-                InlineKeyboardButton(text=MENU_PREMIUM, callback_data="menu:premium"),
-                InlineKeyboardButton(text=MENU_PROFILE, callback_data="menu:profile"),
+                Button(text=MENU_PREMIUM, payload="menu:premium"),
+                Button(text=MENU_PROFILE, payload="menu:profile"),
             ],
             [
-                InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="referral:show"),
-                InlineKeyboardButton(text=MENU_ABOUT, callback_data="menu:about"),
+                Button(text="🤝 Пригласить друга", payload="referral:show"),
+                Button(text=MENU_ABOUT, payload="menu:about"),
             ],
         ]
     )
 
 
-def time_unknown_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Не знаю точного времени", callback_data="time:unknown")],
+def time_unknown_kb() -> Keyboard:
+    return Keyboard.from_rows(
+        [
+            [Button(text="Не знаю точного времени", payload="time:unknown")],
         ]
     )
 
 
-def confirm_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def confirm_kb() -> Keyboard:
+    return Keyboard.from_rows(
+        [
             [
-                InlineKeyboardButton(text="✅ Сохранить", callback_data="onb:save"),
-                InlineKeyboardButton(text="↩️ Заново", callback_data="onb:restart"),
+                Button(text="✅ Сохранить", payload="onb:save"),
+                Button(text="↩️ Заново", payload="onb:restart"),
             ]
         ]
     )
 
 
-def cancel_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="cancel")]]
-    )
+def cancel_kb() -> Keyboard:
+    return Keyboard.from_rows([[Button(text="Отмена", payload="cancel")]])
 
 
 # Two-level prepared questions: theme key → (title, [(button_label, full_question)]).
@@ -171,50 +165,50 @@ QUESTION_TOPICS: dict[str, tuple[str, list[tuple[str, str]]]] = {
 
 
 # Leaves the chat-with-Astra mode (clears FSM and shows the menu).
-CHAT_EXIT_BTN = InlineKeyboardButton(text="🚪 Выйти из чата", callback_data="chat:exit")
+CHAT_EXIT_BTN = Button(text="🚪 Выйти из чата", payload="chat:exit")
 
 
-def chat_answer_kb(response_id: int, show_premium: bool = False) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{response_id}")],
+def chat_answer_kb(response_id: int, show_premium: bool = False) -> Keyboard:
+    rows: list[list[Button]] = [
+        [Button(text="⭐ Сохранить", payload=f"fav:save:{response_id}")],
     ]
     if show_premium:
-        rows.append([InlineKeyboardButton(text="💎 Открыть Премиум", callback_data="menu:premium")])
+        rows.append([Button(text="💎 Открыть Премиум", payload="menu:premium")])
     rows.append([CHAT_EXIT_BTN])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return Keyboard.from_rows(rows)
 
 
-_OWN_QUESTION_BTN = InlineKeyboardButton(text="✏️ Задать свой вопрос", callback_data="chat:own_question")
+_OWN_QUESTION_BTN = Button(text="✏️ Задать свой вопрос", payload="chat:own_question")
 
 
-def topics_kb() -> InlineKeyboardMarkup:
+def topics_kb() -> Keyboard:
     rows = [
-        [InlineKeyboardButton(text=title, callback_data=f"topic:{key}")]
+        [Button(text=title, payload=f"topic:{key}")]
         for key, (title, _) in QUESTION_TOPICS.items()
     ]
     rows.append([_OWN_QUESTION_BTN])
     rows.append([CHAT_EXIT_BTN])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return Keyboard.from_rows(rows)
 
 
-def topic_questions_kb(key: str) -> InlineKeyboardMarkup:
+def topic_questions_kb(key: str) -> Keyboard:
     questions = QUESTION_TOPICS[key][1]
     rows = [
-        [InlineKeyboardButton(text=label, callback_data=f"q:{key}:{idx}")]
+        [Button(text=label, payload=f"q:{key}:{idx}")]
         for idx, (label, _) in enumerate(questions)
     ]
     rows.append([_OWN_QUESTION_BTN])
-    rows.append([InlineKeyboardButton(text="⬅️ К темам", callback_data="show_topics")])
+    rows.append([Button(text="⬅️ К темам", payload="show_topics")])
     rows.append([CHAT_EXIT_BTN])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return Keyboard.from_rows(rows)
 
 
-def horoscope_period_kb(user: User | None = None) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
+def horoscope_period_kb(user: User | None = None) -> Keyboard:
+    rows: list[list[Button]] = [
         [
-            InlineKeyboardButton(text="Сегодня", callback_data="horo:today"),
-            InlineKeyboardButton(text="Неделя", callback_data="horo:week"),
-            InlineKeyboardButton(text="Месяц", callback_data="horo:month"),
+            Button(text="Сегодня", payload="horo:today"),
+            Button(text="Неделя", payload="horo:week"),
+            Button(text="Месяц", payload="horo:month"),
         ]
     ]
     if user is not None:
@@ -224,34 +218,32 @@ def horoscope_period_kb(user: User | None = None) -> InlineKeyboardMarkup:
             push_label = f"🌅 Утренний гороскоп: вкл · {hour}{city}"
         else:
             push_label = "🌅 Утренний гороскоп: выкл"
-        rows.append([InlineKeyboardButton(text=push_label, callback_data="settings:push_horoscope")])
+        rows.append([Button(text=push_label, payload="settings:push_horoscope")])
     rows.append([MENU_BACK_BTN])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return Keyboard.from_rows(rows)
 
 
-def horoscope_regen_kb(period: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Пересчитать заново", callback_data=f"horo:regen:{period}")]
-        ]
+def horoscope_regen_kb(period: str) -> Keyboard:
+    return Keyboard.from_rows(
+        [[Button(text="🔄 Пересчитать заново", payload=f"horo:regen:{period}")]]
     )
 
 
-def natal_cta_kb() -> InlineKeyboardMarkup:
+def natal_cta_kb() -> Keyboard:
     """Call-to-action shown once after the first (onboarding) natal chart."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="💬 Вопросы", callback_data="menu:question")],
+    return Keyboard.from_rows(
+        [
+            [Button(text="💬 Вопросы", payload="menu:question")],
             [MENU_BACK_BTN],
         ]
     )
 
 
-def followup_cta_kb() -> InlineKeyboardMarkup:
+def followup_cta_kb() -> Keyboard:
     """Buttons under the 48h-after-registration follow-up message."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="💬 Вопросы", callback_data="menu:question")],
+    return Keyboard.from_rows(
+        [
+            [Button(text="💬 Вопросы", payload="menu:question")],
             [MENU_BACK_BTN],
         ]
     )
@@ -275,13 +267,13 @@ _BROADCAST_CALLBACKS = {
 _URL_SCHEMES = ("http", "https", "tg")
 
 
-def build_broadcast_kb(variant) -> InlineKeyboardMarkup | None:
+def build_broadcast_kb(variant) -> Keyboard | None:
     """Build the inline keyboard for a BroadcastVariant from its JSON button list.
     Each button is a dict {type, label, value}. Unknown/empty/invalid entries are
-    skipped. Returns None when there are no valid buttons (Telegram rejects empty
-    markup). A trailing '🔙 Меню' opens the menu as a NEW message so the broadcast
+    skipped. Returns None when there are no valid buttons (empty markup is
+    rejected). A trailing '🔙 Меню' opens the menu as a NEW message so the broadcast
     stays visible."""
-    rows: list[list[InlineKeyboardButton]] = []
+    rows: list[list[Button]] = []
     for idx, btn in enumerate(variant.buttons or []):
         if not isinstance(btn, dict):
             continue
@@ -292,129 +284,121 @@ def build_broadcast_kb(variant) -> InlineKeyboardMarkup | None:
             continue
         if btype == "url":
             if value and value.split("://", 1)[0].lower() in _URL_SCHEMES:
-                rows.append([InlineKeyboardButton(text=label, url=value)])
+                rows.append([Button(text=label, url=value)])
         elif btype == "ask":
             if value:
-                rows.append(
-                    [InlineKeyboardButton(text=label, callback_data=f"bcast:ask:{variant.id}:{idx}")]
-                )
+                rows.append([Button(text=label, payload=f"bcast:ask:{variant.id}:{idx}")])
         elif btype in _BROADCAST_CALLBACKS:
-            rows.append(
-                [InlineKeyboardButton(text=label, callback_data=_BROADCAST_CALLBACKS[btype])]
-            )
+            rows.append([Button(text=label, payload=_BROADCAST_CALLBACKS[btype])])
     if not rows:
         return None
     rows.append([MENU_BACK_NEW_BTN])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return Keyboard.from_rows(rows)
 
 
-def premium_or_back_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="💎 Открыть Премиум", callback_data="menu:premium")],
+def premium_or_back_kb() -> Keyboard:
+    return Keyboard.from_rows(
+        [
+            [Button(text="💎 Открыть Премиум", payload="menu:premium")],
             [MENU_BACK_BTN],
         ]
     )
 
 
-def tarot_entry_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🃏 Тянуть без вопроса", callback_data="tarot:draw")],
+def tarot_entry_kb() -> Keyboard:
+    return Keyboard.from_rows(
+        [
+            [Button(text="🃏 Тянуть без вопроса", payload="tarot:draw")],
             [MENU_BACK_BTN],
         ]
     )
 
 
-def compat_time_unknown_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Не знаю времени", callback_data="compat:time:unknown")],
+def compat_time_unknown_kb() -> Keyboard:
+    return Keyboard.from_rows(
+        [
+            [Button(text="Не знаю времени", payload="compat:time:unknown")],
             [MENU_BACK_BTN],
         ]
     )
 
 
-def name_skip_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="Пропустить", callback_data="onb:name:skip")]]
-    )
+def name_skip_kb() -> Keyboard:
+    return Keyboard.from_rows([[Button(text="Пропустить", payload="onb:name:skip")]])
 
 
-def gender_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def gender_kb() -> Keyboard:
+    return Keyboard.from_rows(
+        [
             [
-                InlineKeyboardButton(text="Мужской", callback_data="onb:gender:m"),
-                InlineKeyboardButton(text="Женский", callback_data="onb:gender:f"),
+                Button(text="Мужской", payload="onb:gender:m"),
+                Button(text="Женский", payload="onb:gender:f"),
             ],
-            [InlineKeyboardButton(text="Не указывать", callback_data="onb:gender:skip")],
+            [Button(text="Не указывать", payload="onb:gender:skip")],
         ]
     )
 
 
-def astro_terms_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def astro_terms_kb() -> Keyboard:
+    return Keyboard.from_rows(
+        [
             [
-                InlineKeyboardButton(text="✨ Да, с терминами", callback_data="onb:terms:yes"),
-                InlineKeyboardButton(text="💬 Без терминов", callback_data="onb:terms:no"),
+                Button(text="✨ Да, с терминами", payload="onb:terms:yes"),
+                Button(text="💬 Без терминов", payload="onb:terms:no"),
             ]
         ]
     )
 
 
-def final_confirm_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def final_confirm_kb() -> Keyboard:
+    return Keyboard.from_rows(
+        [
             [
-                InlineKeyboardButton(text="✅ Всё верно", callback_data="onb:final:ok"),
-                InlineKeyboardButton(text="↩️ Начать заново", callback_data="onb:final:restart"),
+                Button(text="✅ Всё верно", payload="onb:final:ok"),
+                Button(text="↩️ Начать заново", payload="onb:final:restart"),
             ]
         ]
     )
 
 
-def reset_confirm_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def reset_confirm_kb() -> Keyboard:
+    return Keyboard.from_rows(
+        [
             [
-                InlineKeyboardButton(text="🗑 Да, сбросить", callback_data="profile:reset:confirm"),
-                InlineKeyboardButton(text="Отмена", callback_data="cancel"),
+                Button(text="🗑 Да, сбросить", payload="profile:reset:confirm"),
+                Button(text="Отмена", payload="cancel"),
             ]
         ]
     )
 
 
-def natal_paywall_kb() -> InlineKeyboardMarkup:
+def natal_paywall_kb() -> Keyboard:
     from astrobot.limits import NATAL_REGEN_PRICE_RUB
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    return Keyboard.from_rows(
+        [
             [
-                InlineKeyboardButton(
+                Button(
                     text=f"💳 Купить пересчёт — {NATAL_REGEN_PRICE_RUB} ₽",
-                    callback_data="buy:natal_regen",
+                    payload="buy:natal_regen",
                 )
             ],
-            [InlineKeyboardButton(text="💎 Открыть Премиум", callback_data="premium:show")],
+            [Button(text="💎 Открыть Премиум", payload="premium:show")],
             [MENU_BACK_BTN],
         ]
     )
 
 
-def push_hour_kb() -> InlineKeyboardMarkup:
-    row1 = [InlineKeyboardButton(text=f"{h}:00", callback_data=f"push:hour:{h}") for h in range(6, 10)]
-    row2 = [InlineKeyboardButton(text=f"{h}:00", callback_data=f"push:hour:{h}") for h in range(10, 14)]
-    return InlineKeyboardMarkup(
-        inline_keyboard=[row1, row2, [InlineKeyboardButton(text="Отмена", callback_data="push:cancel")]]
+def push_hour_kb() -> Keyboard:
+    row1 = [Button(text=f"{h}:00", payload=f"push:hour:{h}") for h in range(6, 10)]
+    row2 = [Button(text=f"{h}:00", payload=f"push:hour:{h}") for h in range(10, 14)]
+    return Keyboard.from_rows(
+        [row1, row2, [Button(text="Отмена", payload="push:cancel")]]
     )
 
 
-def city_choice_kb(options: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+def city_choice_kb(options: list[tuple[str, str]]) -> Keyboard:
     """options: list of (label, callback_data)."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=label, callback_data=cb)] for label, cb in options
-        ]
+    return Keyboard.from_rows(
+        [[Button(text=label, payload=cb)] for label, cb in options]
     )

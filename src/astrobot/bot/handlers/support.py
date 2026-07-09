@@ -4,11 +4,13 @@ import html
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.keyboards import MENU_BACK_BTN, with_back
+from astrobot.bot.platform import Button, Keyboard
+from astrobot.bot.platform.telegram import to_markup
 from astrobot.bot.responses import edit_or_send
 from astrobot.bot.states import SupportFlow
 from astrobot.db.models import SupportTicket, User
@@ -24,10 +26,10 @@ def _short(s: str, n: int = 200) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-def _support_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="✍️ Написать обращение", callback_data="support:new")],
+def _support_kb() -> Keyboard:
+    return Keyboard.from_rows(
+        [
+            [Button(text="✍️ Написать обращение", payload="support:new")],
             [MENU_BACK_BTN],
         ]
     )
@@ -106,5 +108,5 @@ async def on_support_text(
     await message.answer(
         "📨 Обращение отправлено — ответим прямо в боте ✨\n"
         "Статус можно посмотреть в меню → 🆘 Поддержка.",
-        reply_markup=with_back([]),
+        reply_markup=to_markup(with_back([])),
     )

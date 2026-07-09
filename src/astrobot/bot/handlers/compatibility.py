@@ -5,7 +5,7 @@ from datetime import date, datetime, time
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,8 @@ from astrobot.bot.keyboards import (
     promo_row,
     with_back,
 )
+from astrobot.bot.platform import Button, Keyboard
+from astrobot.bot.platform.telegram import to_markup
 from astrobot.bot.responses import edit_or_send, save_and_send_response
 from astrobot.bot.states import CompatFlow
 from astrobot.bot.utils import need_profile, rate_limit_ok, user_llm_lock
@@ -39,18 +41,18 @@ router = Router(name="compatibility")
 GEOCODE_PER_HOUR = 20
 
 _KIND = "question:compatibility"
-_NEW_ROW = [InlineKeyboardButton(text="💞 Новый расчёт", callback_data="compat:new")]
+_NEW_ROW = [Button(text="💞 Новый расчёт", payload="compat:new")]
 
 
-def _last_kb(resp_id: int, user: User) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
+def _last_kb(resp_id: int, user: User) -> Keyboard:
+    rows: list[list[Button]] = [
         _NEW_ROW,
-        [InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{resp_id}")],
+        [Button(text="⭐ Сохранить", payload=f"fav:save:{resp_id}")],
     ]
     if (pr := promo_row(user)):
         rows.append(pr)
     rows.append([MENU_BACK_BTN])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return Keyboard.from_rows(rows)
 
 
 async def _start_new(
@@ -130,7 +132,7 @@ async def on_compat_date(message: Message, state: FSMContext) -> None:
     await state.set_state(CompatFlow.waiting_for_time)
     await message.answer(
         "⏰ Время рождения <code>HH:MM</code> (или нажми «Не знаю времени»):",
-        reply_markup=compat_time_unknown_kb(),
+        reply_markup=to_markup(compat_time_unknown_kb()),
     )
 
 
@@ -185,7 +187,7 @@ async def on_compat_city(
     allowance = await check_question(session, user)
     if not allowance.allowed:
         await message.answer(
-            paywall_text("question", allowance), reply_markup=premium_or_back_kb()
+            paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb())
         )
         return
 
@@ -233,7 +235,7 @@ async def _do_compat(
         allowance = await check_question(session, user)
         if not allowance.allowed:
             await target.answer(
-                paywall_text("question", allowance), reply_markup=premium_or_back_kb()
+                paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb())
             )
             return
 

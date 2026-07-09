@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardMarkup,
-)
 
 from astrobot.bot.keyboards import MENU_BACK_BTN, with_back
-from astrobot.bot.responses import edit_or_send
+from astrobot.bot.platform import Keyboard, PlatformContext
 from astrobot.config import get_settings
 from astrobot.db.models import User
 from astrobot.legal.disclaimer import SHORT_DISCLAIMER
@@ -31,18 +27,20 @@ ABOUT_TEXT = (
 )
 
 
-def _about_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[MENU_BACK_BTN]])
+def _about_kb() -> Keyboard:
+    return Keyboard.from_rows([[MENU_BACK_BTN]])
 
 
+# Reference handler migrated to the platform layer (Этап 2): no aiogram types,
+# no to_markup — `ctx` speaks the neutral interface, works on Telegram and MAX.
 @router.callback_query(F.data == "menu:about")
-async def on_about(call: CallbackQuery) -> None:
-    await call.answer()
-    await edit_or_send(call, ABOUT_TEXT, _about_kb(), disable_web_page_preview=True)
+async def on_about(ctx: PlatformContext) -> None:
+    await ctx.answer_callback()
+    await ctx.edit(ABOUT_TEXT, _about_kb())
 
 
 @router.callback_query(F.data == "referral:show")
-async def on_referral_show(call: CallbackQuery, user: User) -> None:
+async def on_referral_show(ctx: PlatformContext, user: User) -> None:
     bot_username = get_settings().bot_username or "your_bot"
     link = f"https://t.me/{bot_username}?start=ref_{user.referral_code}"
     text = (
@@ -52,5 +50,5 @@ async def on_referral_show(call: CallbackQuery, user: User) -> None:
         "<b>вы оба получите +2 бесплатных вопроса</b> ✨\n\n"
         "Просто поделись ссылкой в любом мессенджере."
     )
-    await edit_or_send(call, text, with_back([]), disable_web_page_preview=True)
-    await call.answer()
+    await ctx.edit(text, with_back([]))
+    await ctx.answer_callback()

@@ -7,8 +7,6 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     LabeledPrice,
     Message,
     PreCheckoutQuery,
@@ -18,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.handlers.menu import send_main_menu
 from astrobot.bot.keyboards import MENU_BACK_BTN
+from astrobot.bot.platform import Button, Keyboard
+from astrobot.bot.platform.telegram import to_markup
 from astrobot.bot.responses import edit_or_send
 from astrobot.bot.states import PaymentFlow
 from astrobot.config import get_settings
@@ -44,76 +44,60 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 STARS_SUBSCRIPTION_PERIOD_SEC = 2592000
 
 
-def _plans_kb(active_sub: Subscription | None = None) -> InlineKeyboardMarkup:
-    rows = [
+def _plans_kb(active_sub: Subscription | None = None) -> Keyboard:
+    rows: list[list[Button]] = [
         [
-            InlineKeyboardButton(
+            Button(
                 text=f"💎 {p.title} ({p.duration_label}) — {p.price_rub} ₽",
-                callback_data=f"buy:{p.code}",
+                payload=f"buy:{p.code}",
             )
         ]
         for p in PLANS
     ]
     if active_sub is not None:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="✖ Отменить автопродление", callback_data="sub:cancel"
-                )
-            ]
-        )
+        rows.append([Button(text="✖ Отменить автопродление", payload="sub:cancel")])
     rows.append(
         [
-            InlineKeyboardButton(
+            Button(
                 text=f"🔄 Пересчёт натальной карты — {NATAL_REGEN_PRICE_RUB} ₽",
-                callback_data="buy:natal_regen",
+                payload="buy:natal_regen",
             )
         ]
     )
     rows.append(
         [
-            InlineKeyboardButton(
+            Button(
                 text=f"💬 Пакет {QUESTION_PACK_SIZE} вопросов — {QUESTION_PACK_PRICE_RUB} ₽",
-                callback_data="buy:question_pack",
+                payload="buy:question_pack",
             )
         ]
     )
     rows.append(
         [
-            InlineKeyboardButton(
+            Button(
                 text=f"💬 Пакет {QUESTION_PACK_30_SIZE} вопросов — {QUESTION_PACK_30_PRICE_RUB} ₽",
-                callback_data="buy:question_pack_30",
+                payload="buy:question_pack_30",
             )
         ]
     )
     rows.append([MENU_BACK_BTN])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return Keyboard.from_rows(rows)
 
 
-def _method_kb(item: Item) -> InlineKeyboardMarkup:
+def _method_kb(item: Item) -> Keyboard:
     """Payment-method picker for a chosen item: card (YooKassa, RUB) and/or
     Telegram Stars (XTR). Card is shown only when YooKassa is configured."""
     settings = get_settings()
-    rows: list[list[InlineKeyboardButton]] = []
+    rows: list[list[Button]] = []
     if settings.yookassa_shop_id and settings.yookassa_secret_key:
         rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"💳 Картой — {item.amount_rub} ₽",
-                    callback_data=f"pay:{item.code}",
-                )
-            ]
+            [Button(text=f"💳 Картой — {item.amount_rub} ₽", payload=f"pay:{item.code}")]
         )
     rows.append(
-        [
-            InlineKeyboardButton(
-                text=f"⭐ Telegram Stars — {item.amount_rub}",
-                callback_data=f"stars:{item.code}",
-            )
-        ]
+        [Button(text=f"⭐ Telegram Stars — {item.amount_rub}", payload=f"stars:{item.code}")]
     )
     rows.append([MENU_BACK_BTN])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return Keyboard.from_rows(rows)
 
 
 _PLAN_FEATURES = "\n".join(
@@ -382,10 +366,10 @@ async def _start_payment(
         return
 
     PAYMENTS_CREATED.labels(item=item.code).inc()
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=f"💳 Оплатить — {item.amount_rub} ₽", url=confirmation_url)],
-            [InlineKeyboardButton(text="❌ Отменить", callback_data="pay:cancel")],
+    kb = Keyboard.from_rows(
+        [
+            [Button(text=f"💳 Оплатить — {item.amount_rub} ₽", url=confirmation_url)],
+            [Button(text="❌ Отменить", payload="pay:cancel")],
         ]
     )
     recurring_note = (
@@ -401,7 +385,7 @@ async def _start_payment(
         + recurring_note
         + "\n\n⚠️ <b>Обязательно отключи VPN перед оплатой</b> — иначе платёж может не пройти.\n"
         "Если что-то пошло не так — напиши нам через кнопку 🆘Поддержки в профиле.",
-        reply_markup=kb,
+        reply_markup=to_markup(kb),
     )
 
 

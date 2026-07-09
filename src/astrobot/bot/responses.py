@@ -6,7 +6,6 @@ import structlog
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import (
     CallbackQuery,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
 )
@@ -14,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.formatting import md_to_telegram_html, strip_html
 from astrobot.bot.keyboards import MENU_BACK_NEW_BTN, promo_row
+from astrobot.bot.platform import Button, Keyboard
+from astrobot.bot.platform.telegram import to_markup
 from astrobot.db.models import Response, User
 from astrobot.metrics import FLOOD_RETRIES_TOTAL
 
@@ -23,37 +24,49 @@ CHUNK_LIMIT = 3800
 INTER_MESSAGE_DELAY = 0.08
 
 
+def _markup(kb: Keyboard | InlineKeyboardMarkup | None) -> InlineKeyboardMarkup | None:
+    """Accept a neutral Keyboard (converts) or an aiogram markup (pass-through).
+
+    Bridge during the platform migration: handlers/keyboards now speak the
+    neutral `Keyboard`, while this TG send-layer still talks to aiogram.
+    """
+    if isinstance(kb, Keyboard):
+        return to_markup(kb)
+    return kb
+
+
 async def edit_or_send(
     call: CallbackQuery,
     text: str,
-    reply_markup: InlineKeyboardMarkup | None = None,
+    reply_markup: Keyboard | InlineKeyboardMarkup | None = None,
     **kwargs,
 ) -> None:
     """Edit the callback's message in place; fall back to a fresh message if the
     original can't be edited (too old / has no text / unchanged)."""
+    markup = _markup(reply_markup)
     try:
-        await call.message.edit_text(text, reply_markup=reply_markup, **kwargs)
+        await call.message.edit_text(text, reply_markup=markup, **kwargs)
     except TelegramBadRequest as e:
         msg = str(e).lower()
         if "message is not modified" in msg:
             return
         log.info("edit_or_send_fallback", error=str(e))
-        await safe_answer(call.message, text, reply_markup=reply_markup, **kwargs)
+        await safe_answer(call.message, text, reply_markup=markup, **kwargs)
 
 
 def response_actions_kb(
     response_id: int,
-    extra_row: list[InlineKeyboardButton] | None = None,
+    extra_row: list[Button] | None = None,
     user: User | None = None,
-) -> InlineKeyboardMarkup:
-    save = InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{response_id}")
-    rows: list[list[InlineKeyboardButton]] = [[save]]
+) -> Keyboard:
+    save = Button(text="⭐ Сохранить", payload=f"fav:save:{response_id}")
+    rows: list[list[Button]] = [[save]]
     if extra_row:
         rows.append(extra_row)
     if user is not None and (pr := promo_row(user)):
         rows.append(pr)
     rows.append([MENU_BACK_NEW_BTN])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return Keyboard.from_rows(rows)
 
 
 def chunk_text(text: str, limit: int = CHUNK_LIMIT) -> list[str]:
@@ -84,7 +97,11 @@ async def safe_answer(target: Message, text: str, **kwargs) -> Message:
     """Send with two safety nets:
     - TelegramRetryAfter: sleep then retry once.
     - HTML parse error: fall back to plain-text (HTML-escaped) send.
+
+    Accepts a neutral `Keyboard` in `reply_markup` (converted to aiogram markup).
     """
+    if "reply_markup" in kwargs:
+        kwargs["reply_markup"] = _markup(kwargs["reply_markup"])
     for attempt in range(2):
         try:
             return await target.answer(text, **kwargs)
@@ -109,7 +126,7 @@ async def _send_chunks(
     target: Message,
     text: str,
     resp_id: int,
-    extra_row: list[InlineKeyboardButton] | None = None,
+    extra_row: list[Button] | None = None,
     user: User | None = None,
     show_actions: bool = True,
 ) -> list[int]:
@@ -135,7 +152,7 @@ async def save_and_send_response(
     user: User,
     kind: str,
     text: str,
-    extra_row: list[InlineKeyboardButton] | None = None,
+    extra_row: list[Button] | None = None,
     show_actions: bool = True,
 ) -> Response:
     # Single detailed version. brief mirrors full (column kept for favorites

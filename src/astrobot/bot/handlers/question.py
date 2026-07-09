@@ -5,7 +5,7 @@ import re
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,12 +15,15 @@ from astrobot.bot.formatting import md_to_telegram_html
 from astrobot.bot.handlers.menu import send_main_menu
 from astrobot.bot.handlers.natal import _profile_to_birth
 from astrobot.bot.keyboards import (
+    CHAT_EXIT_BTN,
     QUESTION_TOPICS,
     chat_answer_kb,
     premium_or_back_kb,
     topic_questions_kb,
     topics_kb,
 )
+from astrobot.bot.platform import Keyboard
+from astrobot.bot.platform.telegram import to_markup
 from astrobot.bot.responses import chunk_text, edit_or_send, safe_answer
 from astrobot.bot.states import AskingQuestion
 from astrobot.bot.utils import need_profile, user_llm_lock
@@ -60,7 +63,7 @@ async def on_question_button(
     allowance = await check_question(session, user)
     if not allowance.allowed:
         await call.message.answer(
-            paywall_text("question", allowance), reply_markup=premium_or_back_kb()
+            paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb())
         )
         return
     await state.set_state(AskingQuestion.waiting_for_text)
@@ -95,7 +98,7 @@ async def _answer_question(
         allowance = await check_question(session, user)
         if not allowance.allowed:
             await target.answer(
-                paywall_text("question", allowance), reply_markup=premium_or_back_kb()
+                paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb())
             )
             return
 
@@ -165,7 +168,7 @@ async def _answer_question(
                 await target.answer(
                     "🌙 Это был твой последний бесплатный вопрос. "
                     "Если хочешь продолжать — открой <b>💎 Премиум</b>.",
-                    reply_markup=premium_or_back_kb(),
+                    reply_markup=to_markup(premium_or_back_kb()),
                 )
 
 
@@ -184,9 +187,7 @@ async def on_question_text(
     if _REFUSAL_RE.match(question):
         await message.answer(
             "Хорошо! Напиши, когда захочешь что-то спросить.",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="🚪 Выйти из чата", callback_data="chat:exit")]]
-            ),
+            reply_markup=to_markup(Keyboard.from_rows([[CHAT_EXIT_BTN]])),
         )
         return
 
@@ -233,9 +234,7 @@ async def on_own_question(call: CallbackQuery) -> None:
     try:
         await call.message.edit_text(
             "✍️ Напиши свой вопрос:",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="🚪 Выйти из чата", callback_data="chat:exit")]]
-            ),
+            reply_markup=to_markup(Keyboard.from_rows([[CHAT_EXIT_BTN]])),
         )
     except Exception:
         pass
@@ -246,7 +245,7 @@ async def on_show_topics(call: CallbackQuery) -> None:
     try:
         await call.message.edit_text(
             "🌙 Выбери тему — или просто спроси что-то своё одним сообщением:",
-            reply_markup=topics_kb(),
+            reply_markup=to_markup(topics_kb()),
         )
     except Exception:
         pass
@@ -263,7 +262,7 @@ async def on_topic(call: CallbackQuery) -> None:
     try:
         await call.message.edit_text(
             f"<b>{title}</b>\n\nВыбери вопрос — или просто напиши свой:",
-            reply_markup=topic_questions_kb(key),
+            reply_markup=to_markup(topic_questions_kb(key)),
         )
     except Exception:
         pass
@@ -301,7 +300,7 @@ async def on_question_pick(
     if not allowance.allowed:
         await state.clear()
         await call.answer()
-        await call.message.answer(paywall_text("question", allowance), reply_markup=premium_or_back_kb())
+        await call.message.answer(paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb()))
         return
 
     await call.answer()

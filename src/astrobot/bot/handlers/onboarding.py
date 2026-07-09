@@ -21,6 +21,7 @@ from astrobot.bot.keyboards import (
     name_skip_kb,
     time_unknown_kb,
 )
+from astrobot.bot.platform.telegram import to_markup
 from astrobot.bot.states import Onboarding
 from astrobot.bot.utils import rate_limit_ok
 from astrobot.config import get_settings
@@ -103,14 +104,14 @@ async def prompt_for_name(message: Message, state: FSMContext, user: User) -> No
         try:
             # GIF/video as a looping animation with the greeting as its caption.
             await message.answer_animation(
-                animation=animation, caption=welcome_text, reply_markup=name_skip_kb()
+                animation=animation, caption=welcome_text, reply_markup=to_markup(name_skip_kb())
             )
         except Exception as e:
             # Bad file_id / unreachable URL → don't block onboarding, fall back to text.
             log.warning("welcome_animation_failed", error=str(e))
-            await message.answer(welcome_text, reply_markup=name_skip_kb())
+            await message.answer(welcome_text, reply_markup=to_markup(name_skip_kb()))
     else:
-        await message.answer(welcome_text, reply_markup=name_skip_kb())
+        await message.answer(welcome_text, reply_markup=to_markup(name_skip_kb()))
     await state.set_state(Onboarding.waiting_for_name)
 
 
@@ -185,7 +186,7 @@ async def on_name(message: Message, state: FSMContext) -> None:
     # A real name is one word of letters only. Re-ask (with a clarification) on
     # commands like "/menu", digits, or phrases like "меня зовут олег".
     if len(name) > 64 or not _NAME_RE.match(name):
-        await message.answer(_NAME_HINT, reply_markup=name_skip_kb())
+        await message.answer(_NAME_HINT, reply_markup=to_markup(name_skip_kb()))
         return
     await state.update_data(display_name=name)
 
@@ -207,7 +208,7 @@ async def on_name_skip(call: CallbackQuery, state: FSMContext) -> None:
 
 async def _ask_gender(target, state: FSMContext) -> None:
     await state.set_state(Onboarding.choosing_gender)
-    await target.answer("Укажи свой пол:", reply_markup=gender_kb())
+    await target.answer("Укажи свой пол:", reply_markup=to_markup(gender_kb()))
 
 
 async def _ask_date(target, state: FSMContext) -> None:
@@ -255,7 +256,7 @@ async def on_date(message: Message, state: FSMContext) -> None:
         "Если точное время неизвестно — нажми кнопку ниже. "
         "Я тогда построю солнечную карту — она расскажет о тебе многое, "
         "но без домов и Асцендента.",
-        reply_markup=time_unknown_kb(),
+        reply_markup=to_markup(time_unknown_kb()),
     )
     await state.set_state(Onboarding.waiting_for_time)
 
@@ -331,7 +332,7 @@ async def on_city(
         city_input=query,
     )
     data = await state.get_data()
-    await message.answer(_format_birth_summary(data), reply_markup=confirm_kb())
+    await message.answer(_format_birth_summary(data), reply_markup=to_markup(confirm_kb()))
     await state.set_state(Onboarding.confirming)
 
 
@@ -383,7 +384,7 @@ async def _ask_astro_terms(target, state: FSMContext) -> None:
         "если ты знаком с астрологией.\n\n"
         "<b>Без терминов</b> — Астра будет объяснять через качества и жизненные темы, "
         "без специальных слов. Подходит тем, кто только знакомится.",
-        reply_markup=astro_terms_kb(),
+        reply_markup=to_markup(astro_terms_kb()),
     )
 
 
@@ -403,7 +404,7 @@ async def _show_final_confirm(target, state: FSMContext) -> None:
     data = await state.get_data()
     await target.answer(
         _format_final_summary(data),
-        reply_markup=final_confirm_kb(),
+        reply_markup=to_markup(final_confirm_kb()),
     )
 
 
@@ -466,7 +467,7 @@ async def on_final_restart(
     hint = f" Сейчас: <b>{user.display_name}</b>." if user.display_name else ""
     await call.message.answer(
         f"Хорошо, начнём сначала. Как тебя зовут?{hint}",
-        reply_markup=name_skip_kb(),
+        reply_markup=to_markup(name_skip_kb()),
     )
     await call.answer()
 

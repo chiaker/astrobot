@@ -4,7 +4,7 @@ import asyncio
 from datetime import date, timedelta
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton
+from aiogram.types import CallbackQuery
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,8 @@ from astrobot.astrology.transits import (
 )
 from astrobot.bot.handlers.natal import _profile_to_birth
 from astrobot.bot.keyboards import horoscope_period_kb, with_back
+from astrobot.bot.platform import Button
+from astrobot.bot.platform.telegram import to_markup
 from astrobot.bot.responses import edit_or_send, save_and_send_response
 from astrobot.bot.utils import need_profile, user_llm_lock
 from astrobot.db.models import BirthProfile, HoroscopeCache, LLMUsageLog, User
@@ -48,8 +50,8 @@ def _with_label(text: str, label: str) -> str:
     return f"{label}\n\n{text}"
 
 
-def _regen_row(period: str) -> list[InlineKeyboardButton]:
-    return [InlineKeyboardButton(text="🔄 Пересчитать заново", callback_data=f"horo:regen:{period}")]
+def _regen_row(period: str) -> list[Button]:
+    return [Button(text="🔄 Пересчитать заново", payload=f"horo:regen:{period}")]
 
 
 @router.callback_query(F.data == "menu:horoscope")
@@ -126,7 +128,7 @@ async def on_horoscope_period(
         if not allowance.allowed:
             await call.answer()
             await call.message.answer(
-                paywall_text("horoscope", allowance), reply_markup=with_back([])
+                paywall_text("horoscope", allowance), reply_markup=to_markup(with_back([]))
             )
             return
 

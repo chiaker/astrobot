@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.keyboards import MENU_BACK_BTN, premium_or_back_kb, promo_row, tarot_entry_kb
+from astrobot.bot.platform import Button, Keyboard
+from astrobot.bot.platform.telegram import to_markup
 from astrobot.bot.responses import edit_or_send, save_and_send_response
 from astrobot.bot.states import TarotFlow
 from astrobot.bot.utils import user_llm_lock
@@ -26,18 +28,18 @@ from astrobot.tarot import cards_to_markdown, draw_three
 router = Router(name="tarot")
 
 _KIND = "question:tarot"
-_NEW_ROW = [InlineKeyboardButton(text="🃏 Новый расклад", callback_data="tarot:new")]
+_NEW_ROW = [Button(text="🃏 Новый расклад", payload="tarot:new")]
 
 
-def _last_kb(resp_id: int, user: User) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
+def _last_kb(resp_id: int, user: User) -> Keyboard:
+    rows: list[list[Button]] = [
         _NEW_ROW,
-        [InlineKeyboardButton(text="⭐ Сохранить", callback_data=f"fav:save:{resp_id}")],
+        [Button(text="⭐ Сохранить", payload=f"fav:save:{resp_id}")],
     ]
     if (pr := promo_row(user)):
         rows.append(pr)
     rows.append([MENU_BACK_BTN])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return Keyboard.from_rows(rows)
 
 
 async def _start_new(
@@ -93,7 +95,7 @@ async def on_tarot_draw(
     allowance = await check_question(session, user)
     if not allowance.allowed:
         await call.message.answer(
-            paywall_text("question", allowance), reply_markup=premium_or_back_kb()
+            paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb())
         )
         return
     await _do_tarot(call.message, session, user, question=None)
@@ -113,7 +115,7 @@ async def on_tarot_question(
     allowance = await check_question(session, user)
     if not allowance.allowed:
         await message.answer(
-            paywall_text("question", allowance), reply_markup=premium_or_back_kb()
+            paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb())
         )
         return
     await _do_tarot(message, session, user, question=question[:500] or None)
@@ -133,7 +135,7 @@ async def _do_tarot(
         allowance = await check_question(session, user)
         if not allowance.allowed:
             await target.answer(
-                paywall_text("question", allowance), reply_markup=premium_or_back_kb()
+                paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb())
             )
             return
 

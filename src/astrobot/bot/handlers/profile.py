@@ -4,12 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-)
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +17,8 @@ from astrobot.bot.keyboards import (
     reset_confirm_kb,
     with_back,
 )
+from astrobot.bot.platform import Button, Keyboard
+from astrobot.bot.platform.telegram import to_markup
 from astrobot.bot.responses import edit_or_send
 from astrobot.bot.states import Onboarding, PushSetup
 from astrobot.db.models import (
@@ -48,35 +45,35 @@ router = Router(name="profile")
 _GENDER_LABEL = {"m": "мужской", "f": "женский"}
 
 
-def _profile_kb(user: User) -> InlineKeyboardMarkup:
+def _profile_kb(user: User) -> Keyboard:
     gender_label = _GENDER_LABEL.get(user.gender or "", "не указан")
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=f"⚧ Пол: {gender_label}", callback_data="settings:gender")],
-            [InlineKeyboardButton(text="✏️ Изменить данные / сбросить", callback_data="profile:reset")],
-            [InlineKeyboardButton(text="🧾 История операций", callback_data="payments:mine")],
+    return Keyboard.from_rows(
+        [
+            [Button(text=f"⚧ Пол: {gender_label}", payload="settings:gender")],
+            [Button(text="✏️ Изменить данные / сбросить", payload="profile:reset")],
+            [Button(text="🧾 История операций", payload="payments:mine")],
             [
-                InlineKeyboardButton(text="⚙️ Настройки", callback_data="menu:settings"),
-                InlineKeyboardButton(text="🆘 Поддержка", callback_data="menu:support"),
+                Button(text="⚙️ Настройки", payload="menu:settings"),
+                Button(text="🆘 Поддержка", payload="menu:support"),
             ],
             [MENU_BACK_BTN],
         ]
     )
 
 
-def _settings_kb(user: User) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
+def _settings_kb(user: User) -> Keyboard:
+    rows: list[list[Button]] = []
     terms_state = "вкл" if user.astro_terms_enabled else "выкл"
     rows.append(
-        [InlineKeyboardButton(text=f"🔭 Астротермины: {terms_state}", callback_data="settings:astro_terms")]
+        [Button(text=f"🔭 Астротермины: {terms_state}", payload="settings:astro_terms")]
     )
     if is_premium(user):
         lunar_state = "вкл" if user.push_lunar_enabled else "выкл"
         rows.append(
-            [InlineKeyboardButton(text=f"🌑 Лунные фазы: {lunar_state}", callback_data="settings:push_lunar")]
+            [Button(text=f"🌑 Лунные фазы: {lunar_state}", payload="settings:push_lunar")]
         )
     rows.append([MENU_BACK_BTN])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return Keyboard.from_rows(rows)
 
 
 def _settings_text(user: User) -> str:
@@ -320,7 +317,7 @@ async def on_push_city(message: Message, state: FSMContext, session: AsyncSessio
         f"📍 Нашла: <b>{result.display_name}</b> (часовой пояс <code>{result.tz}</code>)\n\n"
         "В какое время тебе присылать утренний гороскоп?\n"
         "<i>Время указывается по твоему текущему городу.</i>",
-        reply_markup=push_hour_kb(),
+        reply_markup=to_markup(push_hour_kb()),
     )
 
 
@@ -433,7 +430,7 @@ async def on_profile_reset_warn(call: CallbackQuery, session: AsyncSession, user
         lines.append(f"\n⭐ Будет удалено <b>{fav_count}</b> записей из Избранного.")
     lines.append("\nПродолжить?")
 
-    await call.message.answer("\n".join(lines), reply_markup=reset_confirm_kb())
+    await call.message.answer("\n".join(lines), reply_markup=to_markup(reset_confirm_kb()))
     await call.answer()
 
 
@@ -460,6 +457,6 @@ async def on_profile_reset_confirm(
     hint = f" Сейчас: <b>{user.display_name}</b>." if user.display_name else ""
     await call.message.answer(
         f"Прежние данные удалены. Как тебя зовут?{hint}",
-        reply_markup=name_skip_kb(),
+        reply_markup=to_markup(name_skip_kb()),
     )
     await call.answer()
