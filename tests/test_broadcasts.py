@@ -73,7 +73,8 @@ def test_segment_premium_rollover_due_counts_as_active():
 # ─── build_broadcast_kb ────────────────────────────────────────────────────────
 
 def _callbacks(kb):
-    return [b.callback_data for row in kb.inline_keyboard for b in row]
+    # build_broadcast_kb now returns a platform-neutral Keyboard (.rows / Button.payload).
+    return [b.payload for row in kb.rows for b in row]
 
 
 def test_build_kb_button_types():
@@ -89,7 +90,7 @@ def test_build_kb_button_types():
         ],
     )
     kb = build_broadcast_kb(v)
-    flat = [b for row in kb.inline_keyboard for b in row]
+    flat = [b for row in kb.rows for b in row]
     url_btn = next(b for b in flat if b.text == "Сайт")
     assert url_btn.url == "https://x.io"
     cbs = _callbacks(kb)
@@ -129,7 +130,7 @@ def test_build_kb_rejects_url_without_scheme():
     )
     kb = build_broadcast_kb(good)
     assert kb is not None and any(
-        b.url == "https://t.me/bot?start=onb" for row in kb.inline_keyboard for b in row
+        b.url == "https://t.me/bot?start=onb" for row in kb.rows for b in row
     )
 
 
