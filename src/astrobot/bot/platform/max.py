@@ -174,8 +174,10 @@ class MaxContext(PlatformContext):
 
     async def answer_callback(self, text: str | None = None, *, alert: bool = False) -> None:
         if self._callback is not None:
-            # TODO(max): verify — поддерживает ли event.answer() текст уведомления.
-            await self._callback.answer()
+            # ack() acknowledges WITHOUT touching the message. Do NOT use answer():
+            # answer() re-renders the message (with attachments=None it strips the
+            # keyboard), so an answer() after edit() wipes the just-set keyboard.
+            await self._callback.ack(notification=text)
 
     async def send_photo(
         self, media: Media, caption: str | None = None, kb: Keyboard | None = None
