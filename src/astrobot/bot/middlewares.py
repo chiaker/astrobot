@@ -77,13 +77,17 @@ class ContextMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        from astrobot.bot.platform.telegram import TelegramContext
+        from astrobot.bot.platform.telegram import TelegramBot, TelegramContext
 
         bot = data.get("bot")
         if isinstance(event, Message):
             data["ctx"] = TelegramContext(bot=bot, message=event)
         elif isinstance(event, CallbackQuery):
             data["ctx"] = TelegramContext(bot=bot, callback=event)
+        # Platform-neutral bot for sends outside the current chat (e.g. pinging a
+        # referral inviter). Migrated handlers declare a `pbot` param.
+        if bot is not None:
+            data["pbot"] = TelegramBot(bot)
         return await handler(event, data)
 
 

@@ -36,11 +36,16 @@ async def render_main_menu(user: User, session: AsyncSession) -> tuple[str, Keyb
 async def send_main_menu(message: Message, user: User, session: AsyncSession) -> None:
     """Send the main menu as a single fresh inline message.
 
-    Legacy aiogram bridge kept for handlers not yet migrated to `ctx` (onboarding,
-    question, broadcast, fallback…). Migrated handlers call `render_main_menu` and
-    send via `ctx` directly."""
+    Legacy aiogram bridge kept for handlers not yet migrated to `ctx`. Migrated
+    handlers call `show_main_menu(ctx, ...)`."""
     text, kb = await render_main_menu(user, session)
     await message.answer(text, reply_markup=to_markup(kb))
+
+
+async def show_main_menu(ctx: PlatformContext, user: User, session: AsyncSession) -> None:
+    """Send the main menu as a fresh message via the platform context."""
+    text, kb = await render_main_menu(user, session)
+    await ctx.reply(text, kb)
 
 
 @router.message(Command("menu"))

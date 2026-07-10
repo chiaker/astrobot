@@ -5,11 +5,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from astrobot.bot.handlers.menu import send_main_menu
+from astrobot.bot.handlers.menu import show_main_menu
 from astrobot.bot.handlers.onboarding import prompt_for_name
 from astrobot.bot.handlers.payment import _method_kb
 from astrobot.bot.handlers.question import _answer_question
 from astrobot.bot.keyboards import premium_or_back_kb, topics_kb
+from astrobot.bot.platform import PlatformContext
 from astrobot.bot.platform.telegram import to_markup
 from astrobot.bot.states import AskingQuestion
 from astrobot.bot.utils import need_profile
@@ -123,15 +124,15 @@ async def on_broadcast_chat(
 
 @router.callback_query(F.data == "bcast:onb")
 async def on_broadcast_onboarding(
-    call: CallbackQuery,
+    ctx: PlatformContext,
     state: FSMContext,
     session: AsyncSession,
     user: User,
 ) -> None:
-    await call.answer()
+    await ctx.answer_callback()
     profile = await session.get(BirthProfile, user.id)
     if profile is not None:
         # Already onboarded → just open the menu instead of restarting setup.
-        await send_main_menu(call.message, user, session)
+        await show_main_menu(ctx, user, session)
         return
-    await prompt_for_name(call.message, state, user)
+    await prompt_for_name(ctx, state, user)
