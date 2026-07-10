@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.formatting import md_to_telegram_html, strip_html
 from astrobot.bot.keyboards import MENU_BACK_NEW_BTN, promo_row
-from astrobot.bot.platform import Button, Keyboard
+from astrobot.bot.platform import Button, Keyboard, PlatformContext
 from astrobot.bot.platform.telegram import to_markup
 from astrobot.db.models import Response, User
 from astrobot.metrics import FLOOD_RETRIES_TOTAL
@@ -164,5 +164,54 @@ async def save_and_send_response(
     resp.message_ids = await _send_chunks(
         message, text, resp.id, extra_row, user, show_actions
     )
+    await session.commit()
+    return resp
+
+
+# ─────────── platform-neutral (ctx) versions — used by migrated handlers ───────────
+# The Message-based helpers above are the legacy Telegram path; they're removed once
+# every handler is on ctx. ctx.reply already carries the flood-retry / HTML-fallback
+# resilience (in the Telegram adapter), so no safe_answer needed here.
+
+
+async def _send_chunks_ctx(
+    ctx: PlatformContext,
+    text: str,
+    resp_id: int,
+    extra_row: list[Button] | None = None,
+    user: User | None = None,
+    show_actions: bool = True,
+) -> list:
+    rendered = md_to_telegram_html(text)
+    chunks = chunk_text(rendered)
+    ids: list = []
+    for i, chunk in enumerate(chunks):
+        if i > 0:
+            await asyncio.sleep(INTER_MESSAGE_DELAY)
+        kb = (
+            response_actions_kb(resp_id, extra_row, user)
+            if show_actions and i == len(chunks) - 1
+            else None
+        )
+        sent = await ctx.reply(chunk, kb)
+        ids.append(sent.message_id)
+    return ids
+
+
+async def send_response(
+    ctx: PlatformContext,
+    session: AsyncSession,
+    user: User,
+    kind: str,
+    text: str,
+    extra_row: list[Button] | None = None,
+    show_actions: bool = True,
+) -> Response:
+    """ctx-based twin of save_and_send_response — saves the Response row and sends
+    the (chunked, markdown-rendered) text through the platform context."""
+    resp = Response(user_id=user.id, kind=kind, brief=text, full=text)
+    session.add(resp)
+    await session.flush()
+    resp.message_ids = await _send_chunks_ctx(ctx, text, resp.id, extra_row, user, show_actions)
     await session.commit()
     return resp

@@ -239,20 +239,23 @@ def _callback_message_id(callback: MessageCallback) -> Any:
 
 
 class MaxState:
-    """StateStore поверх контекста maxapi (RedisContext).
+    """StateStore over a maxapi context (Memory/RedisContext).
 
-    TODO(max): подключить к maxapi RedisContext/MemoryContext. Имена методов у
-    maxapi могут отличаться (get/set/update/clear) — сверить и при необходимости
-    смапить здесь. Тот же Redis, что и сейчас.
-    """
+    Normalizes aiogram `State` objects (used in bot/states.py) to their string key
+    so the SAME handler bodies work on both platforms: on MAX the maxapi context
+    stores/filters by the identical string aiogram would (e.g. "Onboarding:...")."""
 
     def __init__(self, ctx: Any) -> None:
         self._ctx = ctx
 
     async def get_state(self) -> str | None:
-        return await self._ctx.get_state()
+        st = await self._ctx.get_state()
+        return getattr(st, "state", st)  # normalize maxapi State → str if any
 
-    async def set_state(self, state: str | None) -> None:
+    async def set_state(self, state: Any = None) -> None:
+        # Accept aiogram State | maxapi State | str | None → store the string key.
+        if state is not None:
+            state = getattr(state, "state", state)
         await self._ctx.set_state(state)
 
     async def get_data(self) -> dict[str, Any]:

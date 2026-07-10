@@ -7,10 +7,16 @@ import structlog
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from astrobot.bot.platform import PlatformContext
 from astrobot.db.models import BirthProfile, User
 from astrobot.redis_client import get_redis
 
 log = structlog.get_logger(__name__)
+
+_NO_PROFILE = (
+    "🌙 Нам надо познакомиться — мне нужны твои дата, время и место рождения. "
+    "Нажми /start, чтобы начать."
+)
 
 
 async def need_profile(
@@ -20,10 +26,19 @@ async def need_profile(
 ) -> BirthProfile | None:
     profile = await session.get(BirthProfile, user.id)
     if profile is None:
-        await message.answer(
-            "🌙 Нам надо познакомиться — мне нужны твои дата, время и место рождения. "
-            "Нажми /start, чтобы начать."
-        )
+        await message.answer(_NO_PROFILE)
+    return profile
+
+
+async def need_profile_ctx(
+    ctx: PlatformContext,
+    session: AsyncSession,
+    user: User,
+) -> BirthProfile | None:
+    """ctx-based twin of need_profile."""
+    profile = await session.get(BirthProfile, user.id)
+    if profile is None:
+        await ctx.reply(_NO_PROFILE)
     return profile
 
 
