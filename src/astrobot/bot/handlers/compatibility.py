@@ -4,8 +4,6 @@ import asyncio
 from datetime import date, datetime, time
 
 from aiogram import F, Router
-from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,11 +18,10 @@ from astrobot.bot.keyboards import (
     promo_row,
     with_back,
 )
-from astrobot.bot.platform import Button, Keyboard
-from astrobot.bot.platform.telegram import to_markup
-from astrobot.bot.responses import edit_or_send, save_and_send_response
+from astrobot.bot.platform import Button, Keyboard, PlatformContext
+from astrobot.bot.responses import send_response
 from astrobot.bot.states import CompatFlow
-from astrobot.bot.utils import need_profile, rate_limit_ok, user_llm_lock
+from astrobot.bot.utils import need_profile_ctx, rate_limit_ok, user_llm_lock
 from astrobot.db.models import BirthProfile, LLMUsageLog, Response, User
 from astrobot.limits import (
     check_question,
@@ -37,7 +34,6 @@ from astrobot.llm.prompts import build_system_compatibility
 
 router = Router(name="compatibility")
 
-# Cap geocoding (external Nominatim calls) per user to curb spam / OSM ToS abuse.
 GEOCODE_PER_HOUR = 20
 
 _KIND = "question:compatibility"
@@ -55,29 +51,24 @@ def _last_kb(resp_id: int, user: User) -> Keyboard:
     return Keyboard.from_rows(rows)
 
 
-async def _start_new(
-    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
-) -> None:
-    profile = await need_profile(call.message, session, user)
+async def _start_new(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
+    profile = await need_profile_ctx(ctx, session, user)
     if profile is None:
         return
     allowance = await check_question(session, user)
     if not allowance.allowed:
-        await edit_or_send(call, paywall_text("question", allowance), premium_or_back_kb())
+        await ctx.edit(paywall_text("question", allowance), premium_or_back_kb())
         return
     await state.set_state(CompatFlow.waiting_for_name)
-    await edit_or_send(
-        call,
+    await ctx.edit(
         "💞 Проверим совместимость с другим человеком.\n\nКак его/её зовут?",
         with_back([]),
     )
 
 
 @router.callback_query(F.data == "menu:compatibility")
-async def on_compat_menu(
-    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
-) -> None:
-    await call.answer()
+async def on_compat_menu(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
+    await ctx.answer_callback()
     last = await session.scalar(
         select(Response)
         .where(Response.user_id == user.id, Response.kind == "compatibility")
@@ -85,98 +76,88 @@ async def on_compat_menu(
         .limit(1)
     )
     if last is not None:
-        await edit_or_send(
-            call,
+        await ctx.edit(
             "💞 <i>Твой последний расчёт:</i>\n\n" + last.full,
             _last_kb(last.id, user),
         )
         return
-    await _start_new(call, state, session, user)
+    await _start_new(ctx, state, session, user)
 
 
 @router.callback_query(F.data == "compat:new")
-async def on_compat_new(
-    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
-) -> None:
-    await call.answer()
-    await _start_new(call, state, session, user)
+async def on_compat_new(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
+    await ctx.answer_callback()
+    await _start_new(ctx, state, session, user)
 
 
 @router.message(CompatFlow.waiting_for_name)
-async def on_compat_name(message: Message, state: FSMContext) -> None:
-    name = (message.text or "").strip()
+async def on_compat_name(ctx: PlatformContext, state) -> None:
+    name = (ctx.text or "").strip()
     name = "".join(ch for ch in name if ch not in "<>" and (ch == " " or ch.isprintable()))
     name = name.strip()
     if not (1 <= len(name) <= 64):
-        await message.answer("Напиши имя (до 64 символов).")
+        await ctx.reply("Напиши имя (до 64 символов).")
         return
     await state.update_data(p_name=name)
     await state.set_state(CompatFlow.waiting_for_date)
-    await message.answer(
-        f"📅 Дата рождения <b>{name}</b> — в формате <code>DD.MM.YYYY</code>:"
-    )
+    await ctx.reply(f"📅 Дата рождения <b>{name}</b> — в формате <code>DD.MM.YYYY</code>:")
 
 
 @router.message(CompatFlow.waiting_for_date)
-async def on_compat_date(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip()
+async def on_compat_date(ctx: PlatformContext, state) -> None:
+    text = (ctx.text or "").strip()
     try:
         d = datetime.strptime(text, "%d.%m.%Y").date()
     except ValueError:
-        await message.answer("Не понял дату. Нужно <code>DD.MM.YYYY</code>, например <code>14.03.1990</code>.")
+        await ctx.reply("Не понял дату. Нужно <code>DD.MM.YYYY</code>, например <code>14.03.1990</code>.")
         return
     if d.year < 1900 or d > date.today():
-        await message.answer("Дата должна быть между 1900 годом и сегодняшним днём.")
+        await ctx.reply("Дата должна быть между 1900 годом и сегодняшним днём.")
         return
     await state.update_data(p_date=d.isoformat())
     await state.set_state(CompatFlow.waiting_for_time)
-    await message.answer(
+    await ctx.reply(
         "⏰ Время рождения <code>HH:MM</code> (или нажми «Не знаю времени»):",
-        reply_markup=to_markup(compat_time_unknown_kb()),
+        compat_time_unknown_kb(),
     )
 
 
 @router.callback_query(CompatFlow.waiting_for_time, F.data == "compat:time:unknown")
-async def on_compat_time_unknown(call: CallbackQuery, state: FSMContext) -> None:
+async def on_compat_time_unknown(ctx: PlatformContext, state) -> None:
     await state.update_data(p_time=time(12, 0).isoformat(), p_time_unknown=True)
     await state.set_state(CompatFlow.waiting_for_city)
-    await call.message.answer("📍 Город рождения этого человека:")
-    await call.answer()
+    await ctx.reply("📍 Город рождения этого человека:")
+    await ctx.answer_callback()
 
 
 @router.message(CompatFlow.waiting_for_time)
-async def on_compat_time(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip()
+async def on_compat_time(ctx: PlatformContext, state) -> None:
+    text = (ctx.text or "").strip()
     try:
         t = datetime.strptime(text, "%H:%M").time()
     except ValueError:
-        await message.answer("Не понял время. Нужно <code>HH:MM</code>, или нажми «Не знаю времени».")
+        await ctx.reply("Не понял время. Нужно <code>HH:MM</code>, или нажми «Не знаю времени».")
         return
     await state.update_data(p_time=t.isoformat(), p_time_unknown=False)
     await state.set_state(CompatFlow.waiting_for_city)
-    await message.answer("📍 Город рождения этого человека:")
+    await ctx.reply("📍 Город рождения этого человека:")
 
 
 @router.message(CompatFlow.waiting_for_city)
-async def on_compat_city(
-    message: Message, state: FSMContext, session: AsyncSession, user: User
-) -> None:
-    query = (message.text or "").strip()
+async def on_compat_city(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
+    query = (ctx.text or "").strip()
     if len(query) < 2:
-        await message.answer("Слишком короткое название. Введи город, например <code>Москва</code>.")
+        await ctx.reply("Слишком короткое название. Введи город, например <code>Москва</code>.")
         return
 
     if not await rate_limit_ok(f"geo:rl:{user.id}", GEOCODE_PER_HOUR, 3600):
-        await message.answer(
-            "⏳ Слишком много запросов городов подряд. Попробуй через несколько минут."
-        )
+        await ctx.reply("⏳ Слишком много запросов городов подряд. Попробуй через несколько минут.")
         return
 
-    progress = await message.answer("🔍 Ищу город на карте…")
+    await ctx.reply("🔍 Ищу город на карте…")
     result = await geocode_city(session, query)
-    await progress.delete()
     if result is None:
-        await message.answer(
+        await ctx.reply(
             "Не нашла такой город — попробуй иначе, например <code>Санкт-Петербург, Россия</code>."
         )
         return
@@ -186,14 +167,12 @@ async def on_compat_city(
 
     allowance = await check_question(session, user)
     if not allowance.allowed:
-        await message.answer(
-            paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb())
-        )
+        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
         return
 
     profile = await session.get(BirthProfile, user.id)
     if profile is None:
-        await message.answer("Сначала пройди /start — нужна твоя карта.")
+        await ctx.reply("Сначала пройди /start — нужна твоя карта.")
         return
 
     partner = BirthData(
@@ -212,11 +191,11 @@ async def on_compat_city(
         name_a = f"{name_a} (ты)"
     me = _profile_to_birth(profile, name=name_a)
 
-    await _do_compat(message, session, user, me, partner, name_a, name_b)
+    await _do_compat(ctx, session, user, me, partner, name_a, name_b)
 
 
 async def _do_compat(
-    target: Message,
+    ctx: PlatformContext,
     session: AsyncSession,
     user: User,
     me: BirthData,
@@ -226,20 +205,17 @@ async def _do_compat(
 ) -> None:
     async with user_llm_lock(user.id) as acquired:
         if not acquired:
-            await target.answer("⏳ Секунду — предыдущий расчёт ещё считается.")
+            await ctx.reply("⏳ Секунду — предыдущий расчёт ещё считается.")
             return
 
-        # Authoritative quota gate under the lock (see question handler).
         await session.refresh(user)
         reset_premium_questions_if_due(user)
         allowance = await check_question(session, user)
         if not allowance.allowed:
-            await target.answer(
-                paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb())
-            )
+            await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
             return
 
-        progress = await target.answer("💞 Сравниваю ваши карты…")
+        await ctx.reply("💞 Сравниваю ваши карты…")
 
         report = await asyncio.to_thread(build_synastry_report, me, partner)
         context = synastry_to_markdown(report, name_a, name_b)
@@ -266,6 +242,5 @@ async def _do_compat(
             )
         )
 
-        await progress.delete()
         header = f"💞 <b>{name_a} × {name_b}</b>\n\n"
-        await save_and_send_response(target, session, user, "compatibility", header + text, extra_row=_NEW_ROW)
+        await send_response(ctx, session, user, "compatibility", header + text, extra_row=_NEW_ROW)

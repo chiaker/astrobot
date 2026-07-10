@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.keyboards import MENU_BACK_BTN, premium_or_back_kb, promo_row, tarot_entry_kb
-from astrobot.bot.platform import Button, Keyboard
-from astrobot.bot.platform.telegram import to_markup
-from astrobot.bot.responses import edit_or_send, save_and_send_response
+from astrobot.bot.platform import Button, Keyboard, PlatformContext
+from astrobot.bot.responses import send_response
 from astrobot.bot.states import TarotFlow
 from astrobot.bot.utils import user_llm_lock
 from astrobot.db.models import LLMUsageLog, Response, User
@@ -42,26 +39,21 @@ def _last_kb(resp_id: int, user: User) -> Keyboard:
     return Keyboard.from_rows(rows)
 
 
-async def _start_new(
-    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
-) -> None:
+async def _start_new(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
     allowance = await check_question(session, user)
     if not allowance.allowed:
-        await edit_or_send(call, paywall_text("question", allowance), premium_or_back_kb())
+        await ctx.edit(paywall_text("question", allowance), premium_or_back_kb())
         return
     await state.set_state(TarotFlow.waiting_for_question)
-    await edit_or_send(
-        call,
+    await ctx.edit(
         "🃏 О чём спросить карты? Напиши вопрос одним сообщением — или тяни без вопроса.",
         tarot_entry_kb(),
     )
 
 
 @router.callback_query(F.data == "menu:tarot")
-async def on_tarot_menu(
-    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
-) -> None:
-    await call.answer()
+async def on_tarot_menu(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
+    await ctx.answer_callback()
     last = await session.scalar(
         select(Response)
         .where(Response.user_id == user.id, Response.kind == "tarot")
@@ -69,77 +61,66 @@ async def on_tarot_menu(
         .limit(1)
     )
     if last is not None:
-        await edit_or_send(
-            call,
+        await ctx.edit(
             "🃏 <i>Твой последний расклад:</i>\n\n" + last.full,
             _last_kb(last.id, user),
         )
         return
-    await _start_new(call, state, session, user)
+    await _start_new(ctx, state, session, user)
 
 
 @router.callback_query(F.data == "tarot:new")
-async def on_tarot_new(
-    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
-) -> None:
-    await call.answer()
-    await _start_new(call, state, session, user)
+async def on_tarot_new(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
+    await ctx.answer_callback()
+    await _start_new(ctx, state, session, user)
 
 
 @router.callback_query(F.data == "tarot:draw")
-async def on_tarot_draw(
-    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
-) -> None:
-    await call.answer()
+async def on_tarot_draw(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
+    await ctx.answer_callback()
     await state.clear()
     allowance = await check_question(session, user)
     if not allowance.allowed:
-        await call.message.answer(
-            paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb())
-        )
+        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
         return
-    await _do_tarot(call.message, session, user, question=None)
+    await _do_tarot(ctx, session, user, question=None)
 
 
 @router.message(TarotFlow.waiting_for_question)
 async def on_tarot_question(
-    message: Message, state: FSMContext, session: AsyncSession, user: User
+    ctx: PlatformContext, state, session: AsyncSession, user: User
 ) -> None:
-    question = (message.text or "").strip()
+    question = (ctx.text or "").strip()
     if is_crisis(question):
         CRISIS_TRIGGERED.inc()
         await state.clear()
-        await message.answer(CRISIS_REPLY, disable_web_page_preview=True)
+        await ctx.reply(CRISIS_REPLY, disable_preview=True)
         return
     await state.clear()
     allowance = await check_question(session, user)
     if not allowance.allowed:
-        await message.answer(
-            paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb())
-        )
+        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
         return
-    await _do_tarot(message, session, user, question=question[:500] or None)
+    await _do_tarot(ctx, session, user, question=question[:500] or None)
 
 
 async def _do_tarot(
-    target: Message, session: AsyncSession, user: User, question: str | None
+    ctx: PlatformContext, session: AsyncSession, user: User, question: str | None
 ) -> None:
     async with user_llm_lock(user.id) as acquired:
         if not acquired:
-            await target.answer("⏳ Секунду — предыдущий расклад ещё раскрывается.")
+            await ctx.reply("⏳ Секунду — предыдущий расклад ещё раскрывается.")
             return
 
-        # Authoritative quota gate under the lock (see question handler).
+        # Authoritative quota gate under the lock.
         await session.refresh(user)
         reset_premium_questions_if_due(user)
         allowance = await check_question(session, user)
         if not allowance.allowed:
-            await target.answer(
-                paywall_text("question", allowance), reply_markup=to_markup(premium_or_back_kb())
-            )
+            await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
             return
 
-        progress = await target.answer("🃏 Тасую колоду и раскладываю карты…")
+        await ctx.reply("🃏 Тасую колоду и раскладываю карты…")
 
         cards = draw_three()
         context = cards_to_markdown(cards, question)
@@ -169,6 +150,5 @@ async def _do_tarot(
             )
         )
 
-        await progress.delete()
         header = f"🃏 <b>Расклад:</b> {spread}\n\n"
-        await save_and_send_response(target, session, user, "tarot", header + text, extra_row=_NEW_ROW)
+        await send_response(ctx, session, user, "tarot", header + text, extra_row=_NEW_ROW)
