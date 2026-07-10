@@ -14,11 +14,9 @@ from aiogram.types import (
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from astrobot.bot.handlers.menu import send_main_menu
+from astrobot.bot.handlers.menu import show_main_menu
 from astrobot.bot.keyboards import MENU_BACK_BTN
-from astrobot.bot.platform import Button, Keyboard
-from astrobot.bot.platform.telegram import to_markup
-from astrobot.bot.responses import edit_or_send
+from astrobot.bot.platform import Button, Keyboard, PlatformBot, PlatformContext
 from astrobot.bot.states import PaymentFlow
 from astrobot.config import get_settings
 from astrobot.db.models import Payment, Subscription, User
@@ -93,9 +91,11 @@ def _method_kb(item: Item) -> Keyboard:
         rows.append(
             [Button(text=f"💳 Картой — {item.amount_rub} ₽", payload=f"pay:{item.code}")]
         )
-    rows.append(
-        [Button(text=f"⭐ Telegram Stars — {item.amount_rub}", payload=f"stars:{item.code}")]
-    )
+    # Telegram Stars only on Telegram — MAX has no Stars checkout.
+    if settings.platform != "max":
+        rows.append(
+            [Button(text=f"⭐ Telegram Stars — {item.amount_rub}", payload=f"stars:{item.code}")]
+        )
     rows.append([MENU_BACK_BTN])
     return Keyboard.from_rows(rows)
 
@@ -166,35 +166,32 @@ async def _active_subscription(
 
 
 @router.callback_query(F.data == "menu:premium")
-async def on_premium(call: CallbackQuery, session: AsyncSession, user: User) -> None:
-    await call.answer()
+async def on_premium(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
+    await ctx.answer_callback()
     sub = await _active_subscription(session, user)
-    await edit_or_send(call, _intro_text(user, sub), _plans_kb(sub))
+    await ctx.edit(_intro_text(user, sub), _plans_kb(sub))
 
 
 @router.callback_query(F.data == "premium:show")
-async def on_premium_inline(
-    call: CallbackQuery, session: AsyncSession, user: User
-) -> None:
+async def on_premium_inline(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
     sub = await _active_subscription(session, user)
-    await edit_or_send(call, _intro_text(user, sub), _plans_kb(sub))
-    await call.answer()
+    await ctx.edit(_intro_text(user, sub), _plans_kb(sub))
+    await ctx.answer_callback()
 
 
 @router.callback_query(F.data == "sub:cancel")
 async def on_sub_cancel(
-    call: CallbackQuery, session: AsyncSession, user: User
+    ctx: PlatformContext, session: AsyncSession, user: User, pbot: PlatformBot
 ) -> None:
-    sub = await service.cancel_subscription(session, user, call.bot)
+    # bot is only needed to cancel a Telegram Stars subscription; MAX subs are
+    # always YooKassa (no bot call). pbot.raw is the native SDK bot.
+    sub = await service.cancel_subscription(session, user, pbot.raw)
     if sub is None:
-        await call.answer("Активной подписки нет", show_alert=True)
+        await ctx.answer_callback("Активной подписки нет", alert=True)
         return
-    until = (
-        user.premium_until.strftime("%d.%m.%Y") if user.premium_until else "конца срока"
-    )
-    await call.answer("Автопродление отключено")
-    await edit_or_send(
-        call,
+    until = user.premium_until.strftime("%d.%m.%Y") if user.premium_until else "конца срока"
+    await ctx.answer_callback("Автопродление отключено")
+    await ctx.edit(
         "✖ <b>Автопродление отключено.</b>\n\n"
         f"Премиум останется активным до <b>{until}</b>, после чего не продлится. "
         "Снова оформить подписку можно в любой момент.",
@@ -203,16 +200,15 @@ async def on_sub_cancel(
 
 
 @router.callback_query(F.data.startswith("buy:"))
-async def on_buy(call: CallbackQuery) -> None:
-    """Show the payment-method picker (card vs Telegram Stars) for an item."""
-    code = call.data.split(":", 1)[1]
+async def on_buy(ctx: PlatformContext) -> None:
+    """Show the payment-method picker (card / Stars) for an item."""
+    code = (ctx.payload or "").split(":", 1)[1]
     item = get_item(code)
     if item is None:
-        await call.answer("Товар не найден", show_alert=True)
+        await ctx.answer_callback("Товар не найден", alert=True)
         return
-    await call.answer()
-    await edit_or_send(
-        call,
+    await ctx.answer_callback()
+    await ctx.edit(
         f"<b>{item.title}</b> — {item.amount_rub} ₽\n\nВыбери способ оплаты:",
         _method_kb(item),
     )
@@ -220,44 +216,44 @@ async def on_buy(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("pay:"), F.data != "pay:cancel")
 async def on_pay(
-    call: CallbackQuery,
+    ctx: PlatformContext,
     session: AsyncSession,
     user: User,
     state: FSMContext,
+    pbot: PlatformBot,
 ) -> None:
-    code = call.data.split(":", 1)[1]
+    code = (ctx.payload or "").split(":", 1)[1]
     item = get_item(code)
     if item is None:
-        await call.answer("Товар не найден", show_alert=True)
+        await ctx.answer_callback("Товар не найден", alert=True)
         return
 
-    await call.answer()
+    await ctx.answer_callback()
 
     # Need an email for the 54-ФЗ receipt — ask once, then reuse.
     if not user.email:
         await state.set_state(PaymentFlow.waiting_for_email)
         await state.update_data(pay_code=code)
-        await call.message.answer(
+        await ctx.reply(
             "📧 Для чека об оплате нужен <b>email</b> — отправь его одним сообщением.\n\n"
             "<i>На него придёт чек.</i>"
         )
         return
 
-    await _start_payment(call.message, session, user, code)
+    await _start_payment(ctx, session, user, code, pbot)
 
 
 @router.message(PaymentFlow.waiting_for_email)
 async def on_payment_email(
-    message: Message,
+    ctx: PlatformContext,
     state: FSMContext,
     session: AsyncSession,
     user: User,
+    pbot: PlatformBot,
 ) -> None:
-    email = (message.text or "").strip()
+    email = (ctx.text or "").strip()
     if not _EMAIL_RE.fullmatch(email) or len(email) > 255:
-        await message.answer(
-            "Хм, это не похоже на email. Пришли в формате <code>name@example.com</code>."
-        )
+        await ctx.reply("Хм, это не похоже на email. Пришли в формате <code>name@example.com</code>.")
         return
 
     data = await state.get_data()
@@ -268,28 +264,27 @@ async def on_payment_email(
     await session.commit()
 
     if not code or get_item(code) is None:
-        await message.answer("Что-то сбилось — открой <b>💎 Премиум</b> и выбери ещё раз.")
+        await ctx.reply("Что-то сбилось — открой <b>💎 Премиум</b> и выбери ещё раз.")
         return
 
-    await _start_payment(message, session, user, code)
+    await _start_payment(ctx, session, user, code, pbot)
 
 
 async def _start_payment(
-    target: Message,
+    ctx: PlatformContext,
     session: AsyncSession,
     user: User,
     code: str,
+    pbot: PlatformBot,
 ) -> None:
     item = get_item(code)
     if item is None:
-        await target.answer("Товар не найден.")
+        await ctx.reply("Товар не найден.")
         return
 
     settings = get_settings()
     if not settings.yookassa_shop_id or not settings.yookassa_secret_key:
-        await target.answer(
-            "⚙️ Оплата пока не настроена. Загляни позже — звёзды уже на подходе ✨"
-        )
+        await ctx.reply("⚙️ Оплата пока не настроена. Загляни позже — звёзды уже на подходе ✨")
         return
 
     # Anti-spam: one payment creation per 15s per user (Redis cooldown).
@@ -299,7 +294,7 @@ async def _start_payment(
     except Exception:
         allowed = True  # Redis down → don't block real purchases
     if not allowed:
-        await target.answer(
+        await ctx.reply(
             "⏳ Секунду — предыдущий платёж ещё оформляется. Попробуй через несколько секунд."
         )
         return
@@ -340,16 +335,16 @@ async def _start_payment(
         await session.commit()
         PAYMENTS_FAILED.labels(stage="create").inc()
         log.warning("payment_create_failed", item=item.code, error=str(e))
-        from astrobot.alerts import notify_ops
-
-        await notify_ops(
-            target.bot,
-            f"🚨 Не удалось создать платёж в YooKassa\n"
-            f"item={item.code}, user_id={user.id}\nОшибка: {type(e).__name__}: {e}",
-        )
-        await target.answer(
-            "🌧 Не получилось создать платёж — попробуй ещё раз чуть позже."
-        )
+        if settings.ops_chat_id:
+            try:
+                await pbot.send_message(
+                    settings.ops_chat_id,
+                    f"🚨 Не удалось создать платёж в YooKassa\n"
+                    f"item={item.code}, user_id={user.id}\nОшибка: {type(e).__name__}: {e}",
+                )
+            except Exception:
+                pass
+        await ctx.reply("🌧 Не получилось создать платёж — попробуй ещё раз чуть позже.")
         return
 
     payment.yookassa_payment_id = resp.get("id")
@@ -360,9 +355,7 @@ async def _start_payment(
     if not confirmation_url:
         PAYMENTS_FAILED.labels(stage="create").inc()
         log.warning("payment_no_confirmation_url", item=item.code, resp=str(resp)[:300])
-        await target.answer(
-            "🌧 Не получилось создать платёж — попробуй ещё раз чуть позже."
-        )
+        await ctx.reply("🌧 Не получилось создать платёж — попробуй ещё раз чуть позже.")
         return
 
     PAYMENTS_CREATED.labels(item=item.code).inc()
@@ -378,20 +371,20 @@ async def _start_payment(
         if item.recurring and settings.recurring_enabled
         else ""
     )
-    await target.answer(
+    await ctx.reply(
         f"<b>{item.title}</b> — {item.amount_rub} ₽\n\n"
         "Нажми кнопку ниже, чтобы перейти к безопасной оплате через ЮKassa. "
         "После оплаты вернись в бот — я подтвержу начисление ✨"
         + recurring_note
         + "\n\n⚠️ <b>Обязательно отключи VPN перед оплатой</b> — иначе платёж может не пройти.\n"
         "Если что-то пошло не так — напиши нам через кнопку 🆘Поддержки в профиле.",
-        reply_markup=to_markup(kb),
+        kb,
     )
 
 
 @router.callback_query(F.data == "pay:cancel")
 async def on_pay_cancel(
-    call: CallbackQuery,
+    ctx: PlatformContext,
     state: FSMContext,
     session: AsyncSession,
     user: User,
@@ -408,12 +401,8 @@ async def on_pay_cancel(
         await session.commit()
 
     await state.clear()
-    try:
-        await call.message.delete()
-    except Exception:
-        pass
-    await call.answer("Оплата отменена")
-    await send_main_menu(call.message, user, session)
+    await ctx.answer_callback("Оплата отменена")
+    await show_main_menu(ctx, user, session)
 
 
 # ─── Telegram Stars (XTR) ──────────────────────────────────────────────────────

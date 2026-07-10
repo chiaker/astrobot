@@ -4,7 +4,6 @@ from datetime import UTC, datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,8 +17,6 @@ from astrobot.bot.keyboards import (
     with_back,
 )
 from astrobot.bot.platform import Button, Keyboard, PlatformContext
-from astrobot.bot.platform.telegram import to_markup
-from astrobot.bot.responses import edit_or_send
 from astrobot.bot.states import Onboarding, PushSetup
 from astrobot.db.models import (
     BirthProfile,
@@ -229,82 +226,76 @@ _PUSH_CITY_PROMPT = (
 
 @router.callback_query(F.data == "settings:push_horoscope")
 async def on_push_horoscope_toggle(
-    call: CallbackQuery,
+    ctx: PlatformContext,
     state: FSMContext,
     session: AsyncSession,
     user: User,
 ) -> None:
     if not is_premium(user):
-        await call.answer("Доступно только в Премиуме", show_alert=True)
+        await ctx.answer_callback("Доступно только в Премиуме", alert=True)
         return
 
     if user.push_horoscope_enabled:
-        # Disable immediately
         user.push_horoscope_enabled = False
         await session.commit()
-        await edit_or_send(call, "🔮 На какой период посмотрим?", horoscope_period_kb(user))
-        await call.answer("Утренний гороскоп выключен")
+        await ctx.edit("🔮 На какой период посмотрим?", horoscope_period_kb(user))
+        await ctx.answer_callback("Утренний гороскоп выключен")
         return
 
-    # Enabling — check if already has push settings
     if user.push_tz and user.push_city_name:
         hour = user.push_hour if user.push_hour is not None else 9
         user.push_horoscope_enabled = True
         await session.commit()
-        await edit_or_send(call, "🔮 На какой период посмотрим?", horoscope_period_kb(user))
-        await call.answer(f"Включён · {hour}:00 · {user.push_city_name}")
+        await ctx.edit("🔮 На какой период посмотрим?", horoscope_period_kb(user))
+        await ctx.answer_callback(f"Включён · {hour}:00 · {user.push_city_name}")
         return
 
-    # No push settings yet — start setup
-    await call.answer()
+    await ctx.answer_callback()
     await state.set_state(PushSetup.waiting_for_city)
-    await call.message.answer(_PUSH_CITY_PROMPT)
+    await ctx.reply(_PUSH_CITY_PROMPT)
 
 
 @router.callback_query(F.data == "push:setup_start")
 async def on_push_setup_start(
-    call: CallbackQuery,
+    ctx: PlatformContext,
     state: FSMContext,
     session: AsyncSession,
     user: User,
 ) -> None:
-    """Entry point from the post-purchase offer (service._confirmation_kb):
-    enable the morning horoscope, reusing the PushSetup flow when not configured
-    yet. Unlike the settings toggle, it never disables — it only moves toward on."""
+    """Post-purchase entry: enable the morning horoscope, reusing PushSetup."""
     if not is_premium(user):
-        await call.answer("Доступно только в Премиуме", show_alert=True)
+        await ctx.answer_callback("Доступно только в Премиуме", alert=True)
         return
     if user.push_horoscope_enabled:
-        await call.answer("Утренний гороскоп уже включён")
+        await ctx.answer_callback("Утренний гороскоп уже включён")
         return
     if user.push_tz and user.push_city_name:
         user.push_horoscope_enabled = True
         await session.commit()
         hour = user.push_hour if user.push_hour is not None else 9
-        await call.answer(f"Включён · {hour}:00")
-        await call.message.answer(
+        await ctx.answer_callback(f"Включён · {hour}:00")
+        await ctx.reply(
             f"🌅 Утренний гороскоп включён — буду присылать в <b>{hour}:00</b> "
             f"по времени <b>{user.push_city_name}</b>."
         )
         return
-    await call.answer()
+    await ctx.answer_callback()
     await state.set_state(PushSetup.waiting_for_city)
-    await call.message.answer(_PUSH_CITY_PROMPT)
+    await ctx.reply(_PUSH_CITY_PROMPT)
 
 
 @router.message(PushSetup.waiting_for_city)
-async def on_push_city(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    query = (message.text or "").strip()
+async def on_push_city(ctx: PlatformContext, state: FSMContext, session: AsyncSession) -> None:
+    query = (ctx.text or "").strip()
     if len(query) < 2:
-        await message.answer("Напиши название города, например <code>Москва</code>.")
+        await ctx.reply("Напиши название города, например <code>Москва</code>.")
         return
 
-    progress = await message.answer("🔍 Ищу город…")
+    await ctx.reply("🔍 Ищу город…")
     result = await geocode_city(session, query)
-    await progress.delete()
 
     if result is None:
-        await message.answer(
+        await ctx.reply(
             "Не нашла такой город. Попробуй иначе, "
             "например <code>Санкт-Петербург, Россия</code>."
         )
@@ -312,22 +303,22 @@ async def on_push_city(message: Message, state: FSMContext, session: AsyncSessio
 
     await state.update_data(push_tz=result.tz, push_city_name=result.display_name)
     await state.set_state(PushSetup.choosing_hour)
-    await message.answer(
+    await ctx.reply(
         f"📍 Нашла: <b>{result.display_name}</b> (часовой пояс <code>{result.tz}</code>)\n\n"
         "В какое время тебе присылать утренний гороскоп?\n"
         "<i>Время указывается по твоему текущему городу.</i>",
-        reply_markup=to_markup(push_hour_kb()),
+        push_hour_kb(),
     )
 
 
 @router.callback_query(PushSetup.choosing_hour, F.data.startswith("push:hour:"))
 async def on_push_hour(
-    call: CallbackQuery,
+    ctx: PlatformContext,
     state: FSMContext,
     session: AsyncSession,
     user: User,
 ) -> None:
-    hour = int(call.data.split(":")[-1])
+    hour = int((ctx.payload or "").split(":")[-1])
     data = await state.get_data()
     user.push_tz = data["push_tz"]
     user.push_city_name = data["push_city_name"]
@@ -336,20 +327,20 @@ async def on_push_hour(
     await session.commit()
     await state.clear()
 
-    await call.message.edit_text(
+    await ctx.edit(
         f"✅ Готово! Буду присылать утренний гороскоп в <b>{hour}:00</b> "
         f"по времени <b>{user.push_city_name}</b>.\n\n"
         "Можешь изменить настройки в профиле."
     )
-    await call.answer("Настроено")
+    await ctx.answer_callback("Настроено")
 
 
 @router.callback_query(PushSetup.choosing_hour, F.data == "push:cancel")
 @router.callback_query(PushSetup.waiting_for_city, F.data == "push:cancel")
-async def on_push_cancel(call: CallbackQuery, state: FSMContext) -> None:
+async def on_push_cancel(ctx: PlatformContext, state: FSMContext) -> None:
     await state.clear()
-    await call.message.edit_text("Настройка отменена.")
-    await call.answer()
+    await ctx.edit("Настройка отменена.")
+    await ctx.answer_callback()
 
 
 # ─── Push lunar toggle ────────────────────────────────────────────────────────
@@ -435,7 +426,7 @@ async def on_profile_reset_warn(ctx: PlatformContext, session: AsyncSession, use
 
 @router.callback_query(F.data == "profile:reset:confirm")
 async def on_profile_reset_confirm(
-    call: CallbackQuery,
+    ctx: PlatformContext,
     state: FSMContext,
     session: AsyncSession,
     user: User,
@@ -454,8 +445,5 @@ async def on_profile_reset_confirm(
     )
     await state.set_state(Onboarding.waiting_for_name)
     hint = f" Сейчас: <b>{user.display_name}</b>." if user.display_name else ""
-    await call.message.answer(
-        f"Прежние данные удалены. Как тебя зовут?{hint}",
-        reply_markup=to_markup(name_skip_kb()),
-    )
-    await call.answer()
+    await ctx.reply(f"Прежние данные удалены. Как тебя зовут?{hint}", name_skip_kb())
+    await ctx.answer_callback()
