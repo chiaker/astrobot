@@ -32,6 +32,7 @@ from sqlalchemy import select
 from astrobot.bot.handlers import about as h_about
 from astrobot.bot.handlers import legal as h_legal
 from astrobot.bot.handlers import menu as h_menu
+from astrobot.bot.handlers import profile as h_profile
 from astrobot.bot.platform.max import MaxContext, to_markup
 from astrobot.config import get_settings
 from astrobot.db.models import User
@@ -195,6 +196,36 @@ def build_max_dispatcher(bot: Bot) -> Dispatcher:
     @dp.message_callback(F.callback.payload == "legal:terms")
     async def _cb_terms(event: MessageCallback, ctx):
         await h_legal.cb_terms(ctx)
+
+    # --- profile / settings (non-FSM) ---
+
+    @dp.message_callback(F.callback.payload == "menu:profile")
+    async def _cb_profile(event: MessageCallback, ctx, session, user):
+        await h_profile.on_profile(ctx, session, user)
+
+    @dp.message_callback(F.callback.payload == "menu:settings")
+    async def _cb_settings(event: MessageCallback, ctx, session, user):
+        await h_profile.on_settings(ctx, session, user)
+
+    @dp.message_callback(F.callback.payload == "payments:mine")
+    async def _cb_payments_mine(event: MessageCallback, ctx, session, user):
+        await h_profile.on_my_payments(ctx, session, user)
+
+    @dp.message_callback(F.callback.payload == "settings:gender")
+    async def _cb_gender(event: MessageCallback, ctx, session, user):
+        await h_profile.on_gender_toggle(ctx, session, user)
+
+    @dp.message_callback(F.callback.payload == "settings:astro_terms")
+    async def _cb_astro_terms(event: MessageCallback, ctx, session, user):
+        await h_profile.on_astro_terms_toggle(ctx, session, user)
+
+    @dp.message_callback(F.callback.payload == "settings:push_lunar")
+    async def _cb_push_lunar(event: MessageCallback, ctx, session, user):
+        await h_profile.on_push_lunar_toggle(ctx, session, user)
+
+    @dp.message_callback(F.callback.payload == "profile:reset")
+    async def _cb_profile_reset(event: MessageCallback, ctx, session, user):
+        await h_profile.on_profile_reset_warn(ctx, session, user)
 
     log.info("max_dispatcher_built")
     return dp

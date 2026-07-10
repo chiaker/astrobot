@@ -17,7 +17,7 @@ from astrobot.bot.keyboards import (
     reset_confirm_kb,
     with_back,
 )
-from astrobot.bot.platform import Button, Keyboard
+from astrobot.bot.platform import Button, Keyboard, PlatformContext
 from astrobot.bot.platform.telegram import to_markup
 from astrobot.bot.responses import edit_or_send
 from astrobot.bot.states import Onboarding, PushSetup
@@ -90,8 +90,8 @@ def _settings_text(user: User) -> str:
     return "\n".join(parts)
 
 
-async def _render_settings(call: CallbackQuery, user: User) -> None:
-    await edit_or_send(call, _settings_text(user), _settings_kb(user))
+async def _render_settings(ctx: PlatformContext, user: User) -> None:
+    await ctx.edit(_settings_text(user), _settings_kb(user))
 
 
 async def _profile_text(profile: BirthProfile, user: User, session: AsyncSession) -> str:
@@ -158,24 +158,23 @@ async def _profile_text(profile: BirthProfile, user: User, session: AsyncSession
 
 
 @router.callback_query(F.data == "menu:profile")
-async def on_profile(call: CallbackQuery, session: AsyncSession, user: User) -> None:
-    await call.answer()
+async def on_profile(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
+    await ctx.answer_callback()
     profile = await session.get(BirthProfile, user.id)
     if profile is None:
-        await edit_or_send(
-            call,
+        await ctx.edit(
             "У тебя ещё нет сохранённого профиля. Нажми /start, чтобы пройти онбординг.",
             with_back([]),
         )
         return
     text = await _profile_text(profile, user, session)
-    await edit_or_send(call, text, _profile_kb(user))
+    await ctx.edit(text, _profile_kb(user))
 
 
 @router.callback_query(F.data == "menu:settings")
-async def on_settings(call: CallbackQuery, session: AsyncSession, user: User) -> None:
-    await call.answer()
-    await _render_settings(call, user)
+async def on_settings(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
+    await ctx.answer_callback()
+    await _render_settings(ctx, user)
 
 
 def _fmt_op(p: Payment) -> str:
@@ -193,7 +192,7 @@ def _fmt_op(p: Payment) -> str:
 
 
 @router.callback_query(F.data == "payments:mine")
-async def on_my_payments(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+async def on_my_payments(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
     payments = list(
         await session.scalars(
             select(Payment)
@@ -203,8 +202,8 @@ async def on_my_payments(call: CallbackQuery, session: AsyncSession, user: User)
         )
     )
     if not payments:
-        await edit_or_send(call, "🧾 У тебя пока нет операций.", with_back([]))
-        await call.answer()
+        await ctx.edit("🧾 У тебя пока нет операций.", with_back([]))
+        await ctx.answer_callback()
         return
 
     lines = ["🧾 <b>История операций</b>", ""]
@@ -213,8 +212,8 @@ async def on_my_payments(call: CallbackQuery, session: AsyncSession, user: User)
         "",
         "<i>Фискальный чек по каждому оплаченному платежу приходит на email.</i>",
     ]
-    await edit_or_send(call, "\n".join(lines), with_back([]))
-    await call.answer()
+    await ctx.edit("\n".join(lines), with_back([]))
+    await ctx.answer_callback()
 
 
 # ─── Push horoscope setup ─────────────────────────────────────────────────────
@@ -356,21 +355,21 @@ async def on_push_cancel(call: CallbackQuery, state: FSMContext) -> None:
 # ─── Push lunar toggle ────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "settings:push_lunar")
-async def on_push_lunar_toggle(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+async def on_push_lunar_toggle(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
     if not is_premium(user):
-        await call.answer("Доступно только в Премиуме", show_alert=True)
+        await ctx.answer_callback("Доступно только в Премиуме", alert=True)
         return
     user.push_lunar_enabled = not user.push_lunar_enabled
     await session.commit()
-    await _render_settings(call, user)
+    await _render_settings(ctx, user)
     label = "включены" if user.push_lunar_enabled else "выключены"
-    await call.answer(f"Лунные фазы {label}")
+    await ctx.answer_callback(f"Лунные фазы {label}")
 
 
 # ─── Astro terms toggle ───────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "settings:gender")
-async def on_gender_toggle(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+async def on_gender_toggle(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
     # Cycle: м → ж → не указан → м
     nxt = {"m": "f", "f": None}.get(user.gender or "", "m")
     user.gender = nxt
@@ -383,12 +382,12 @@ async def on_gender_toggle(call: CallbackQuery, session: AsyncSession, user: Use
     await session.commit()
     if profile is not None:
         text = await _profile_text(profile, user, session)
-        await edit_or_send(call, text, _profile_kb(user))
-    await call.answer(f"Пол: {_GENDER_LABEL.get(user.gender or '', 'не указан')}")
+        await ctx.edit(text, _profile_kb(user))
+    await ctx.answer_callback(f"Пол: {_GENDER_LABEL.get(user.gender or '', 'не указан')}")
 
 
 @router.callback_query(F.data == "settings:astro_terms")
-async def on_astro_terms_toggle(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+async def on_astro_terms_toggle(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
     user.astro_terms_enabled = not user.astro_terms_enabled
     profile = await session.get(BirthProfile, user.id)
     if profile is not None:
@@ -396,15 +395,15 @@ async def on_astro_terms_toggle(call: CallbackQuery, session: AsyncSession, user
         profile.cached_natal_full = None
     await session.execute(delete(HoroscopeCache).where(HoroscopeCache.user_id == user.id))
     await session.commit()
-    await _render_settings(call, user)
+    await _render_settings(ctx, user)
     label = "включены" if user.astro_terms_enabled else "выключены"
-    await call.answer(f"Астрологические термины {label}")
+    await ctx.answer_callback(f"Астрологические термины {label}")
 
 
 # ─── Profile reset ────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "profile:reset")
-async def on_profile_reset_warn(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+async def on_profile_reset_warn(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
     natal_this_month = (
         await session.scalar(
             select(func.count(LLMUsageLog.id)).where(
@@ -430,8 +429,8 @@ async def on_profile_reset_warn(call: CallbackQuery, session: AsyncSession, user
         lines.append(f"\n⭐ Будет удалено <b>{fav_count}</b> записей из Избранного.")
     lines.append("\nПродолжить?")
 
-    await call.message.answer("\n".join(lines), reply_markup=to_markup(reset_confirm_kb()))
-    await call.answer()
+    await ctx.reply("\n".join(lines), reset_confirm_kb())
+    await ctx.answer_callback()
 
 
 @router.callback_query(F.data == "profile:reset:confirm")
