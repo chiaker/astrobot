@@ -68,7 +68,9 @@ def main() -> None:
         import asyncio
 
         from astrobot.bot.max_dispatcher import build_max_bot, build_max_dispatcher
+        from astrobot.logging_setup import configure_logging
 
+        configure_logging(settings.log_level)
         bot = build_max_bot()
         asyncio.run(build_max_dispatcher(bot).start_polling(bot))
         return
