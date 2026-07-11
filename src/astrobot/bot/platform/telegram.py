@@ -263,7 +263,12 @@ class TelegramBot(PlatformBot):
         sent = await self._bot.send_animation(
             user_id, _to_input_file(media), caption=caption, reply_markup=to_markup(kb)
         )
-        return SentMessage(message_id=sent.message_id)
+        # Cache the id ONLY when Telegram treated it as animation/video — a document
+        # fallback id would send wrong on reuse, so leave it None to re-upload.
+        cacheable = sent.animation or sent.video
+        return SentMessage(
+            message_id=sent.message_id, file_id=cacheable.file_id if cacheable else None
+        )
 
     async def close(self) -> None:
         await self._bot.session.close()

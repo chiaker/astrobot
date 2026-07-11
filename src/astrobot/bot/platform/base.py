@@ -104,9 +104,14 @@ class Media:
 @dataclass(frozen=True)
 class SentMessage:
     """Результат отправки. message_id нужен для последующего edit/удаления,
-    хранения в БД (User.natal_cache_message_ids, Response.message_ids)."""
+    хранения в БД (User.natal_cache_message_ids, Response.message_ids).
+
+    file_id — платформо-нативный id загруженного медиа, если платформа его
+    вернула (Telegram file_id). Позволяет кэшировать первый аплоад и не грузить
+    байты повторно на каждого получателя рассылки. None — грузить заново."""
 
     message_id: int | str
+    file_id: str | None = None
 
 
 # ─────────────────────────── Входящее событие ───────────────────────────
