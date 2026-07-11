@@ -315,6 +315,12 @@ async def on_city(ctx: PlatformContext, state, session: AsyncSession, user: User
 @router.callback_query(Onboarding.confirming, F.data == "onb:save")
 async def on_confirm_save(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
     data = await state.get_data()
+    if "birth_date" not in data:
+        # Stale confirm button (state was cleared, e.g. a fresh /start mid-flow).
+        await ctx.answer_callback()
+        await ctx.reply("Что-то сбилось — начнём заново. Нажми /start.")
+        await state.clear()
+        return
     profile = await session.get(BirthProfile, user.id)
     if profile is None:
         profile = BirthProfile(user_id=user.id)
