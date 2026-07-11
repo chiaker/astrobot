@@ -23,6 +23,26 @@
 	}
 }
 
+# MAX bot (webhook, /admin, /metrics, /health) on its own subdomain.
+{$MAX_DOMAIN} {
+	reverse_proxy {
+		dynamic a {
+			name app-max
+			port 8000
+			refresh 2s
+			resolvers 127.0.0.11
+		}
+		lb_policy round_robin
+		lb_try_duration 5s
+		fail_duration 10s
+	}
+	encode gzip
+	log {
+		output stderr
+		format console
+	}
+}
+
 # Grafana on its own subdomain (served at root — no sub-path quirks).
 # GRAFANA_DOMAIN defaults to grafana.localhost when unset (internal cert, no
 # public ACME) so this block never breaks the bot's site.

@@ -92,9 +92,63 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await bot.session.close()
 
 
+def _create_max_app(settings) -> FastAPI:
+    """MAX platform app: maxapi webhook + admin + YooKassa webhook. Reuses the same
+    admin/stats/payments routes as Telegram (they're DB-driven)."""
+    from maxapi.webhook.fastapi import FastAPIMaxWebhook
+
+    from astrobot.bot.max_dispatcher import build_max_bot, build_max_dispatcher
+    from astrobot.web.admin import setup_admin
+
+    bot = build_max_bot()
+    dp = build_max_dispatcher(bot)
+    webhook = FastAPIMaxWebhook(dp=dp, bot=bot, secret=settings.webhook_secret)
+
+    @asynccontextmanager
+    async def max_lifespan(app: FastAPI) -> AsyncIterator[None]:
+        configure_logging(settings.log_level)
+        app.state.dp = dp
+        # ponytail: MAX payment-confirm push skipped (service builds aiogram kb) —
+        # the grant still applies; the user sees premium on their next interaction.
+        app.state.bot = None
+        async with webhook.lifespan(app):
+            if settings.run_mode == "webhook":
+                await bot.subscribe_webhook(
+                    url=settings.max_webhook_url, secret=settings.webhook_secret
+                )
+                log.info("max_webhook_subscribed", url=settings.max_webhook_url)
+                yield
+            else:
+                task = asyncio.create_task(dp.start_polling(bot), name="max_polling")
+                try:
+                    yield
+                finally:
+                    task.cancel()
+
+    app = FastAPI(title="astrobot-max", lifespan=max_lifespan)
+    if settings.admin_secret:
+        secure = settings.run_mode == "webhook"
+        app.add_middleware(
+            SessionMiddleware,
+            secret_key=settings.admin_secret,
+            https_only=secure,
+            same_site="strict" if secure else "lax",
+        )
+    webhook.setup(app, path=settings.max_webhook_path)
+    app.include_router(health.router)
+    app.include_router(metrics.router)
+    app.include_router(payments.router)
+    app.include_router(stats.router)
+    app.include_router(broadcasts.router)
+    setup_admin(app)
+    return app
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="astrobot", lifespan=lifespan)
     settings = get_settings()
+    if settings.platform == "max":
+        return _create_max_app(settings)
+    app = FastAPI(title="astrobot", lifespan=lifespan)
     if settings.admin_secret:
         # In prod (webhook mode behind an HTTPS reverse proxy) mark the session
         # cookie Secure + SameSite=strict to harden it against theft/CSRF.

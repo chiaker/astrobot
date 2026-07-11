@@ -23,6 +23,24 @@ services:
       retries: 3
       start_period: 30s
 
+  migrate-max:
+    image: ${IMAGE_NAME:-astrobot}:${IMAGE_TAG:-latest}
+    build: null
+    volumes: []
+
+  app-max:
+    image: ${IMAGE_NAME:-astrobot}:${IMAGE_TAG:-latest}
+    build: null
+    volumes: []
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   # Grafana on its OWN subdomain (GRAFANA_DOMAIN) behind Caddy — serving at the
   # domain root avoids the serve_from_sub_path auth-endpoint bug. Caddy reaches
   # it over the internal compose network; the loopback host-port binding stays.
@@ -44,6 +62,9 @@ services:
       - "443:443"
     environment:
       BOT_DOMAIN: ${BOT_DOMAIN}
+      # MAX bot subdomain (webhook + admin), e.g. max.astrobot.dns.army. Default
+      # max.localhost is harmless (internal cert) when unset.
+      MAX_DOMAIN: ${MAX_DOMAIN:-max.localhost}
       # Subdomain for Grafana, e.g. grafana.astrobot.dns.army. Default
       # grafana.localhost is harmless (Caddy internal cert, no public ACME) when
       # unset, so the bot's site never breaks.

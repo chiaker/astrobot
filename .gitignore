@@ -16,6 +16,7 @@ DEPLOYMENT.md
 # Env / secrets
 .env
 .env.local
+.env.max
 *.db
 *.sqlite3
 

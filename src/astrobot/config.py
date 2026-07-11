@@ -94,6 +94,14 @@ class Settings(BaseSettings):
         return f"{self.webhook_base_url.rstrip('/')}{self.webhook_path}"
 
     @property
+    def max_webhook_path(self) -> str:
+        return f"/max/webhook/{self.webhook_secret}"
+
+    @property
+    def max_webhook_url(self) -> str:
+        return f"{self.webhook_base_url.rstrip('/')}{self.max_webhook_path}"
+
+    @property
     def yookassa_return_url_effective(self) -> str:
         # Where YooKassa sends the user back after payment. Platform-specific
         # deep link to the bot; override with YOOKASSA_RETURN_URL when the exact
