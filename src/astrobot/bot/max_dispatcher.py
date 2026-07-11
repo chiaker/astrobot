@@ -263,7 +263,12 @@ _MSG_STATES = {
 
 def build_max_dispatcher(bot: Bot) -> Dispatcher:
     # Redis-backed FSM so in-progress flows survive restarts (same Redis as TG).
-    dp = Dispatcher(storage=RedisContext, redis_client=get_redis())
+    # use_create_task: process each update in a background task so the webhook
+    # returns 200 immediately — LLM handlers (~30s) would otherwise exceed MAX's
+    # webhook timeout and get re-delivered (duplicate replies).
+    # ponytail: concurrent per-user updates possible; the expensive LLM path is
+    # already serialized by user_llm_lock.
+    dp = Dispatcher(storage=RedisContext, redis_client=get_redis(), use_create_task=True)
     dp.middleware(DbSessionMiddleware())
     dp.middleware(UserMiddleware())
     dp.middleware(ContextMiddleware(bot))
