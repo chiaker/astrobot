@@ -88,10 +88,8 @@ async def notify_ops(bot, text: str) -> None:
     if not settings.ops_chat_id or bot is None:
         return
     try:
-        await bot.send_message(
-            chat_id=settings.ops_chat_id,
-            text=text,
-            disable_web_page_preview=True,
-        )
+        # Positional so it works with BOTH an aiogram Bot and our PlatformBot
+        # (send_message(chat_id/user_id, text, ...)).
+        await bot.send_message(settings.ops_chat_id, text)
     except Exception as e:
         log.warning("notify_ops_failed", error=str(e))

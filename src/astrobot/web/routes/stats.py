@@ -1794,7 +1794,9 @@ async def payment_refund(
                 url="/admin/payments?err=YooKassa отклонила возврат", status_code=303
             )
 
-    await payment_service.refund_payment(session, payment, bot)
+    await payment_service.refund_payment(
+        session, payment, getattr(request.app.state, "pbot", None)
+    )
     suffix = " (принудительно)" if force else ""
     return RedirectResponse(url=f"/admin/payments?msg=Возврат выполнен{suffix}", status_code=303)
 

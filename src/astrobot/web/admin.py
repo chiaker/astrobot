@@ -6,9 +6,10 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from markupsafe import Markup
-from sqladmin import Admin, ModelView
+from sqladmin import Admin, BaseView, ModelView, expose
 from sqladmin.authentication import AuthenticationBackend
 from starlette.requests import Request
+from starlette.responses import RedirectResponse
 from starlette.staticfiles import StaticFiles
 
 from astrobot.config import get_settings
@@ -465,15 +466,31 @@ def setup_admin(app: FastAPI) -> None:
             name="admin_skin",
         )
 
+    plat = "MAX" if settings.platform == "max" else "TG"
     admin = Admin(
         app,
         engine=get_engine(),
         authentication_backend=AdminAuth(secret_key=settings.admin_secret),
-        title="Astra · Таблицы",
+        title=f"Astra {plat} · Таблицы",
         logo_url=f"{_STATIC_URL_PREFIX}/logo.svg",
         favicon_url=f"{_STATIC_URL_PREFIX}/logo.svg",
         base_url="/admin",
     )
+
+    if settings.other_admin_url:
+        _other = "Telegram" if settings.platform == "max" else "MAX"
+        _url = settings.other_admin_url
+
+        class OtherAdminLink(BaseView):
+            name = f"↗ Админка {_other}"
+            icon = "fa-solid fa-arrow-up-right-from-square"
+
+            @expose("/other-admin", methods=["GET"])
+            async def go(self, request: Request):
+                return RedirectResponse(_url)
+
+        admin.add_view(OtherAdminLink)
+
     admin.add_view(UserAdmin)
     admin.add_view(BirthProfileAdmin)
     admin.add_view(QuestionLogAdmin)

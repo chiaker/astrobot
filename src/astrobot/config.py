@@ -36,6 +36,9 @@ class Settings(BaseSettings):
 
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
+    # Link shown in the admin sidebar to the OTHER platform's admin (TG↔MAX).
+    other_admin_url: str = Field(default="", alias="OTHER_ADMIN_URL")
+
     admin_user: str = Field(default="admin", alias="ADMIN_USER")
     admin_password: str = Field(default="", alias="ADMIN_PASSWORD")
     admin_secret: str = Field(default="", alias="ADMIN_SECRET")

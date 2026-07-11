@@ -26,7 +26,8 @@ from astrobot.bot.formatting import md_to_telegram_html
 from astrobot.bot.handlers.horoscope import _period_label
 from astrobot.bot.handlers.natal import _profile_to_birth
 from astrobot.bot.keyboards import build_broadcast_kb, followup_cta_kb
-from astrobot.bot.platform.telegram import to_markup
+from astrobot.bot.platform import Button, Keyboard, PlatformBot
+from astrobot.bot.platform.telegram import TelegramBot, to_markup
 from astrobot.config import get_settings
 from astrobot.db.models import (
     BirthProfile,
@@ -139,7 +140,7 @@ def _push_hour(user: User, settings) -> int:
     return user.push_hour if user.push_hour is not None else settings.push_horoscope_hour
 
 
-async def morning_horoscope_job(bot: Bot) -> None:
+async def morning_horoscope_job(pbot: PlatformBot) -> None:
     """Runs every minute. Finds premium opted-in users whose local time hit
     the push hour, hasn't been pushed today, sends their daily horoscope."""
     settings = get_settings()
@@ -195,12 +196,7 @@ async def morning_horoscope_job(bot: Bot) -> None:
                 f"{label}\n\n" + md_to_telegram_html(full)
             )
             try:
-                await bot.send_message(
-                    chat_id=user.tg_user_id,
-                    text=text[:4000],
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
+                await pbot.send_message(user.tg_user_id, text[:4000])
                 user.last_horoscope_push_at = now_utc
                 await session.commit()
                 PUSH_SENT.labels(kind="horoscope", result="ok").inc()
@@ -234,7 +230,7 @@ async def refresh_lunar_events_job() -> None:
         log.info("lunar_events_refreshed", count=len(phases))
 
 
-async def lunar_push_job(bot: Bot) -> None:
+async def lunar_push_job(pbot: PlatformBot) -> None:
     """Per-minute: if today is a lunar event, push to opted-in premium
     users at their local push hour."""
     settings = get_settings()
@@ -282,12 +278,7 @@ async def lunar_push_job(bot: Bot) -> None:
                 continue
 
             try:
-                await bot.send_message(
-                    chat_id=user.tg_user_id,
-                    text=phase_text(event.kind),
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
+                await pbot.send_message(user.tg_user_id, phase_text(event.kind))
                 PUSH_SENT.labels(kind="lunar", result="ok").inc()
                 log.info("push_lunar_sent", user_id=user.id, kind=event.kind)
             except Exception as e:
@@ -295,7 +286,7 @@ async def lunar_push_job(bot: Bot) -> None:
                 PUSH_SENT.labels(kind="lunar", result="fail").inc()
 
 
-async def reconcile_payments_job(bot: Bot) -> None:
+async def reconcile_payments_job(pbot: PlatformBot) -> None:
     """Safety net for missed webhooks: poll YooKassa for every pending payment
     and apply its real status (grant / cancel / refund). Pending payments older
     than 2h that still can't be resolved are marked canceled (abandoned)."""
@@ -315,7 +306,7 @@ async def reconcile_payments_job(bot: Bot) -> None:
         )
         for payment in pendings:
             try:
-                result = await payment_service.reconcile_payment(session, payment, bot)
+                result = await payment_service.reconcile_payment(session, payment, pbot)
             except Exception as e:
                 log.warning("reconcile_payment_error", payment_id=payment.id, error=str(e))
                 continue
@@ -367,12 +358,10 @@ async def reconcile_payments_job(bot: Bot) -> None:
             log.info("stars_pendings_canceled", count=len(stars_pending))
 
 
-async def premium_expiry_reminder_job(bot: Bot) -> None:
+async def premium_expiry_reminder_job(pbot: PlatformBot) -> None:
     """Hourly: remind premium users whose subscription ends within N days.
     Deduped via premium_reminded_until so each expiry is reminded once; a
     renewal (new premium_until) re-arms the reminder."""
-    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
     settings = get_settings()
     now = datetime.now(UTC)
     horizon = now + timedelta(days=settings.premium_reminder_days_before)
@@ -393,25 +382,20 @@ async def premium_expiry_reminder_job(bot: Bot) -> None:
                 .where(User.id.notin_(active_sub_users))
             )
         )
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="💎 Продлить премиум", callback_data="premium:show")]
-            ]
+        kb = Keyboard.from_rows(
+            [[Button(text="💎 Продлить премиум", payload="premium:show")]]
         )
         for user in users:
             if user.premium_reminded_until == user.premium_until:
                 continue  # already reminded for this expiry
             until = user.premium_until.strftime("%d.%m.%Y") if user.premium_until else ""
             try:
-                await bot.send_message(
-                    chat_id=user.tg_user_id,
-                    text=(
-                        f"💎 Твой премиум заканчивается <b>{until}</b>.\n\n"
-                        "Продли, чтобы не потерять 3 гороскопа в день, 10 вопросов в месяц "
-                        "и утренние пуши ✨"
-                    ),
-                    parse_mode="HTML",
-                    reply_markup=kb,
+                await pbot.send_message(
+                    user.tg_user_id,
+                    f"💎 Твой премиум заканчивается <b>{until}</b>.\n\n"
+                    "Продли, чтобы не потерять 3 гороскопа в день, 10 вопросов в месяц "
+                    "и утренние пуши ✨",
+                    kb,
                 )
                 user.premium_reminded_until = user.premium_until
                 await session.commit()
@@ -514,7 +498,7 @@ async def charge_due_card_subscriptions_job(bot: Bot) -> None:
                 # success, and re-arms next_charge_at via upsert_subscription.
                 # "pending" is left for the 5-min reconcile job to finish.
                 try:
-                    result = await payment_service.reconcile_payment(session, payment, bot)
+                    result = await payment_service.reconcile_payment(session, payment, TelegramBot(bot))
                 except Exception as e:
                     log.warning("subscription_reconcile_error", user_id=user.id, error=str(e))
                     result = "error"
@@ -801,13 +785,18 @@ async def broadcast_dispatch_job(bot: Bot) -> None:
         await _run_broadcast(bot, broadcast_id)
 
 
-def build_scheduler(bot: Bot) -> AsyncIOScheduler:
+def build_scheduler(pbot: PlatformBot) -> AsyncIOScheduler:
+    # Neutral push/reconcile jobs run on both platforms via PlatformBot.
+    # The animation/Stars-heavy jobs (followup, broadcast, card charging) are
+    # Telegram-only — they use the raw aiogram Bot and are skipped on MAX.
+    bot = pbot.raw
+    is_telegram = get_settings().platform != "max"
     sched = AsyncIOScheduler(timezone="UTC")
     sched.add_job(
         morning_horoscope_job,
         trigger="cron",
         minute="*",
-        args=[bot],
+        args=[pbot],
         id="morning_horoscope",
         replace_existing=True,
         coalesce=True,
@@ -817,7 +806,7 @@ def build_scheduler(bot: Bot) -> AsyncIOScheduler:
         lunar_push_job,
         trigger="cron",
         minute="*",
-        args=[bot],
+        args=[pbot],
         id="lunar_push",
         replace_existing=True,
         coalesce=True,
@@ -844,7 +833,7 @@ def build_scheduler(bot: Bot) -> AsyncIOScheduler:
         reconcile_payments_job,
         trigger="cron",
         minute="*/5",
-        args=[bot],
+        args=[pbot],
         id="reconcile_payments",
         replace_existing=True,
         coalesce=True,
@@ -854,40 +843,44 @@ def build_scheduler(bot: Bot) -> AsyncIOScheduler:
         premium_expiry_reminder_job,
         trigger="cron",
         minute=0,
-        args=[bot],
+        args=[pbot],
         id="premium_expiry_reminder",
         replace_existing=True,
         coalesce=True,
         max_instances=1,
     )
-    sched.add_job(
-        day2_followup_job,
-        trigger="cron",
-        minute="*/15",
-        args=[bot],
-        id="day2_followup",
-        replace_existing=True,
-        coalesce=True,
-        max_instances=1,
-    )
-    sched.add_job(
-        charge_due_card_subscriptions_job,
-        trigger="cron",
-        minute=30,
-        args=[bot],
-        id="charge_card_subs",
-        replace_existing=True,
-        coalesce=True,
-        max_instances=1,
-    )
-    sched.add_job(
-        broadcast_dispatch_job,
-        trigger="cron",
-        minute="*",
-        args=[bot],
-        id="broadcast_dispatch",
-        replace_existing=True,
-        coalesce=True,
-        max_instances=1,
-    )
+    if is_telegram:
+        # ponytail: Telegram-only jobs (animation/GIF + Stars card charging).
+        # MAX broadcast/followup delivery needs the MAX attachment upload model —
+        # add a neutral send path here when that's built.
+        sched.add_job(
+            day2_followup_job,
+            trigger="cron",
+            minute="*/15",
+            args=[bot],
+            id="day2_followup",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+        )
+        sched.add_job(
+            charge_due_card_subscriptions_job,
+            trigger="cron",
+            minute=30,
+            args=[bot],
+            id="charge_card_subs",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+        )
+        sched.add_job(
+            broadcast_dispatch_job,
+            trigger="cron",
+            minute="*",
+            args=[bot],
+            id="broadcast_dispatch",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+        )
     return sched

@@ -10,10 +10,10 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import structlog
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from astrobot.bot.platform import Button, Keyboard, PlatformBot
 from astrobot.config import get_settings
 from astrobot.db.models import LLMUsageLog, Payment, Subscription, User
 from astrobot.limits import QUESTION_PACK_SIZE
@@ -52,29 +52,20 @@ def _refund_text(payment: Payment) -> str:
     )
 
 
-_MENU_KB = InlineKeyboardMarkup(
-    inline_keyboard=[[InlineKeyboardButton(text="🔮 Открыть меню", callback_data="menu:open")]]
-)
+_MENU_KB = Keyboard.from_rows([[Button(text="🔮 Открыть меню", payload="menu:open")]])
 
 
-def _confirmation_kb(payment: Payment, user: User) -> InlineKeyboardMarkup:
+def _confirmation_kb(payment: Payment, user: User) -> Keyboard:
     """Post-purchase keyboard. After a subscription is granted, nudge the user to
     set up the morning horoscope (push:setup_start → profile.py) unless it's
     already on."""
-    rows: list[list[InlineKeyboardButton]] = []
+    rows: list[list[Button]] = []
     if payment.kind == "subscription" and not user.push_horoscope_enabled:
         rows.append(
-            [
-                InlineKeyboardButton(
-                    text="🌅 Настроить утренний гороскоп",
-                    callback_data="push:setup_start",
-                )
-            ]
+            [Button(text="🌅 Настроить утренний гороскоп", payload="push:setup_start")]
         )
-    rows.append(
-        [InlineKeyboardButton(text="🔮 Открыть меню", callback_data="menu:open")]
-    )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    rows.append([Button(text="🔮 Открыть меню", payload="menu:open")])
+    return Keyboard.from_rows(rows)
 
 
 async def upsert_subscription(
@@ -140,16 +131,16 @@ async def cancel_subscription(
     return sub
 
 
-async def _push(bot: Bot | None, chat_id: int, text: str, reply_markup=None) -> None:
-    if bot is None:
+async def _push(pbot: PlatformBot | None, user_id: int, text: str, kb: Keyboard | None = None) -> None:
+    if pbot is None:
         return
     try:
-        await bot.send_message(chat_id, text, reply_markup=reply_markup)
+        await pbot.send_message(user_id, text, kb)
     except Exception as e:
-        log.warning("payment_push_failed", chat_id=chat_id, error=str(e))
+        log.warning("payment_push_failed", user_id=user_id, error=str(e))
 
 
-async def _alert_ops_once(bot: Bot | None, dedup_key: str, text: str) -> None:
+async def _alert_ops_once(bot: PlatformBot | None, dedup_key: str, text: str) -> None:
     """Ops alert sent at most once per dedup_key, so the 5-min reconcile job can't
     spam the same 'paid but not granted' payment over and over."""
     from astrobot.alerts import notify_ops
@@ -163,7 +154,7 @@ async def _alert_ops_once(bot: Bot | None, dedup_key: str, text: str) -> None:
         await notify_ops(bot, text)
 
 
-async def grant_payment(session: AsyncSession, payment: Payment, bot: Bot | None) -> bool:
+async def grant_payment(session: AsyncSession, payment: Payment, pbot: PlatformBot | None) -> bool:
     """Idempotently grant the purchased item and notify. True if newly granted.
 
     Uses SELECT ... FOR UPDATE to serialize concurrent callers (webhook +
@@ -189,7 +180,7 @@ async def grant_payment(session: AsyncSession, payment: Payment, bot: Bot | None
         log.warning("grant_missing_item_or_user", payment_id=row.id, item=row.item_code)
         reason = "товар не найден" if item is None else "пользователь не найден"
         await _alert_ops_once(
-            bot,
+            pbot,
             f"grant_missing:{row.id}",
             "🚨 Платёж ОПЛАЧЕН, но начисление не сделано — нужна ручная проверка.\n"
             f"payment_id={row.id}, user_id={row.user_id}, item={row.item_code}\n"
@@ -205,13 +196,13 @@ async def grant_payment(session: AsyncSession, payment: Payment, bot: Bot | None
     log.info("payment_granted", payment_id=row.id, item=row.item_code)
 
     await _push(
-        bot, user.tg_user_id, _confirmation_text(row, user),
-        reply_markup=_confirmation_kb(row, user),
+        pbot, user.tg_user_id, _confirmation_text(row, user),
+        kb=_confirmation_kb(row, user),
     )
     return True
 
 
-async def refund_payment(session: AsyncSession, payment: Payment, bot: Bot | None) -> bool:
+async def refund_payment(session: AsyncSession, payment: Payment, pbot: PlatformBot | None) -> bool:
     """Idempotently mark a payment refunded and revoke its benefit — but only
     revoke/notify if the benefit was actually granted (status was succeeded).
 
@@ -239,7 +230,7 @@ async def refund_payment(session: AsyncSession, payment: Payment, bot: Bot | Non
     log.info("payment_refunded", payment_id=row.id, item=row.item_code, revoked=was_granted)
 
     if was_granted and user is not None:
-        await _push(bot, user.tg_user_id, _refund_text(row))
+        await _push(pbot, user.tg_user_id, _refund_text(row))
     return True
 
 
@@ -304,7 +295,7 @@ async def refund_eligibility(session: AsyncSession, payment: Payment) -> tuple[b
     return True, ""
 
 
-async def reconcile_payment(session: AsyncSession, payment: Payment, bot: Bot | None) -> str:
+async def reconcile_payment(session: AsyncSession, payment: Payment, pbot: PlatformBot | None) -> str:
     """Fetch the real status from YooKassa and apply it. Never trusts local state.
 
     Returns one of: granted | canceled | refunded | pending | mismatch | error | skip.
@@ -322,7 +313,7 @@ async def reconcile_payment(session: AsyncSession, payment: Payment, bot: Bot | 
     # A captured payment that was later refunded
     refunded = float((fetched.get("refunded_amount") or {}).get("value") or 0)
     if status == "succeeded" and refunded > 0:
-        await refund_payment(session, payment, bot)
+        await refund_payment(session, payment, pbot)
         return "refunded"
 
     if status == "succeeded":
@@ -332,7 +323,7 @@ async def reconcile_payment(session: AsyncSession, payment: Payment, bot: Bot | 
             log.warning("reconcile_amount_mismatch", payment_id=payment.id, paid=paid)
             expected = f"{item.amount_rub}₽" if item is not None else "товар не найден"
             await _alert_ops_once(
-                bot,
+                pbot,
                 f"mismatch:{payment.id}",
                 "🚨 Платёж ОПЛАЧЕН в YooKassa, но сумма/товар не совпали — "
                 "начисление НЕ сделано, нужна ручная проверка (возможно, вернуть деньги).\n"
@@ -340,7 +331,7 @@ async def reconcile_payment(session: AsyncSession, payment: Payment, bot: Bot | 
                 f"item={payment.item_code}\nоплачено={paid}₽, ожидалось={expected}.",
             )
             return "mismatch"
-        granted = await grant_payment(session, payment, bot)
+        granted = await grant_payment(session, payment, pbot)
         # First card payment of a subscription: capture the saved-card token (now
         # exposed on the fetched payment) so the scheduler can charge renewals.
         # Skipped when recurring is disabled (no token is saved anyway).
