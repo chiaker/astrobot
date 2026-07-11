@@ -287,6 +287,11 @@ def _layout(title: str, body: str, active: str = "") -> str:
         f'<a href="{url}" class="{"active" if k == active else ""}">{lbl}</a>'
         for lbl, url, k in nav
     )
+    settings = get_settings()
+    other_link = ""
+    if settings.other_admin_url:
+        _other = "Telegram" if settings.platform == "max" else "MAX"
+        other_link = f"<a href='{settings.other_admin_url}' class='out'>↗ Админка {_other}</a>"
     return (
         "<!doctype html><html lang='ru'><head>"
         "<meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -296,6 +301,7 @@ def _layout(title: str, body: str, active: str = "") -> str:
         f"<div class='topnav'>"
         f"  <a href='/admin/stats' class='brand'>✨ Astra Admin</a>"
         f"  <nav>{nav_html}</nav>"
+        f"  {other_link}"
         f"  <a href='/admin/logout' class='out'>Выйти</a>"
         f"</div>"
         f"<div class='page'>{body}</div>"
