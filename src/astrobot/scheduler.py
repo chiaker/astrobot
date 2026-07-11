@@ -5,12 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import structlog
-from aiogram.exceptions import (
-    TelegramBadRequest,
-    TelegramForbiddenError,
-    TelegramRetryAfter,
-)
-from aiogram.types import BufferedInputFile
+from aiogram.exceptions import TelegramRetryAfter
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,8 +21,8 @@ from astrobot.bot.formatting import md_to_telegram_html
 from astrobot.bot.handlers.horoscope import _period_label
 from astrobot.bot.handlers.natal import _profile_to_birth
 from astrobot.bot.keyboards import build_broadcast_kb, followup_cta_kb
-from astrobot.bot.platform import Button, Keyboard, PlatformBot
-from astrobot.bot.platform.telegram import TelegramBot, to_markup
+from astrobot.bot.platform import Button, Keyboard, Media, PlatformBot
+from astrobot.bot.platform.telegram import TelegramBot
 from astrobot.config import get_settings
 from astrobot.db.models import (
     BirthProfile,
@@ -526,24 +521,29 @@ _FOLLOWUP_TEXT = (
 )
 
 
-async def _send_followup(bot: Bot, chat_id: int, animation: str) -> None:
+def _animation_media(ref: str) -> Media:
+    """A configured animation ref is a URL or a platform-native id/token."""
+    return Media.from_url(ref) if "://" in ref else Media.from_file_id(ref)
+
+
+async def _send_followup(pbot: PlatformBot, chat_id: int, animation: str) -> None:
     """Send the follow-up: animation+caption if configured (falling back to text
-    on a bad file_id), else plain text. Lets TelegramRetryAfter/Forbidden bubble up."""
-    kb = to_markup(followup_cta_kb())
+    on a bad file_id), else plain text. Lets TelegramRetryAfter bubble up."""
+    kb = followup_cta_kb()
     if animation:
         try:
-            await bot.send_animation(
-                chat_id=chat_id, animation=animation, caption=_FOLLOWUP_TEXT, reply_markup=kb
+            await pbot.send_animation(
+                chat_id, _animation_media(animation), caption=_FOLLOWUP_TEXT, kb=kb
             )
             return
-        except (TelegramRetryAfter, TelegramForbiddenError):
+        except TelegramRetryAfter:
             raise
         except Exception as e:
             log.warning("followup_animation_failed", chat_id=chat_id, error=str(e))
-    await bot.send_message(chat_id=chat_id, text=_FOLLOWUP_TEXT, reply_markup=kb)
+    await pbot.send_message(chat_id, _FOLLOWUP_TEXT, kb)
 
 
-async def day2_followup_job(bot: Bot) -> None:
+async def day2_followup_job(pbot: PlatformBot) -> None:
     """Once per user, ~48h after registration: send the follow-up nudge. Only to
     users who completed onboarding (have a BirthProfile), since the copy talks
     about their natal chart. Deduped via User.followup_sent_at."""
@@ -567,32 +567,26 @@ async def day2_followup_job(bot: Bot) -> None:
         )
         for user in users:
             try:
-                await _send_followup(bot, user.tg_user_id, animation)
+                await _send_followup(pbot, user.tg_user_id, animation)
                 user.followup_sent_at = now
                 await session.commit()
                 PUSH_SENT.labels(kind="followup", result="ok").inc()
                 log.info("followup_sent", user_id=user.id)
                 await asyncio.sleep(FOLLOWUP_SEND_DELAY)
             except TelegramRetryAfter as e:
-                # We're being rate-limited — back off and finish the rest next run.
+                # We're being rate-limited (Telegram only) — back off, finish next run.
                 await session.rollback()
                 log.warning("followup_rate_limited", seconds=e.retry_after)
                 await asyncio.sleep(e.retry_after + 0.5)
                 break
-            except (TelegramForbiddenError, TelegramBadRequest) as e:
-                # Bot blocked / chat unavailable — mark sent so we don't retry forever.
+            except Exception as e:
+                # Blocked / undeliverable / unknown — mark sent to avoid an infinite
+                # retry loop (one attempt per user, same as the broadcast policy).
                 await session.rollback()
                 user.followup_sent_at = now
                 await session.commit()
                 PUSH_SENT.labels(kind="followup", result="fail").inc()
                 log.info("followup_undeliverable", user_id=user.id, error=str(e))
-            except Exception as e:
-                # Unknown error — mark sent to avoid an infinite retry loop.
-                await session.rollback()
-                user.followup_sent_at = now
-                await session.commit()
-                PUSH_SENT.labels(kind="followup", result="fail").inc()
-                log.warning("followup_failed", user_id=user.id, error=str(e))
 
 
 # ─── Admin-authored broadcast campaigns ───────────────────────────────────────
@@ -629,51 +623,46 @@ def _animation_filename(data: bytes, fallback: str | None) -> str:
     return "animation.mp4"
 
 
-async def _send_broadcast_variant(bot: Bot, chat_id: int, variant) -> str | None:
+async def _send_broadcast_variant(pbot: PlatformBot, chat_id: int, variant) -> str | None:
     """Send a broadcast variant: animation+caption if configured, else plain text.
-    Returns a freshly obtained Telegram file_id when an uploaded file was sent for
-    the first time (so the caller can cache it into `variant.animation` and skip
-    re-uploading on later sends), otherwise None. Lets TelegramRetryAfter/Forbidden
-    bubble up to the per-user handler."""
-    kb = to_markup(build_broadcast_kb(variant))
+    Returns a freshly obtained platform file_id/token when an uploaded file was sent
+    for the first time (so the caller can cache it into `variant.animation` and skip
+    re-uploading on later sends), otherwise None. Lets TelegramRetryAfter bubble up
+    to the per-user handler. (MAX returns no reusable id → re-uploads per send.)"""
+    kb = build_broadcast_kb(variant)
     text = variant.text or ""
 
-    # Fast path: a known file_id (cached from a prior send) or legacy URL.
+    # Fast path: a cached id/token (from a prior send) or legacy URL — no re-upload.
     if variant.animation:
         try:
-            await bot.send_animation(
-                chat_id=chat_id, animation=variant.animation, caption=text, reply_markup=kb
+            await pbot.send_animation(
+                chat_id, _animation_media(variant.animation), caption=text, kb=kb
             )
             return None
-        except (TelegramRetryAfter, TelegramForbiddenError):
+        except TelegramRetryAfter:
             raise
         except Exception as e:
             log.warning("broadcast_animation_failed", chat_id=chat_id, error=str(e))
 
-    # Uploaded bytes with no cached file_id yet: upload once, return the file_id.
+    # Uploaded bytes with no cached id yet: upload once, return the id to cache.
     elif variant.animation_data:
         data = bytes(variant.animation_data)
-        upload = BufferedInputFile(
+        media = Media.from_bytes(
             data, filename=_animation_filename(data, variant.animation_name)
         )
         try:
-            msg = await bot.send_animation(
-                chat_id=chat_id, animation=upload, caption=text, reply_markup=kb
-            )
-            # Cache ONLY when Telegram treated it as an animation/video. If it fell
-            # back to a document, don't cache that id — re-upload next time instead.
-            media = msg.animation or msg.video
-            return media.file_id if media else None
-        except (TelegramRetryAfter, TelegramForbiddenError):
+            sent = await pbot.send_animation(chat_id, media, caption=text, kb=kb)
+            return sent.file_id  # None on platforms without reusable ids → re-upload
+        except TelegramRetryAfter:
             raise
         except Exception as e:
             log.warning("broadcast_animation_upload_failed", chat_id=chat_id, error=str(e))
 
-    await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
+    await pbot.send_message(chat_id, text, kb)
     return None
 
 
-async def _run_broadcast(bot: Bot, broadcast_id: int) -> None:
+async def _run_broadcast(pbot: PlatformBot, broadcast_id: int) -> None:
     """Drain one 'sending' broadcast in resumable batches. Each user is committed
     individually (cursor + counters) so a crash never double-sends, and a
     rate-limit pauses the campaign until the next dispatch tick."""
@@ -727,7 +716,7 @@ async def _run_broadcast(bot: Bot, broadcast_id: int) -> None:
                 if variant is not None:
                     try:
                         new_file_id = await _send_broadcast_variant(
-                            bot, user.tg_user_id, variant
+                            pbot, user.tg_user_id, variant
                         )
                         # Cache the file_id after the first upload so the rest of
                         # the batch reuses it instead of re-uploading the bytes.
@@ -741,20 +730,17 @@ async def _run_broadcast(bot: Bot, broadcast_id: int) -> None:
                         log.warning("broadcast_rate_limited", seconds=e.retry_after)
                         await asyncio.sleep(e.retry_after + 0.5)
                         return
-                    except (TelegramForbiddenError, TelegramBadRequest) as e:
+                    except Exception as e:
+                        # Blocked / undeliverable / unknown — count as failed, move on.
                         broadcast.failed_count += 1
                         PUSH_SENT.labels(kind="broadcast", result="fail").inc()
                         log.info("broadcast_undeliverable", user_id=user.id, error=str(e))
-                    except Exception as e:
-                        broadcast.failed_count += 1
-                        PUSH_SENT.labels(kind="broadcast", result="fail").inc()
-                        log.warning("broadcast_failed", user_id=user.id, error=str(e))
                     await asyncio.sleep(BROADCAST_SEND_DELAY)
                 broadcast.cursor_user_id = user.id
                 await session.commit()
 
 
-async def broadcast_dispatch_job(bot: Bot) -> None:
+async def broadcast_dispatch_job(pbot: PlatformBot) -> None:
     """Promote due scheduled broadcasts to 'sending', then drain any in progress."""
     now = datetime.now(UTC)
     sessionmaker = get_sessionmaker()
@@ -782,7 +768,7 @@ async def broadcast_dispatch_job(bot: Bot) -> None:
         )
 
     for broadcast_id in sending_ids:
-        await _run_broadcast(bot, broadcast_id)
+        await _run_broadcast(pbot, broadcast_id)
 
 
 def build_scheduler(pbot: PlatformBot) -> AsyncIOScheduler:
@@ -849,36 +835,34 @@ def build_scheduler(pbot: PlatformBot) -> AsyncIOScheduler:
         coalesce=True,
         max_instances=1,
     )
+    sched.add_job(
+        day2_followup_job,
+        trigger="cron",
+        minute="*/15",
+        args=[pbot],
+        id="day2_followup",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    sched.add_job(
+        broadcast_dispatch_job,
+        trigger="cron",
+        minute="*",
+        args=[pbot],
+        id="broadcast_dispatch",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
     if is_telegram:
-        # ponytail: Telegram-only jobs (animation/GIF + Stars card charging).
-        # MAX broadcast/followup delivery needs the MAX attachment upload model —
-        # add a neutral send path here when that's built.
-        sched.add_job(
-            day2_followup_job,
-            trigger="cron",
-            minute="*/15",
-            args=[bot],
-            id="day2_followup",
-            replace_existing=True,
-            coalesce=True,
-            max_instances=1,
-        )
+        # Stars/card charging is genuinely Telegram-only (no MAX equivalent).
         sched.add_job(
             charge_due_card_subscriptions_job,
             trigger="cron",
             minute=30,
             args=[bot],
             id="charge_card_subs",
-            replace_existing=True,
-            coalesce=True,
-            max_instances=1,
-        )
-        sched.add_job(
-            broadcast_dispatch_job,
-            trigger="cron",
-            minute="*",
-            args=[bot],
-            id="broadcast_dispatch",
             replace_existing=True,
             coalesce=True,
             max_instances=1,
