@@ -191,13 +191,20 @@ class MaxContext(PlatformContext):
     async def finish(self) -> None:
         """Flush a pending callback ack. Called by the dispatcher after each handler.
 
-        If the handler already responded (edit), the callback is answered — do
-        nothing. Otherwise ack it (with the notification text, if any) so the MAX
-        client clears the button's pending state."""
+        If the handler already responded (edit) — nothing to do. MAX rejects an
+        EMPTY ack (`ack()` with no notification → 400 'message or notification
+        required'), so we ack ONLY when there's notification text; otherwise the
+        edit/reply the handler already sent is the feedback. Never let a background
+        ack failure break the handler flow."""
         if self._callback is None or self._responded:
             return
-        await self._callback.ack(notification=self._ack_text)
         self._responded = True
+        if not self._ack_text:
+            return
+        try:
+            await self._callback.ack(notification=self._ack_text)
+        except Exception as e:  # noqa: BLE001
+            log.warning("max_ack_failed", error=str(e))
 
     async def send_photo(
         self, media: Media, caption: str | None = None, kb: Keyboard | None = None
