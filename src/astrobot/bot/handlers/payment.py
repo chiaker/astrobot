@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from astrobot.bot.handlers.menu import show_main_menu
 from astrobot.bot.keyboards import MENU_BACK_BTN
 from astrobot.bot.platform import Button, Keyboard, PlatformBot, PlatformContext
+from astrobot.bot.platform.telegram import TelegramBot
 from astrobot.bot.states import PaymentFlow
 from astrobot.config import get_settings
 from astrobot.db.models import Payment, Subscription, User
@@ -566,7 +567,7 @@ async def on_successful_payment(
     payment.telegram_charge_id = sp.telegram_payment_charge_id
     await session.flush()
     # Provider-agnostic grant: idempotent, applies the benefit and notifies the user.
-    granted = await service.grant_payment(session, payment, message.bot)
+    granted = await service.grant_payment(session, payment, TelegramBot(message.bot))
 
     # Maintain the auto-renewing subscription row for recurring (monthly) plans.
     item = get_item(payment.item_code)

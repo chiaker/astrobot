@@ -154,6 +154,26 @@ services:
     restart: unless-stopped
     command: ["python", "-m", "astrobot.main"]
 
+  backup-max:
+    image: prodrigestivill/postgres-backup-local:16-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      postgres-max:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres-max
+      POSTGRES_DB: astrobot
+      POSTGRES_USER: astrobot
+      POSTGRES_PASSWORD: astrobot
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: "7"
+      BACKUP_KEEP_WEEKS: "4"
+      BACKUP_KEEP_MONTHS: "3"
+      HEALTHCHECK_PORT: "8080"
+    volumes:
+      - ./backups-max:/backups
+
   # ─── MAX platform: separate DB, own app container, shared Redis (prefixed) ───
   postgres-max:
     image: postgres:16-alpine

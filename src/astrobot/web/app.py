@@ -22,9 +22,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_logging(settings.log_level)
 
+    from astrobot.bot.platform.telegram import TelegramBot
+
     bot = build_bot()
     dp = build_dispatcher()
-    app.state.bot = bot
+    app.state.bot = bot  # raw aiogram Bot — used by the webhook route for feed_update
+    app.state.pbot = TelegramBot(bot)  # PlatformBot — used by the YooKassa webhook
     app.state.dp = dp
 
     # Native command list + the blue "Menu" button next to the input field.
@@ -41,7 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.warning("set_my_commands_failed", error=str(e))
 
     polling_task: asyncio.Task | None = None
-    scheduler = build_scheduler(bot)
+    scheduler = build_scheduler(app.state.pbot)
     scheduler.start()
     log.info("scheduler_started")
 
@@ -98,6 +101,7 @@ def _create_max_app(settings) -> FastAPI:
     from maxapi.webhook.fastapi import FastAPIMaxWebhook
 
     from astrobot.bot.max_dispatcher import build_max_bot, build_max_dispatcher
+    from astrobot.bot.platform.max import MaxBot
     from astrobot.web.admin import setup_admin
 
     bot = build_max_bot()
@@ -108,22 +112,40 @@ def _create_max_app(settings) -> FastAPI:
     async def max_lifespan(app: FastAPI) -> AsyncIterator[None]:
         configure_logging(settings.log_level)
         app.state.dp = dp
-        # ponytail: MAX payment-confirm push skipped (service builds aiogram kb) —
-        # the grant still applies; the user sees premium on their next interaction.
-        app.state.bot = None
-        async with webhook.lifespan(app):
-            if settings.run_mode == "webhook":
-                await bot.subscribe_webhook(
-                    url=settings.max_webhook_url, secret=settings.webhook_secret
-                )
-                log.info("max_webhook_subscribed", url=settings.max_webhook_url)
-                yield
-            else:
-                task = asyncio.create_task(dp.start_polling(bot), name="max_polling")
-                try:
+        app.state.bot = None  # MAX webhook is handled by FastAPIMaxWebhook, not app.state
+        pbot = MaxBot(bot)
+        app.state.pbot = pbot  # PlatformBot — YooKassa webhook + scheduler pushes
+
+        scheduler = build_scheduler(pbot)  # morning horoscope + lunar + reconcile
+        scheduler.start()
+        log.info("max_scheduler_started")
+
+        try:
+            from astrobot.alerts import notify_ops
+
+            await notify_ops(pbot, f"🟢 Astrobot MAX запущен (mode={settings.run_mode}).")
+        except Exception as e:
+            log.warning("max_startup_ping_failed", error=str(e))
+
+        try:
+            async with webhook.lifespan(app):
+                if settings.run_mode == "webhook":
+                    await bot.subscribe_webhook(
+                        url=settings.max_webhook_url, secret=settings.webhook_secret
+                    )
+                    log.info("max_webhook_subscribed", url=settings.max_webhook_url)
                     yield
-                finally:
-                    task.cancel()
+                else:
+                    task = asyncio.create_task(dp.start_polling(bot), name="max_polling")
+                    try:
+                        yield
+                    finally:
+                        task.cancel()
+        finally:
+            try:
+                scheduler.shutdown(wait=False)
+            except Exception as e:
+                log.warning("max_scheduler_shutdown_failed", error=str(e))
 
     app = FastAPI(title="astrobot-max", lifespan=max_lifespan)
     if settings.admin_secret:

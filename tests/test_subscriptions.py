@@ -26,7 +26,9 @@ def test_packs_not_recurring():
 # ─── post-purchase confirmation keyboard offers the morning horoscope ──────────
 
 def _callbacks(kb) -> list[str]:
-    return [b.callback_data for row in kb.inline_keyboard for b in row]
+    if kb is None:
+        return []
+    return [b.payload for row in kb.rows for b in row]
 
 
 def test_confirmation_kb_subscription_offers_push():

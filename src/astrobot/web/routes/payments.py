@@ -56,7 +56,7 @@ async def yookassa_webhook(request: Request) -> dict[str, bool]:
     if event not in {"payment.succeeded", "payment.canceled", "refund.succeeded"}:
         return {"ok": True}
 
-    bot = getattr(request.app.state, "bot", None)
+    pbot = getattr(request.app.state, "pbot", None)
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as session:
         payment = await session.scalar(
@@ -70,14 +70,14 @@ async def yookassa_webhook(request: Request) -> dict[str, bool]:
             # Never trust the notification body — reconcile_payment re-fetches the
             # real state from YooKassa (status / refunded_amount) and applies it.
             # This makes forged webhooks (succeeded OR refund) harmless.
-            await service.reconcile_payment(session, payment, bot)
+            await service.reconcile_payment(session, payment, pbot)
         except Exception as e:
             PAYMENTS_FAILED.labels(stage="webhook").inc()
             log.warning("yookassa_webhook_apply_failed", payment_id=target_id, error=str(e))
             from astrobot.alerts import notify_ops
 
             await notify_ops(
-                bot,
+                pbot,
                 f"🚨 Сбой обработки платёжного вебхука\n"
                 f"event={event}, yk_id={target_id}\nОшибка: {type(e).__name__}: {e}",
             )
