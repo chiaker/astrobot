@@ -4,7 +4,6 @@ import asyncio
 from datetime import date, timedelta
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,8 +17,9 @@ from astrobot.astrology.transits import (
 )
 from astrobot.bot.handlers.natal import _profile_to_birth
 from astrobot.bot.keyboards import horoscope_period_kb, with_back
-from astrobot.bot.responses import edit_or_send, save_and_send_response
-from astrobot.bot.utils import need_profile, user_llm_lock
+from astrobot.bot.platform import Button, PlatformContext
+from astrobot.bot.responses import send_response
+from astrobot.bot.utils import need_profile_ctx, user_llm_lock
 from astrobot.db.models import BirthProfile, HoroscopeCache, LLMUsageLog, User
 from astrobot.limits import check_horoscope, paywall_text
 from astrobot.llm.client import get_llm
@@ -48,26 +48,26 @@ def _with_label(text: str, label: str) -> str:
     return f"{label}\n\n{text}"
 
 
-def _regen_row(period: str) -> list[InlineKeyboardButton]:
-    return [InlineKeyboardButton(text="🔄 Пересчитать заново", callback_data=f"horo:regen:{period}")]
+def _regen_row(period: str) -> list[Button]:
+    return [Button(text="🔄 Пересчитать заново", payload=f"horo:regen:{period}")]
 
 
 @router.callback_query(F.data == "menu:horoscope")
-async def on_horoscope_menu(call: CallbackQuery, session: AsyncSession, user: User) -> None:
-    await call.answer()
-    profile = await need_profile(call.message, session, user)
+async def on_horoscope_menu(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
+    await ctx.answer_callback()
+    profile = await need_profile_ctx(ctx, session, user)
     if profile is None:
         return
-    await edit_or_send(call, "🔮 На какой период посмотрим?", horoscope_period_kb(user))
+    await ctx.edit("🔮 На какой период посмотрим?", horoscope_period_kb(user))
 
 
 @router.callback_query(F.data.startswith("horo:"))
 async def on_horoscope_period(
-    call: CallbackQuery,
+    ctx: PlatformContext,
     session: AsyncSession,
     user: User,
 ) -> None:
-    parts = call.data.split(":", 2)
+    parts = (ctx.payload or "").split(":", 2)
     # horo:<period>  or  horo:regen:<period>
     if len(parts) == 3 and parts[1] == "regen":
         period: Period = parts[2]  # type: ignore[assignment]
@@ -76,20 +76,20 @@ async def on_horoscope_period(
         period = parts[1]  # type: ignore[assignment]
         force_regen = False
     else:
-        await call.answer()
+        await ctx.answer_callback()
         return
 
     if period not in {"today", "week", "month"}:
-        await call.answer()
+        await ctx.answer_callback()
         return
 
     profile = await session.get(BirthProfile, user.id)
     if profile is None:
-        await call.message.answer("Сначала пройди онбординг через /start.")
-        await call.answer()
+        await ctx.reply("Сначала пройди онбординг через /start.")
+        await ctx.answer_callback()
         return
 
-    display_name = user.display_name or call.from_user.full_name or "User"
+    display_name = user.display_name or "User"
     birth = _profile_to_birth(profile, name=display_name)
     today = midnight_today_in(birth.tz)
     label = _period_label(period, today)
@@ -103,9 +103,9 @@ async def on_horoscope_period(
             )
         )
         if cached and cached.computed_for == today:
-            await call.answer()
-            await save_and_send_response(
-                call.message,
+            await ctx.answer_callback()
+            await send_response(
+                ctx,
                 session,
                 user,
                 f"horoscope:{period}",
@@ -116,7 +116,7 @@ async def on_horoscope_period(
 
     async with user_llm_lock(user.id) as acquired:
         if not acquired:
-            await call.answer("⏳ Уже считаю гороскоп — секунду…", show_alert=True)
+            await ctx.answer_callback("⏳ Уже считаю гороскоп — секунду…", alert=True)
             return
 
         # Rate limit under the lock (applies to both fresh and regen): re-read
@@ -124,14 +124,12 @@ async def on_horoscope_period(
         await session.refresh(user)
         allowance = await check_horoscope(session, user)
         if not allowance.allowed:
-            await call.answer()
-            await call.message.answer(
-                paywall_text("horoscope", allowance), reply_markup=with_back([])
-            )
+            await ctx.answer_callback()
+            await ctx.reply(paywall_text("horoscope", allowance), with_back([]))
             return
 
-        await call.answer()
-        progress = await call.message.answer("🔮 Смотрю, какие планеты идут к тебе сейчас…")
+        await ctx.answer_callback()
+        await ctx.reply("🔮 Смотрю, какие планеты идут к тебе сейчас…")
 
         chart = await asyncio.to_thread(build_natal_chart, birth)
         natal_md = chart_to_markdown(chart)
@@ -145,8 +143,6 @@ async def on_horoscope_period(
             "week": "Дай гороскоп на ближайшую неделю.",
             "month": "Дай гороскоп на ближайший месяц.",
         }[period]
-
-        await progress.edit_text("✨ Складываю узор периода…")
 
         llm = get_llm()
         response = await llm.complete(
@@ -191,9 +187,8 @@ async def on_horoscope_period(
             )
         )
 
-        await progress.delete()
-        await save_and_send_response(
-            call.message,
+        await send_response(
+            ctx,
             session,
             user,
             f"horoscope:{period}",

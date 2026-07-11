@@ -5,7 +5,7 @@ from typing import Any
 
 import structlog
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject, Update
+from aiogram.types import CallbackQuery, Message, TelegramObject, Update
 from aiogram.types import User as TgUser
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +60,34 @@ class UpdateDedupeMiddleware(BaseMiddleware):
             log.info("duplicate_update_skipped", update_id=event.update_id)
             return None
 
+        return await handler(event, data)
+
+
+class ContextMiddleware(BaseMiddleware):
+    """Inject a platform-neutral `ctx: PlatformContext` for handlers that opt in.
+
+    Additive and safe: aiogram still passes `message`/`callback_query` as before,
+    so non-migrated handlers are unaffected. Handlers migrated to the platform
+    layer just declare a `ctx` parameter. Registered on the message and
+    callback_query observers (each event type maps to the right context)."""
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        from astrobot.bot.platform.telegram import TelegramBot, TelegramContext
+
+        bot = data.get("bot")
+        if isinstance(event, Message):
+            data["ctx"] = TelegramContext(bot=bot, message=event)
+        elif isinstance(event, CallbackQuery):
+            data["ctx"] = TelegramContext(bot=bot, callback=event)
+        # Platform-neutral bot for sends outside the current chat (e.g. pinging a
+        # referral inviter). Migrated handlers declare a `pbot` param.
+        if bot is not None:
+            data["pbot"] = TelegramBot(bot)
         return await handler(event, data)
 
 

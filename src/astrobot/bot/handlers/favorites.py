@@ -1,17 +1,13 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.formatting import md_to_telegram_html
 from astrobot.bot.keyboards import MENU_BACK_BTN, with_back
-from astrobot.bot.responses import chunk_text, edit_or_send, safe_answer
+from astrobot.bot.platform import Button, Keyboard, PlatformContext
+from astrobot.bot.responses import chunk_text
 from astrobot.db.models import Favorite, Response, User
 from astrobot.limits import is_premium
 from astrobot.metrics import FAVORITES_SAVED
@@ -36,20 +32,16 @@ def _label_for_kind(kind: str) -> str:
 
 
 @router.callback_query(F.data.startswith("fav:save:"))
-async def on_save(
-    call: CallbackQuery,
-    session: AsyncSession,
-    user: User,
-) -> None:
+async def on_save(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
     try:
-        rid = int(call.data.split(":", 2)[2])
-    except (ValueError, AttributeError):
-        await call.answer("Кнопка устарела", show_alert=False)
+        rid = int((ctx.payload or "").split(":", 2)[2])
+    except (ValueError, AttributeError, IndexError):
+        await ctx.answer_callback("Кнопка устарела")
         return
 
     resp = await session.get(Response, rid)
     if resp is None or resp.user_id != user.id:
-        await call.answer("Ответ больше недоступен", show_alert=False)
+        await ctx.answer_callback("Ответ больше недоступен")
         return
 
     # Limit check for free users
@@ -58,10 +50,10 @@ async def on_save(
             select(func.count(Favorite.id)).where(Favorite.user_id == user.id)
         )
         if used is not None and used >= FREE_LIMIT:
-            await call.answer(
+            await ctx.answer_callback(
                 f"Лимит избранного на free-тарифе ({FREE_LIMIT}). "
                 f"Удали что-нибудь или открой Премиум.",
-                show_alert=True,
+                alert=True,
             )
             return
 
@@ -74,7 +66,7 @@ async def on_save(
         )
     )
     if existing is not None:
-        await call.answer("Уже в избранном", show_alert=False)
+        await ctx.answer_callback("Уже в избранном")
         return
 
     label = _label_for_kind(resp.kind)
@@ -88,27 +80,21 @@ async def on_save(
     session.add(fav)
     await session.commit()
     FAVORITES_SAVED.inc()
-    await call.answer("⭐ Сохранено в избранное")
+    await ctx.answer_callback("⭐ Сохранено в избранное")
 
 
-def _list_kb(items: list[Favorite]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
+def _list_kb(items: list[Favorite]) -> Keyboard:
+    rows: list[list[Button]] = []
     for f in items:
         date = f.created_at.strftime("%d.%m")
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"{f.label} • {date}", callback_data=f"fav:view:{f.id}"
-                )
-            ]
-        )
+        rows.append([Button(text=f"{f.label} • {date}", payload=f"fav:view:{f.id}")])
     rows.append([MENU_BACK_BTN])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return Keyboard.from_rows(rows)
 
 
 @router.callback_query(F.data == "menu:favorites")
-async def on_favorites_menu(call: CallbackQuery, session: AsyncSession, user: User) -> None:
-    await call.answer()
+async def on_favorites_menu(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
+    await ctx.answer_callback()
     items = list(
         await session.scalars(
             select(Favorite)
@@ -118,8 +104,7 @@ async def on_favorites_menu(call: CallbackQuery, session: AsyncSession, user: Us
         )
     )
     if not items:
-        await edit_or_send(
-            call,
+        await ctx.edit(
             "⭐ Здесь будет то, что ты сохранишь. Нажми «⭐ Сохранить» под любым "
             "ответом Астры, и он окажется тут.",
             with_back([]),
@@ -129,34 +114,26 @@ async def on_favorites_menu(call: CallbackQuery, session: AsyncSession, user: Us
     intro = "⭐ <b>Твоё избранное</b>\n\nВыбери, чтобы перечитать:"
     if not is_premium(user):
         intro += f"\n<i>Использовано {len(items)} из {FREE_LIMIT} (free-тариф).</i>"
-    await edit_or_send(call, intro, _list_kb(items))
+    await ctx.edit(intro, _list_kb(items))
 
 
 @router.callback_query(F.data.startswith("fav:view:"))
-async def on_view(
-    call: CallbackQuery,
-    session: AsyncSession,
-    user: User,
-) -> None:
+async def on_view(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
     try:
-        fid = int(call.data.split(":", 2)[2])
-    except (ValueError, AttributeError):
-        await call.answer("Кнопка устарела", show_alert=False)
+        fid = int((ctx.payload or "").split(":", 2)[2])
+    except (ValueError, AttributeError, IndexError):
+        await ctx.answer_callback("Кнопка устарела")
         return
 
     fav = await session.get(Favorite, fid)
     if fav is None or fav.user_id != user.id:
-        await call.answer("Не найдено", show_alert=False)
+        await ctx.answer_callback("Не найдено")
         return
 
-    await call.answer()
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🗑 Удалить из избранного", callback_data=f"fav:del:{fav.id}"
-                )
-            ],
+    await ctx.answer_callback()
+    kb = Keyboard.from_rows(
+        [
+            [Button(text="🗑 Удалить из избранного", payload=f"fav:del:{fav.id}")],
             [MENU_BACK_BTN],
         ]
     )
@@ -164,32 +141,22 @@ async def on_view(
     text = header + md_to_telegram_html(fav.full)
     chunks = chunk_text(text)
     for i, chunk in enumerate(chunks):
-        await safe_answer(
-            call.message, chunk, reply_markup=kb if i == len(chunks) - 1 else None
-        )
+        await ctx.reply(chunk, kb if i == len(chunks) - 1 else None)
 
 
 @router.callback_query(F.data.startswith("fav:del:"))
-async def on_delete(
-    call: CallbackQuery,
-    session: AsyncSession,
-    user: User,
-) -> None:
+async def on_delete(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
     try:
-        fid = int(call.data.split(":", 2)[2])
-    except (ValueError, AttributeError):
-        await call.answer("Кнопка устарела", show_alert=False)
+        fid = int((ctx.payload or "").split(":", 2)[2])
+    except (ValueError, AttributeError, IndexError):
+        await ctx.answer_callback("Кнопка устарела")
         return
 
     fav = await session.get(Favorite, fid)
     if fav is None or fav.user_id != user.id:
-        await call.answer("Не найдено", show_alert=False)
+        await ctx.answer_callback("Не найдено")
         return
 
     await session.delete(fav)
     await session.commit()
-    try:
-        await call.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-    await call.answer("Удалено из избранного")
+    await ctx.answer_callback("Удалено из избранного")

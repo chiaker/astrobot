@@ -26,6 +26,7 @@ from astrobot.bot.formatting import md_to_telegram_html
 from astrobot.bot.handlers.horoscope import _period_label
 from astrobot.bot.handlers.natal import _profile_to_birth
 from astrobot.bot.keyboards import build_broadcast_kb, followup_cta_kb
+from astrobot.bot.platform.telegram import to_markup
 from astrobot.config import get_settings
 from astrobot.db.models import (
     BirthProfile,
@@ -544,7 +545,7 @@ _FOLLOWUP_TEXT = (
 async def _send_followup(bot: Bot, chat_id: int, animation: str) -> None:
     """Send the follow-up: animation+caption if configured (falling back to text
     on a bad file_id), else plain text. Lets TelegramRetryAfter/Forbidden bubble up."""
-    kb = followup_cta_kb()
+    kb = to_markup(followup_cta_kb())
     if animation:
         try:
             await bot.send_animation(
@@ -650,7 +651,7 @@ async def _send_broadcast_variant(bot: Bot, chat_id: int, variant) -> str | None
     the first time (so the caller can cache it into `variant.animation` and skip
     re-uploading on later sends), otherwise None. Lets TelegramRetryAfter/Forbidden
     bubble up to the per-user handler."""
-    kb = build_broadcast_kb(variant)
+    kb = to_markup(build_broadcast_kb(variant))
     text = variant.text or ""
 
     # Fast path: a known file_id (cached from a prior send) or legacy URL.

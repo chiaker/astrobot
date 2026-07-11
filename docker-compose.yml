@@ -154,8 +154,58 @@ services:
     restart: unless-stopped
     command: ["python", "-m", "astrobot.main"]
 
+  # ─── MAX platform: separate DB, own app container, shared Redis (prefixed) ───
+  postgres-max:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: astrobot
+      POSTGRES_PASSWORD: astrobot
+      POSTGRES_DB: astrobot
+    volumes:
+      - pgdata_max:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U astrobot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate-max:
+    build: .
+    env_file: .env.max
+    logging: *default-logging
+    depends_on:
+      postgres-max:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./alembic.ini:/app/alembic.ini
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  app-max:
+    build: .
+    env_file: .env.max
+    logging: *default-logging
+    depends_on:
+      postgres-max:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate-max:
+        condition: service_completed_successfully
+    volumes:
+      - ./src:/app/src
+      - ./alembic.ini:/app/alembic.ini
+    expose:
+      - "8000"
+    restart: unless-stopped
+    command: ["python", "-m", "astrobot.main"]
+
 volumes:
   pgdata:
+  pgdata_max:
   redisdata:
   prometheusdata:
   grafanadata:

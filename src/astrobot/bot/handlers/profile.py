@@ -4,12 +4,6 @@ from datetime import UTC, datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-)
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +16,7 @@ from astrobot.bot.keyboards import (
     reset_confirm_kb,
     with_back,
 )
-from astrobot.bot.responses import edit_or_send
+from astrobot.bot.platform import Button, Keyboard, PlatformContext
 from astrobot.bot.states import Onboarding, PushSetup
 from astrobot.db.models import (
     BirthProfile,
@@ -48,35 +42,35 @@ router = Router(name="profile")
 _GENDER_LABEL = {"m": "мужской", "f": "женский"}
 
 
-def _profile_kb(user: User) -> InlineKeyboardMarkup:
+def _profile_kb(user: User) -> Keyboard:
     gender_label = _GENDER_LABEL.get(user.gender or "", "не указан")
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=f"⚧ Пол: {gender_label}", callback_data="settings:gender")],
-            [InlineKeyboardButton(text="✏️ Изменить данные / сбросить", callback_data="profile:reset")],
-            [InlineKeyboardButton(text="🧾 История операций", callback_data="payments:mine")],
+    return Keyboard.from_rows(
+        [
+            [Button(text=f"⚧ Пол: {gender_label}", payload="settings:gender")],
+            [Button(text="✏️ Изменить данные / сбросить", payload="profile:reset")],
+            [Button(text="🧾 История операций", payload="payments:mine")],
             [
-                InlineKeyboardButton(text="⚙️ Настройки", callback_data="menu:settings"),
-                InlineKeyboardButton(text="🆘 Поддержка", callback_data="menu:support"),
+                Button(text="⚙️ Настройки", payload="menu:settings"),
+                Button(text="🆘 Поддержка", payload="menu:support"),
             ],
             [MENU_BACK_BTN],
         ]
     )
 
 
-def _settings_kb(user: User) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
+def _settings_kb(user: User) -> Keyboard:
+    rows: list[list[Button]] = []
     terms_state = "вкл" if user.astro_terms_enabled else "выкл"
     rows.append(
-        [InlineKeyboardButton(text=f"🔭 Астротермины: {terms_state}", callback_data="settings:astro_terms")]
+        [Button(text=f"🔭 Астротермины: {terms_state}", payload="settings:astro_terms")]
     )
     if is_premium(user):
         lunar_state = "вкл" if user.push_lunar_enabled else "выкл"
         rows.append(
-            [InlineKeyboardButton(text=f"🌑 Лунные фазы: {lunar_state}", callback_data="settings:push_lunar")]
+            [Button(text=f"🌑 Лунные фазы: {lunar_state}", payload="settings:push_lunar")]
         )
     rows.append([MENU_BACK_BTN])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return Keyboard.from_rows(rows)
 
 
 def _settings_text(user: User) -> str:
@@ -93,8 +87,8 @@ def _settings_text(user: User) -> str:
     return "\n".join(parts)
 
 
-async def _render_settings(call: CallbackQuery, user: User) -> None:
-    await edit_or_send(call, _settings_text(user), _settings_kb(user))
+async def _render_settings(ctx: PlatformContext, user: User) -> None:
+    await ctx.edit(_settings_text(user), _settings_kb(user))
 
 
 async def _profile_text(profile: BirthProfile, user: User, session: AsyncSession) -> str:
@@ -161,24 +155,23 @@ async def _profile_text(profile: BirthProfile, user: User, session: AsyncSession
 
 
 @router.callback_query(F.data == "menu:profile")
-async def on_profile(call: CallbackQuery, session: AsyncSession, user: User) -> None:
-    await call.answer()
+async def on_profile(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
+    await ctx.answer_callback()
     profile = await session.get(BirthProfile, user.id)
     if profile is None:
-        await edit_or_send(
-            call,
+        await ctx.edit(
             "У тебя ещё нет сохранённого профиля. Нажми /start, чтобы пройти онбординг.",
             with_back([]),
         )
         return
     text = await _profile_text(profile, user, session)
-    await edit_or_send(call, text, _profile_kb(user))
+    await ctx.edit(text, _profile_kb(user))
 
 
 @router.callback_query(F.data == "menu:settings")
-async def on_settings(call: CallbackQuery, session: AsyncSession, user: User) -> None:
-    await call.answer()
-    await _render_settings(call, user)
+async def on_settings(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
+    await ctx.answer_callback()
+    await _render_settings(ctx, user)
 
 
 def _fmt_op(p: Payment) -> str:
@@ -196,7 +189,7 @@ def _fmt_op(p: Payment) -> str:
 
 
 @router.callback_query(F.data == "payments:mine")
-async def on_my_payments(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+async def on_my_payments(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
     payments = list(
         await session.scalars(
             select(Payment)
@@ -206,8 +199,8 @@ async def on_my_payments(call: CallbackQuery, session: AsyncSession, user: User)
         )
     )
     if not payments:
-        await edit_or_send(call, "🧾 У тебя пока нет операций.", with_back([]))
-        await call.answer()
+        await ctx.edit("🧾 У тебя пока нет операций.", with_back([]))
+        await ctx.answer_callback()
         return
 
     lines = ["🧾 <b>История операций</b>", ""]
@@ -216,8 +209,8 @@ async def on_my_payments(call: CallbackQuery, session: AsyncSession, user: User)
         "",
         "<i>Фискальный чек по каждому оплаченному платежу приходит на email.</i>",
     ]
-    await edit_or_send(call, "\n".join(lines), with_back([]))
-    await call.answer()
+    await ctx.edit("\n".join(lines), with_back([]))
+    await ctx.answer_callback()
 
 
 # ─── Push horoscope setup ─────────────────────────────────────────────────────
@@ -233,82 +226,76 @@ _PUSH_CITY_PROMPT = (
 
 @router.callback_query(F.data == "settings:push_horoscope")
 async def on_push_horoscope_toggle(
-    call: CallbackQuery,
+    ctx: PlatformContext,
     state: FSMContext,
     session: AsyncSession,
     user: User,
 ) -> None:
     if not is_premium(user):
-        await call.answer("Доступно только в Премиуме", show_alert=True)
+        await ctx.answer_callback("Доступно только в Премиуме", alert=True)
         return
 
     if user.push_horoscope_enabled:
-        # Disable immediately
         user.push_horoscope_enabled = False
         await session.commit()
-        await edit_or_send(call, "🔮 На какой период посмотрим?", horoscope_period_kb(user))
-        await call.answer("Утренний гороскоп выключен")
+        await ctx.edit("🔮 На какой период посмотрим?", horoscope_period_kb(user))
+        await ctx.answer_callback("Утренний гороскоп выключен")
         return
 
-    # Enabling — check if already has push settings
     if user.push_tz and user.push_city_name:
         hour = user.push_hour if user.push_hour is not None else 9
         user.push_horoscope_enabled = True
         await session.commit()
-        await edit_or_send(call, "🔮 На какой период посмотрим?", horoscope_period_kb(user))
-        await call.answer(f"Включён · {hour}:00 · {user.push_city_name}")
+        await ctx.edit("🔮 На какой период посмотрим?", horoscope_period_kb(user))
+        await ctx.answer_callback(f"Включён · {hour}:00 · {user.push_city_name}")
         return
 
-    # No push settings yet — start setup
-    await call.answer()
+    await ctx.answer_callback()
     await state.set_state(PushSetup.waiting_for_city)
-    await call.message.answer(_PUSH_CITY_PROMPT)
+    await ctx.reply(_PUSH_CITY_PROMPT)
 
 
 @router.callback_query(F.data == "push:setup_start")
 async def on_push_setup_start(
-    call: CallbackQuery,
+    ctx: PlatformContext,
     state: FSMContext,
     session: AsyncSession,
     user: User,
 ) -> None:
-    """Entry point from the post-purchase offer (service._confirmation_kb):
-    enable the morning horoscope, reusing the PushSetup flow when not configured
-    yet. Unlike the settings toggle, it never disables — it only moves toward on."""
+    """Post-purchase entry: enable the morning horoscope, reusing PushSetup."""
     if not is_premium(user):
-        await call.answer("Доступно только в Премиуме", show_alert=True)
+        await ctx.answer_callback("Доступно только в Премиуме", alert=True)
         return
     if user.push_horoscope_enabled:
-        await call.answer("Утренний гороскоп уже включён")
+        await ctx.answer_callback("Утренний гороскоп уже включён")
         return
     if user.push_tz and user.push_city_name:
         user.push_horoscope_enabled = True
         await session.commit()
         hour = user.push_hour if user.push_hour is not None else 9
-        await call.answer(f"Включён · {hour}:00")
-        await call.message.answer(
+        await ctx.answer_callback(f"Включён · {hour}:00")
+        await ctx.reply(
             f"🌅 Утренний гороскоп включён — буду присылать в <b>{hour}:00</b> "
             f"по времени <b>{user.push_city_name}</b>."
         )
         return
-    await call.answer()
+    await ctx.answer_callback()
     await state.set_state(PushSetup.waiting_for_city)
-    await call.message.answer(_PUSH_CITY_PROMPT)
+    await ctx.reply(_PUSH_CITY_PROMPT)
 
 
 @router.message(PushSetup.waiting_for_city)
-async def on_push_city(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    query = (message.text or "").strip()
+async def on_push_city(ctx: PlatformContext, state: FSMContext, session: AsyncSession) -> None:
+    query = (ctx.text or "").strip()
     if len(query) < 2:
-        await message.answer("Напиши название города, например <code>Москва</code>.")
+        await ctx.reply("Напиши название города, например <code>Москва</code>.")
         return
 
-    progress = await message.answer("🔍 Ищу город…")
+    await ctx.reply("🔍 Ищу город…")
     result = await geocode_city(session, query)
-    await progress.delete()
 
     if result is None:
-        await message.answer(
+        await ctx.reply(
             "Не нашла такой город. Попробуй иначе, "
             "например <code>Санкт-Петербург, Россия</code>."
         )
@@ -316,22 +303,22 @@ async def on_push_city(message: Message, state: FSMContext, session: AsyncSessio
 
     await state.update_data(push_tz=result.tz, push_city_name=result.display_name)
     await state.set_state(PushSetup.choosing_hour)
-    await message.answer(
+    await ctx.reply(
         f"📍 Нашла: <b>{result.display_name}</b> (часовой пояс <code>{result.tz}</code>)\n\n"
         "В какое время тебе присылать утренний гороскоп?\n"
         "<i>Время указывается по твоему текущему городу.</i>",
-        reply_markup=push_hour_kb(),
+        push_hour_kb(),
     )
 
 
 @router.callback_query(PushSetup.choosing_hour, F.data.startswith("push:hour:"))
 async def on_push_hour(
-    call: CallbackQuery,
+    ctx: PlatformContext,
     state: FSMContext,
     session: AsyncSession,
     user: User,
 ) -> None:
-    hour = int(call.data.split(":")[-1])
+    hour = int((ctx.payload or "").split(":")[-1])
     data = await state.get_data()
     user.push_tz = data["push_tz"]
     user.push_city_name = data["push_city_name"]
@@ -340,40 +327,40 @@ async def on_push_hour(
     await session.commit()
     await state.clear()
 
-    await call.message.edit_text(
+    await ctx.edit(
         f"✅ Готово! Буду присылать утренний гороскоп в <b>{hour}:00</b> "
         f"по времени <b>{user.push_city_name}</b>.\n\n"
         "Можешь изменить настройки в профиле."
     )
-    await call.answer("Настроено")
+    await ctx.answer_callback("Настроено")
 
 
 @router.callback_query(PushSetup.choosing_hour, F.data == "push:cancel")
 @router.callback_query(PushSetup.waiting_for_city, F.data == "push:cancel")
-async def on_push_cancel(call: CallbackQuery, state: FSMContext) -> None:
+async def on_push_cancel(ctx: PlatformContext, state: FSMContext) -> None:
     await state.clear()
-    await call.message.edit_text("Настройка отменена.")
-    await call.answer()
+    await ctx.edit("Настройка отменена.")
+    await ctx.answer_callback()
 
 
 # ─── Push lunar toggle ────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "settings:push_lunar")
-async def on_push_lunar_toggle(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+async def on_push_lunar_toggle(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
     if not is_premium(user):
-        await call.answer("Доступно только в Премиуме", show_alert=True)
+        await ctx.answer_callback("Доступно только в Премиуме", alert=True)
         return
     user.push_lunar_enabled = not user.push_lunar_enabled
     await session.commit()
-    await _render_settings(call, user)
+    await _render_settings(ctx, user)
     label = "включены" if user.push_lunar_enabled else "выключены"
-    await call.answer(f"Лунные фазы {label}")
+    await ctx.answer_callback(f"Лунные фазы {label}")
 
 
 # ─── Astro terms toggle ───────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "settings:gender")
-async def on_gender_toggle(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+async def on_gender_toggle(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
     # Cycle: м → ж → не указан → м
     nxt = {"m": "f", "f": None}.get(user.gender or "", "m")
     user.gender = nxt
@@ -386,12 +373,12 @@ async def on_gender_toggle(call: CallbackQuery, session: AsyncSession, user: Use
     await session.commit()
     if profile is not None:
         text = await _profile_text(profile, user, session)
-        await edit_or_send(call, text, _profile_kb(user))
-    await call.answer(f"Пол: {_GENDER_LABEL.get(user.gender or '', 'не указан')}")
+        await ctx.edit(text, _profile_kb(user))
+    await ctx.answer_callback(f"Пол: {_GENDER_LABEL.get(user.gender or '', 'не указан')}")
 
 
 @router.callback_query(F.data == "settings:astro_terms")
-async def on_astro_terms_toggle(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+async def on_astro_terms_toggle(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
     user.astro_terms_enabled = not user.astro_terms_enabled
     profile = await session.get(BirthProfile, user.id)
     if profile is not None:
@@ -399,15 +386,15 @@ async def on_astro_terms_toggle(call: CallbackQuery, session: AsyncSession, user
         profile.cached_natal_full = None
     await session.execute(delete(HoroscopeCache).where(HoroscopeCache.user_id == user.id))
     await session.commit()
-    await _render_settings(call, user)
+    await _render_settings(ctx, user)
     label = "включены" if user.astro_terms_enabled else "выключены"
-    await call.answer(f"Астрологические термины {label}")
+    await ctx.answer_callback(f"Астрологические термины {label}")
 
 
 # ─── Profile reset ────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "profile:reset")
-async def on_profile_reset_warn(call: CallbackQuery, session: AsyncSession, user: User) -> None:
+async def on_profile_reset_warn(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
     natal_this_month = (
         await session.scalar(
             select(func.count(LLMUsageLog.id)).where(
@@ -433,13 +420,13 @@ async def on_profile_reset_warn(call: CallbackQuery, session: AsyncSession, user
         lines.append(f"\n⭐ Будет удалено <b>{fav_count}</b> записей из Избранного.")
     lines.append("\nПродолжить?")
 
-    await call.message.answer("\n".join(lines), reply_markup=reset_confirm_kb())
-    await call.answer()
+    await ctx.reply("\n".join(lines), reset_confirm_kb())
+    await ctx.answer_callback()
 
 
 @router.callback_query(F.data == "profile:reset:confirm")
 async def on_profile_reset_confirm(
-    call: CallbackQuery,
+    ctx: PlatformContext,
     state: FSMContext,
     session: AsyncSession,
     user: User,
@@ -458,8 +445,5 @@ async def on_profile_reset_confirm(
     )
     await state.set_state(Onboarding.waiting_for_name)
     hint = f" Сейчас: <b>{user.display_name}</b>." if user.display_name else ""
-    await call.message.answer(
-        f"Прежние данные удалены. Как тебя зовут?{hint}",
-        reply_markup=name_skip_kb(),
-    )
-    await call.answer()
+    await ctx.reply(f"Прежние данные удалены. Как тебя зовут?{hint}", name_skip_kb())
+    await ctx.answer_callback()

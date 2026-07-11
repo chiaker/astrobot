@@ -14,6 +14,10 @@ class Settings(BaseSettings):
 
     bot_token: str = Field(alias="BOT_TOKEN")
 
+    # Messenger platform this deploy serves. Selects the adapter (aiogram vs
+    # maxapi). One image, two deploys — each with its own .env.
+    platform: Literal["telegram", "max"] = Field(default="telegram", alias="PLATFORM")
+
     run_mode: Literal["polling", "webhook"] = Field(default="polling", alias="RUN_MODE")
     webhook_base_url: str = Field(default="", alias="WEBHOOK_BASE_URL")
     webhook_secret: str = Field(default="", alias="WEBHOOK_SECRET")
@@ -90,9 +94,22 @@ class Settings(BaseSettings):
         return f"{self.webhook_base_url.rstrip('/')}{self.webhook_path}"
 
     @property
+    def max_webhook_path(self) -> str:
+        return f"/max/webhook/{self.webhook_secret}"
+
+    @property
+    def max_webhook_url(self) -> str:
+        return f"{self.webhook_base_url.rstrip('/')}{self.max_webhook_path}"
+
+    @property
     def yookassa_return_url_effective(self) -> str:
+        # Where YooKassa sends the user back after payment. Platform-specific
+        # deep link to the bot; override with YOOKASSA_RETURN_URL when the exact
+        # format differs. TODO(max): confirm the canonical MAX bot link format.
         if self.yookassa_return_url:
             return self.yookassa_return_url
+        if self.platform == "max":
+            return f"https://max.ru/{self.bot_username}" if self.bot_username else "https://max.ru"
         if self.bot_username:
             return f"https://t.me/{self.bot_username}"
         return "https://t.me"

@@ -4,6 +4,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import DefaultKeyBuilder, RedisStorage
 
 from astrobot.bot.middlewares import (
+    ContextMiddleware,
     DbSessionMiddleware,
     UpdateDedupeMiddleware,
     UserMiddleware,
@@ -50,6 +51,10 @@ def build_dispatcher() -> Dispatcher:
     dp.update.middleware(UpdateDedupeMiddleware())
     dp.update.middleware(DbSessionMiddleware())
     dp.update.middleware(UserMiddleware())
+    # Inject platform-neutral `ctx` for handlers migrated to the platform layer.
+    # Additive: non-migrated handlers keep using message/callback_query directly.
+    dp.message.middleware(ContextMiddleware())
+    dp.callback_query.middleware(ContextMiddleware())
 
     dp.include_router(errors.router)
     dp.include_router(legal.router)

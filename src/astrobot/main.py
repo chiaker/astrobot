@@ -62,6 +62,8 @@ def main() -> None:
         _set_webhook(settings)
         return
 
+    # Both platforms run the FastAPI app (webhook/admin); create_app() branches on
+    # PLATFORM. MAX uses maxapi's webhook + polling fallback (see web/app.py).
     uvicorn.run(
         "astrobot.web.app:app",
         host=settings.web_host,

@@ -26,6 +26,13 @@ dependencies = [
     "uvicorn[standard]>=0.32",
 ]
 
+# MAX messenger support is optional so the Telegram deploy stays lean.
+# Install with:  uv sync --extra max   (or  pip install '.[max]')
+[project.optional-dependencies]
+max = [
+    "maxapi>=1.2",
+]
+
 [dependency-groups]
 dev = [
     "mypy>=1.13",

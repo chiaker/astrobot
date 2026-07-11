@@ -90,24 +90,28 @@ jobs:
             fi
 
             # Pull the freshly built image (already on ghcr.io — no build here).
-            docker compose pull app migrate
+            docker compose pull app migrate app-max migrate-max
 
             # Run migrations to completion BEFORE swapping app. Keep these
             # backward-compatible (expand/contract) so the old container keeps
             # working during the brief two-replica overlap. set -e fails the
             # deploy if a migration errors.
             docker compose run --rm migrate
+            docker compose run --rm migrate-max
 
             # Ensure infra + ingress are up without disturbing them. --no-recreate
             # leaves the running app and (crucially) the Caddy ingress untouched;
             # --scale migrate=0 stops `up` from spawning a second migrate run.
-            docker compose up -d --no-recreate --scale migrate=0
+            docker compose up -d --no-recreate --scale migrate=0 --scale migrate-max=0
 
             # Zero-downtime swap of the bot: start a new app replica, wait for its
             # healthcheck, then drain and remove the old one. Caddy load-balances
             # across both via DNS during the overlap. No `-f` — COMPOSE_FILE drives
             # file selection, which every docker-rollout version honours.
             docker rollout app
+            # MAX bot: same zero-downtime swap. It self-subscribes its webhook on
+            # startup (idempotent, same URL), so no separate set-webhook step.
+            docker rollout app-max
 
             # Re-assert the Telegram webhook AFTER the old container is gone. The
             # webhook is otherwise managed by each container's startup, which races

@@ -3,18 +3,19 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.bot.keyboards import main_menu_inline
-from astrobot.bot.responses import edit_or_send
+from astrobot.bot.platform import Keyboard, PlatformContext
+from astrobot.bot.platform.telegram import to_markup
 from astrobot.db.models import User
 from astrobot.limits import check_question, is_premium
 
 router = Router(name="menu")
 
 
-async def render_main_menu(user: User, session: AsyncSession) -> tuple[str, InlineKeyboardMarkup]:
+async def render_main_menu(user: User, session: AsyncSession) -> tuple[str, Keyboard]:
     name = user.display_name or "путник"
     if is_premium(user):
         sub = (
@@ -33,34 +34,45 @@ async def render_main_menu(user: User, session: AsyncSession) -> tuple[str, Inli
 
 
 async def send_main_menu(message: Message, user: User, session: AsyncSession) -> None:
-    """Send the main menu as a single fresh inline message."""
+    """Send the main menu as a single fresh inline message.
+
+    Legacy aiogram bridge kept for handlers not yet migrated to `ctx`. Migrated
+    handlers call `show_main_menu(ctx, ...)`."""
     text, kb = await render_main_menu(user, session)
-    await message.answer(text, reply_markup=kb)
+    await message.answer(text, reply_markup=to_markup(kb))
+
+
+async def show_main_menu(ctx: PlatformContext, user: User, session: AsyncSession) -> None:
+    """Send the main menu as a fresh message via the platform context."""
+    text, kb = await render_main_menu(user, session)
+    await ctx.reply(text, kb)
 
 
 @router.message(Command("menu"))
-async def cmd_menu(message: Message, session: AsyncSession, user: User) -> None:
-    await send_main_menu(message, user, session)
+async def cmd_menu(ctx: PlatformContext, session: AsyncSession, user: User) -> None:
+    text, kb = await render_main_menu(user, session)
+    await ctx.reply(text, kb)
 
 
 @router.callback_query(F.data == "menu:open")
 async def on_menu_open(
-    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
+    ctx: PlatformContext, state: FSMContext, session: AsyncSession, user: User
 ) -> None:
     # Returning to the menu cancels any in-progress flow (asking a question,
     # push setup) so the next text isn't swallowed by a stale FSM state.
     await state.clear()
     text, kb = await render_main_menu(user, session)
-    await edit_or_send(call, text, kb)
-    await call.answer()
+    await ctx.edit(text, kb)
+    await ctx.answer_callback()
 
 
 @router.callback_query(F.data == "menu:new")
 async def on_menu_new(
-    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
+    ctx: PlatformContext, state: FSMContext, session: AsyncSession, user: User
 ) -> None:
     # Menu as a fresh message — keeps the result above (used under readings),
     # so the user can scroll back and reread it.
     await state.clear()
-    await send_main_menu(call.message, user, session)
-    await call.answer()
+    text, kb = await render_main_menu(user, session)
+    await ctx.reply(text, kb)
+    await ctx.answer_callback()

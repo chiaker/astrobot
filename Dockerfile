@@ -17,16 +17,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libfreetype6-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# --- Russian Trusted Root CA (Минцифры) --------------------------------------
+# MAX's API (platform-api2.max.ru) serves a TLS cert issued by Минцифры. Without
+# the root + intermediate in the trust store, the bot's OUTGOING calls to MAX
+# fail TLS verification. aiohttp (maxapi's client) reads the system store, so
+# update-ca-certificates is sufficient. Harmless for the Telegram deploy (just
+# extra trusted CAs) — keeps one image for both platforms.
+RUN curl -fsSL https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt \
+        -o /usr/local/share/ca-certificates/russian_trusted_root_ca.crt \
+ && curl -fsSL https://gu-st.ru/content/lending/russian_trusted_sub_ca_pem.crt \
+        -o /usr/local/share/ca-certificates/russian_trusted_sub_ca.crt \
+ && update-ca-certificates
+
 RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
 COPY pyproject.toml ./
 COPY uv.lock* ./
-RUN uv sync --no-install-project
+# --extra max installs maxapi so ONE image serves both Telegram and MAX
+# (PLATFORM selects the runtime; the TG path never imports maxapi).
+RUN uv sync --no-install-project --extra max
 
 COPY src/ ./src/
-RUN uv sync
+COPY alembic.ini ./
+RUN uv sync --extra max
 
 ENV PATH="/opt/venv/bin:$PATH"
 

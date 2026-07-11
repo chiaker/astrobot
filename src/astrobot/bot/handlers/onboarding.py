@@ -4,15 +4,13 @@ import re
 from datetime import UTC, date, datetime, time
 
 import structlog
-from aiogram import Bot, F, Router
+from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.astrology.geocoding import geocode_city
-from astrobot.bot.handlers.menu import send_main_menu
+from astrobot.bot.handlers.menu import show_main_menu
 from astrobot.bot.keyboards import (
     astro_terms_kb,
     confirm_kb,
@@ -21,6 +19,7 @@ from astrobot.bot.keyboards import (
     name_skip_kb,
     time_unknown_kb,
 )
+from astrobot.bot.platform import Media, PlatformBot, PlatformContext
 from astrobot.bot.states import Onboarding
 from astrobot.bot.utils import rate_limit_ok
 from astrobot.config import get_settings
@@ -30,9 +29,6 @@ from astrobot.gender import guess_gender
 log = structlog.get_logger(__name__)
 router = Router(name="onboarding")
 
-# A name is a single word of letters only (Cyrillic/Latin), optionally with an
-# internal hyphen or apostrophe (Анна-Мария, D'Артаньян). This rejects commands
-# like "/menu", digits, and phrases like "меня зовут олег" (spaces → multi-word).
 _NAME_RE = re.compile(r"^[^\W\d_]+(?:[-'][^\W\d_]+)*$", re.UNICODE)
 
 _NAME_HINT = (
@@ -40,7 +36,6 @@ _NAME_HINT = (
     "цифр и команд (например: <i>Олег</i>). Или нажми «Пропустить»."
 )
 
-# Cap geocoding (external Nominatim calls) per user to curb spam / OSM ToS abuse.
 GEOCODE_PER_HOUR = 20
 
 
@@ -79,12 +74,15 @@ def _format_final_summary(data: dict) -> str:
     )
 
 
-async def prompt_for_name(message: Message, state: FSMContext, user: User) -> None:
-    """Send the welcome + 'how should I call you?' prompt and enter the name FSM
-    step. Shared by /start and the broadcast 'go through onboarding' button."""
+def _welcome_media(value: str) -> Media:
+    # A direct URL works on both platforms; a Telegram file_id only on Telegram.
+    return Media.from_url(value) if value.startswith("http") else Media.from_file_id(value)
+
+
+async def prompt_for_name(ctx: PlatformContext, state, user: User) -> None:
+    """Send the welcome + 'how should I call you?' prompt and enter the name step."""
     from astrobot.legal.disclaimer import ONBOARDING_CONSENT
 
-    # Pre-fill existing values so repeat-onboarding users can skip steps.
     await state.update_data(
         display_name=user.display_name,
         gender=user.gender,
@@ -101,16 +99,12 @@ async def prompt_for_name(message: Message, state: FSMContext, user: User) -> No
     animation = get_settings().welcome_animation
     if animation:
         try:
-            # GIF/video as a looping animation with the greeting as its caption.
-            await message.answer_animation(
-                animation=animation, caption=welcome_text, reply_markup=name_skip_kb()
-            )
+            await ctx.send_animation(_welcome_media(animation), caption=welcome_text, kb=name_skip_kb())
         except Exception as e:
-            # Bad file_id / unreachable URL → don't block onboarding, fall back to text.
             log.warning("welcome_animation_failed", error=str(e))
-            await message.answer(welcome_text, reply_markup=name_skip_kb())
+            await ctx.reply(welcome_text, name_skip_kb())
     else:
-        await message.answer(welcome_text, reply_markup=name_skip_kb())
+        await ctx.reply(welcome_text, name_skip_kb())
     await state.set_state(Onboarding.waiting_for_name)
 
 
@@ -118,11 +112,11 @@ async def prompt_for_name(message: Message, state: FSMContext, user: User) -> No
 
 @router.message(CommandStart())
 async def cmd_start(
-    message: Message,
-    state: FSMContext,
+    ctx: PlatformContext,
+    state,
     session: AsyncSession,
     user: User,
-    bot: Bot,
+    pbot: PlatformBot,
     is_new_user: bool = False,
 ) -> None:
     await state.clear()
@@ -130,21 +124,20 @@ async def cmd_start(
     from astrobot.metrics import REFERRALS_REGISTERED
     from astrobot.referral import parse_start_arg, try_apply_referral
 
-    ref_code = parse_start_arg(message.text)
+    ref_code = parse_start_arg(ctx.text)
     if ref_code and is_new_user:
         applied = await try_apply_referral(session, user, ref_code)
         if applied is not None:
             inviter, inviter_credited = applied
             await session.commit()
             REFERRALS_REGISTERED.inc()
-            await message.answer(
+            await ctx.reply(
                 "🎁 Друг тебя пригласил — я добавила <b>+2 бесплатных вопроса</b>. "
                 "Когда захочешь — приходи спрашивать ✨"
             )
-            # Only ping/credit the inviter while they're under the anti-farming cap.
             if inviter_credited:
                 try:
-                    await bot.send_message(
+                    await pbot.send_message(
                         inviter.tg_user_id,
                         "🎁 По твоей реферальной ссылке зарегистрировался новый пользователь — "
                         "тебе <b>+2 бесплатных вопроса</b>! ✨",
@@ -154,65 +147,54 @@ async def cmd_start(
 
     profile = await session.get(BirthProfile, user.id)
     if profile is not None:
-        await message.answer(
-            "🌙 С возвращением. Звёзды ждали тебя ✨",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        await send_main_menu(message, user, session)
+        await ctx.reply("🌙 С возвращением. Звёзды ждали тебя ✨")
+        await show_main_menu(ctx, user, session)
         return
 
-    await prompt_for_name(message, state, user)
+    await prompt_for_name(ctx, state, user)
 
 
 @router.message(Command("cancel"))
-async def cmd_cancel(
-    message: Message, state: FSMContext, session: AsyncSession, user: User
-) -> None:
+async def cmd_cancel(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
     await state.clear()
-    await message.answer("Хорошо, отложила в сторону ✨")
-    await send_main_menu(message, user, session)
+    await ctx.reply("Хорошо, отложила в сторону ✨")
+    await show_main_menu(ctx, user, session)
 
 
 # ─── Шаг 1: имя ───────────────────────────────────────────────────────────────
 
 @router.message(Onboarding.waiting_for_name)
-async def on_name(message: Message, state: FSMContext) -> None:
-    name = (message.text or "").strip()
-    # Drop HTML-significant and control chars: a real name never has them, and
-    # this keeps the value safe inside HTML messages and the LLM system prompt.
+async def on_name(ctx: PlatformContext, state) -> None:
+    name = (ctx.text or "").strip()
     name = "".join(ch for ch in name if ch not in "<>" and (ch == " " or ch.isprintable()))
     name = name.strip()
-    # A real name is one word of letters only. Re-ask (with a clarification) on
-    # commands like "/menu", digits, or phrases like "меня зовут олег".
     if len(name) > 64 or not _NAME_RE.match(name):
-        await message.answer(_NAME_HINT, reply_markup=name_skip_kb())
+        await ctx.reply(_NAME_HINT, name_skip_kb())
         return
     await state.update_data(display_name=name)
 
-    # Try to infer gender from the name; only ask if we can't tell.
     guessed = guess_gender(name)
     if guessed is not None:
         await state.update_data(gender=guessed)
-        await _ask_date(message, state)
+        await _ask_date(ctx, state)
     else:
-        await _ask_gender(message, state)
+        await _ask_gender(ctx, state)
 
 
 @router.callback_query(Onboarding.waiting_for_name, F.data == "onb:name:skip")
-async def on_name_skip(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
-    # No name → can't infer gender → ask.
-    await _ask_gender(call.message, state)
+async def on_name_skip(ctx: PlatformContext, state) -> None:
+    await ctx.answer_callback()
+    await _ask_gender(ctx, state)
 
 
-async def _ask_gender(target, state: FSMContext) -> None:
+async def _ask_gender(ctx: PlatformContext, state) -> None:
     await state.set_state(Onboarding.choosing_gender)
-    await target.answer("Укажи свой пол:", reply_markup=gender_kb())
+    await ctx.reply("Укажи свой пол:", gender_kb())
 
 
-async def _ask_date(target, state: FSMContext) -> None:
+async def _ask_date(ctx: PlatformContext, state) -> None:
     await state.set_state(Onboarding.waiting_for_date)
-    await target.answer(
+    await ctx.reply(
         "Отлично! Теперь мне нужны данные для натальной карты ✨\n\n"
         "Введи <b>дату рождения</b> в формате <code>DD.MM.YYYY</code> "
         "(например, <code>14.03.1990</code>):"
@@ -222,40 +204,40 @@ async def _ask_date(target, state: FSMContext) -> None:
 # ─── Шаг 2: пол ───────────────────────────────────────────────────────────────
 
 @router.callback_query(Onboarding.choosing_gender, F.data.startswith("onb:gender:"))
-async def on_gender(call: CallbackQuery, state: FSMContext) -> None:
-    value = call.data.split(":")[-1]
+async def on_gender(ctx: PlatformContext, state) -> None:
+    value = (ctx.payload or "").split(":")[-1]
     if value in ("m", "f"):
         await state.update_data(gender=value)
-    await call.answer()
-    await _ask_date(call.message, state)
+    await ctx.answer_callback()
+    await _ask_date(ctx, state)
 
 
 # ─── Шаг 3: дата ──────────────────────────────────────────────────────────────
 
 @router.message(Onboarding.waiting_for_date)
-async def on_date(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip()
+async def on_date(ctx: PlatformContext, state) -> None:
+    text = (ctx.text or "").strip()
     try:
         birth_date = datetime.strptime(text, "%d.%m.%Y").date()
     except ValueError:
-        await message.answer(
+        await ctx.reply(
             "Не понял дату. Нужно <code>DD.MM.YYYY</code>, например <code>14.03.1990</code>."
         )
         return
 
     if birth_date.year < 1900 or birth_date > date.today():
-        await message.answer("Дата должна быть между 1900 годом и сегодняшним днём.")
+        await ctx.reply("Дата должна быть между 1900 годом и сегодняшним днём.")
         return
 
     await state.update_data(birth_date=birth_date.isoformat())
-    await message.answer(
+    await ctx.reply(
         "Хорошо ✨\n\n"
         "Теперь <b>время рождения</b> в формате <code>HH:MM</code> "
         "(например, <code>14:30</code>).\n\n"
         "Если точное время неизвестно — нажми кнопку ниже. "
         "Я тогда построю солнечную карту — она расскажет о тебе многое, "
         "но без домов и Асцендента.",
-        reply_markup=time_unknown_kb(),
+        time_unknown_kb(),
     )
     await state.set_state(Onboarding.waiting_for_time)
 
@@ -263,30 +245,30 @@ async def on_date(message: Message, state: FSMContext) -> None:
 # ─── Шаг 4: время ─────────────────────────────────────────────────────────────
 
 @router.callback_query(Onboarding.waiting_for_time, F.data == "time:unknown")
-async def on_time_unknown(call: CallbackQuery, state: FSMContext) -> None:
+async def on_time_unknown(ctx: PlatformContext, state) -> None:
     await state.update_data(birth_time=time(12, 0).isoformat(), time_unknown=True)
-    await call.message.answer(
+    await ctx.reply(
         "Поняла, делаем солнечную карту 🌞\n\n"
         "<b>Город рождения</b> — например, <code>Москва</code> или <code>Новосибирск</code>:"
     )
     await state.set_state(Onboarding.waiting_for_city)
-    await call.answer()
+    await ctx.answer_callback()
 
 
 @router.message(Onboarding.waiting_for_time)
-async def on_time(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip()
+async def on_time(ctx: PlatformContext, state) -> None:
+    text = (ctx.text or "").strip()
     try:
         birth_time = datetime.strptime(text, "%H:%M").time()
     except ValueError:
-        await message.answer(
+        await ctx.reply(
             "Не понял время. Нужно <code>HH:MM</code>, например <code>14:30</code>. "
             "Или нажми кнопку «Не знаю точного времени»."
         )
         return
 
     await state.update_data(birth_time=birth_time.isoformat(), time_unknown=False)
-    await message.answer(
+    await ctx.reply(
         "Отлично ✨\n\n"
         "<b>Город рождения</b> — например, <code>Москва</code> или <code>Новосибирск</code>:"
     )
@@ -296,28 +278,21 @@ async def on_time(message: Message, state: FSMContext) -> None:
 # ─── Шаг 5: город ─────────────────────────────────────────────────────────────
 
 @router.message(Onboarding.waiting_for_city)
-async def on_city(
-    message: Message, state: FSMContext, session: AsyncSession, user: User
-) -> None:
-    query = (message.text or "").strip()
+async def on_city(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
+    query = (ctx.text or "").strip()
     if len(query) < 2:
-        await message.answer(
-            "Слишком короткое название. Введи город, например <code>Москва</code>."
-        )
+        await ctx.reply("Слишком короткое название. Введи город, например <code>Москва</code>.")
         return
 
     if not await rate_limit_ok(f"geo:rl:{user.id}", GEOCODE_PER_HOUR, 3600):
-        await message.answer(
-            "⏳ Слишком много запросов городов подряд. Попробуй через несколько минут."
-        )
+        await ctx.reply("⏳ Слишком много запросов городов подряд. Попробуй через несколько минут.")
         return
 
-    progress = await message.answer("🔍 Ищу твой город на карте…")
+    await ctx.reply("🔍 Ищу твой город на карте…")
     result = await geocode_city(session, query)
-    await progress.delete()
 
     if result is None:
-        await message.answer(
+        await ctx.reply(
             "Не нашла такой город — попробуй иначе, "
             "например <code>Санкт-Петербург, Россия</code>"
         )
@@ -331,19 +306,14 @@ async def on_city(
         city_input=query,
     )
     data = await state.get_data()
-    await message.answer(_format_birth_summary(data), reply_markup=confirm_kb())
+    await ctx.reply(_format_birth_summary(data), confirm_kb())
     await state.set_state(Onboarding.confirming)
 
 
 # ─── Шаг 6: подтверждение данных рождения ─────────────────────────────────────
 
 @router.callback_query(Onboarding.confirming, F.data == "onb:save")
-async def on_confirm_save(
-    call: CallbackQuery,
-    state: FSMContext,
-    session: AsyncSession,
-    user: User,
-) -> None:
+async def on_confirm_save(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
     data = await state.get_data()
     profile = await session.get(BirthProfile, user.id)
     if profile is None:
@@ -357,63 +327,50 @@ async def on_confirm_save(
     profile.tz = data["tz"]
     profile.city_name = data.get("city_input") or data["city_display"]
     await session.commit()
-    await call.answer("Данные рождения сохранены")
+    await ctx.answer_callback("Данные рождения сохранены")
 
-    # Next: ask about astro terms preference
-    await _ask_astro_terms(call.message, state)
+    await _ask_astro_terms(ctx, state)
 
 
 @router.callback_query(Onboarding.confirming, F.data == "onb:restart")
-async def on_confirm_restart(call: CallbackQuery, state: FSMContext) -> None:
-    # Go back to date (keep name/gender already in state)
+async def on_confirm_restart(ctx: PlatformContext, state) -> None:
     await state.set_state(Onboarding.waiting_for_date)
-    await call.message.answer(
-        "Хорошо. Введи <b>дату рождения</b> в формате <code>DD.MM.YYYY</code>:"
-    )
-    await call.answer()
+    await ctx.reply("Хорошо. Введи <b>дату рождения</b> в формате <code>DD.MM.YYYY</code>:")
+    await ctx.answer_callback()
 
 
 # ─── Шаг 7: астротермины ──────────────────────────────────────────────────────
 
-async def _ask_astro_terms(target, state: FSMContext) -> None:
+async def _ask_astro_terms(ctx: PlatformContext, state) -> None:
     await state.set_state(Onboarding.choosing_astro_terms)
-    await target.answer(
+    await ctx.reply(
         "Последний вопрос — как тебе удобнее читать ответы?\n\n"
         "<b>С астрологическими терминами</b> (квадратура, Марс в Овне, транзиты…) — "
         "если ты знаком с астрологией.\n\n"
         "<b>Без терминов</b> — Астра будет объяснять через качества и жизненные темы, "
         "без специальных слов. Подходит тем, кто только знакомится.",
-        reply_markup=astro_terms_kb(),
+        astro_terms_kb(),
     )
 
 
 @router.callback_query(Onboarding.choosing_astro_terms, F.data.startswith("onb:terms:"))
-async def on_astro_terms(call: CallbackQuery, state: FSMContext) -> None:
-    enabled = call.data.endswith(":yes")
+async def on_astro_terms(ctx: PlatformContext, state) -> None:
+    enabled = (ctx.payload or "").endswith(":yes")
     await state.update_data(astro_terms=enabled)
-    await call.answer()
-    # Show final confirmation with all data
-    await _show_final_confirm(call.message, state)
+    await ctx.answer_callback()
+    await _show_final_confirm(ctx, state)
 
 
-# ─── Шаг 8: финальное подтверждение всех данных ───────────────────────────────
+# ─── Шаг 8: финальное подтверждение ───────────────────────────────────────────
 
-async def _show_final_confirm(target, state: FSMContext) -> None:
+async def _show_final_confirm(ctx: PlatformContext, state) -> None:
     await state.set_state(Onboarding.final_confirm)
     data = await state.get_data()
-    await target.answer(
-        _format_final_summary(data),
-        reply_markup=final_confirm_kb(),
-    )
+    await ctx.reply(_format_final_summary(data), final_confirm_kb())
 
 
 @router.callback_query(Onboarding.final_confirm, F.data == "onb:final:ok")
-async def on_final_ok(
-    call: CallbackQuery,
-    state: FSMContext,
-    session: AsyncSession,
-    user: User,
-) -> None:
+async def on_final_ok(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
     data = await state.get_data()
     user.display_name = data.get("display_name") or None
     user.gender = data.get("gender") or None
@@ -425,37 +382,25 @@ async def on_final_ok(
 
     from astrobot.bot.handlers.natal import generate_natal
 
-    # Ack the callback up-front: natal generation below can take 30s+, and a
-    # callback query expires after ~15s ("query is too old" otherwise).
-    await call.answer("Готово")
+    await ctx.answer_callback("Готово")
 
     name_part = f", {user.display_name}" if user.display_name else ""
-    await call.message.answer(
-        f"🌙 Запомнила{name_part} ✨",
-        reply_markup=ReplyKeyboardRemove(),
-    )
+    await ctx.reply(f"🌙 Запомнила{name_part} ✨")
     profile = await session.get(BirthProfile, user.id)
     if profile is not None:
-        await generate_natal(call.message, session, user, profile)
+        await generate_natal(ctx, session, user, profile)
     else:
-        await send_main_menu(call.message, user, session)
+        await show_main_menu(ctx, user, session)
 
 
 @router.callback_query(Onboarding.final_confirm, F.data == "onb:final:restart")
-async def on_final_restart(
-    call: CallbackQuery,
-    state: FSMContext,
-    session: AsyncSession,
-    user: User,
-) -> None:
-    # Delete birth profile saved at step 6 + stale horoscope cache
+async def on_final_restart(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
     profile = await session.get(BirthProfile, user.id)
     if profile is not None:
         await session.delete(profile)
     await session.execute(delete(HoroscopeCache).where(HoroscopeCache.user_id == user.id))
     await session.commit()
 
-    # Clear and restart from the very beginning (name first)
     await state.clear()
     await state.update_data(
         display_name=user.display_name,
@@ -464,20 +409,15 @@ async def on_final_restart(
     )
     await state.set_state(Onboarding.waiting_for_name)
     hint = f" Сейчас: <b>{user.display_name}</b>." if user.display_name else ""
-    await call.message.answer(
-        f"Хорошо, начнём сначала. Как тебя зовут?{hint}",
-        reply_markup=name_skip_kb(),
-    )
-    await call.answer()
+    await ctx.reply(f"Хорошо, начнём сначала. Как тебя зовут?{hint}", name_skip_kb())
+    await ctx.answer_callback()
 
 
 # ─── cancel ───────────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "cancel")
-async def on_cancel(
-    call: CallbackQuery, state: FSMContext, session: AsyncSession, user: User
-) -> None:
+async def on_cancel(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
     await state.clear()
-    await call.message.answer("Хорошо, отложила ✨")
-    await send_main_menu(call.message, user, session)
-    await call.answer()
+    await ctx.reply("Хорошо, отложила ✨")
+    await show_main_menu(ctx, user, session)
+    await ctx.answer_callback()
