@@ -62,6 +62,17 @@ def main() -> None:
         _set_webhook(settings)
         return
 
+    if settings.platform == "max":
+        # MAX runs the bot in polling — no web app (admin/webhooks) for now.
+        # ponytail: polling; add a web app + MAX webhook if update volume needs it.
+        import asyncio
+
+        from astrobot.bot.max_dispatcher import build_max_bot, build_max_dispatcher
+
+        bot = build_max_bot()
+        asyncio.run(build_max_dispatcher(bot).start_polling(bot))
+        return
+
     uvicorn.run(
         "astrobot.web.app:app",
         host=settings.web_host,

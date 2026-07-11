@@ -21,7 +21,7 @@ from functools import cache
 
 import structlog
 from maxapi import Bot, Dispatcher, F
-from maxapi.context.context import MemoryContext
+from maxapi.context.context import RedisContext
 from maxapi.enums.parse_mode import TextFormat
 from maxapi.filters.command import Command, CommandStart
 from maxapi.filters.middleware import BaseMiddleware
@@ -57,6 +57,7 @@ from astrobot.bot.states import (
 from astrobot.config import get_settings
 from astrobot.db.models import User
 from astrobot.db.session import get_sessionmaker
+from astrobot.redis_client import get_redis
 from astrobot.referral import generate_code, parse_start_arg, try_apply_referral
 
 log = structlog.get_logger(__name__)
@@ -261,8 +262,8 @@ _MSG_STATES = {
 
 
 def build_max_dispatcher(bot: Bot) -> Dispatcher:
-    # MemoryContext for now; switch to RedisContext for cross-restart FSM later.
-    dp = Dispatcher(storage=MemoryContext)
+    # Redis-backed FSM so in-progress flows survive restarts (same Redis as TG).
+    dp = Dispatcher(storage=RedisContext, redis_client=get_redis())
     dp.middleware(DbSessionMiddleware())
     dp.middleware(UserMiddleware())
     dp.middleware(ContextMiddleware(bot))

@@ -35,10 +35,13 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 COPY uv.lock* ./
-RUN uv sync --no-install-project
+# --extra max installs maxapi so ONE image serves both Telegram and MAX
+# (PLATFORM selects the runtime; the TG path never imports maxapi).
+RUN uv sync --no-install-project --extra max
 
 COPY src/ ./src/
-RUN uv sync
+COPY alembic.ini ./
+RUN uv sync --extra max
 
 ENV PATH="/opt/venv/bin:$PATH"
 

@@ -1,0 +1,62 @@
+# MAX bot deploy — polling, own Postgres/Redis, SAME image as the Telegram deploy.
+# The image already installs maxapi (--extra max); PLATFORM=max selects the runtime.
+#
+#   docker compose -f docker-compose.max.yml up -d
+#
+# Needs a .env.max next to this file with at least:
+#   PLATFORM=max
+#   BOT_TOKEN=<MAX bot token from @MasterBot>
+#   BOT_USERNAME=<MAX bot username, e.g. id231129141847_bot>   # for referral links
+#   DATABASE_URL=postgresql+asyncpg://astrobot:${POSTGRES_PASSWORD}@postgres:5432/astrobot
+#   REDIS_URL=redis://redis:6379/0
+#   LLM_API_KEY=... LLM_BASE_URL=... LLM_MODEL=...
+#   POSTGRES_PASSWORD=...
+#   # later, for payments: a SEPARATE YooKassa shop
+#   YOOKASSA_SHOP_ID=... YOOKASSA_SECRET_KEY=... YOOKASSA_RETURN_URL=https://max.ru/<bot>
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: astrobot
+      POSTGRES_USER: astrobot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - max_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "astrobot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - max_redis:/data
+    restart: unless-stopped
+
+  migrate:
+    image: ${IMAGE_NAME:-ghcr.io/chiaker/astrobot}:${IMAGE_TAG:-latest}
+    env_file: .env.max
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    image: ${IMAGE_NAME:-ghcr.io/chiaker/astrobot}:${IMAGE_TAG:-latest}
+    env_file: .env.max
+    command: ["python", "-m", "astrobot.main"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  max_pgdata:
+  max_redis:
