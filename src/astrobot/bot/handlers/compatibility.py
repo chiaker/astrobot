@@ -23,6 +23,7 @@ from astrobot.bot.responses import send_response
 from astrobot.bot.states import CompatFlow
 from astrobot.bot.utils import need_profile_ctx, rate_limit_ok, user_llm_lock
 from astrobot.db.models import BirthProfile, LLMUsageLog, Response, User
+from astrobot.gender import guess_gender
 from astrobot.limits import (
     check_question,
     consume_question_from_priority_bucket,
@@ -49,6 +50,17 @@ def _last_kb(resp_id: int, user: User) -> Keyboard:
         rows.append(pr)
     rows.append([MENU_BACK_BTN])
     return Keyboard.from_rows(rows)
+
+
+def _gender_note(name_a: str, gender_a: str | None, name_b: str, gender_b: str | None) -> str:
+    # Tell the LLM each person's gender so it agrees род correctly. Partner gender
+    # is guessed from the name (ponytail: ambiguous names like «Саша» get no hint —
+    # the model guesses, same as before; add an explicit ask-step if it matters).
+    ru = {"m": "мужчина", "f": "женщина"}
+    parts = [f"{n} — {ru[g]}" for n, g in ((name_a, gender_a), (name_b, gender_b)) if g in ru]
+    if not parts:
+        return ""
+    return " Пол: " + ", ".join(parts) + ". Согласуй род прилагательных и глаголов по полу каждого."
 
 
 async def _start_new(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
@@ -224,8 +236,11 @@ async def _do_compat(
         response = await llm.complete(
             system=build_system_compatibility(user),
             cached_context=context,
-            user_message=f"Дай разбор совместимости: {name_a} и {name_b}.",
-            max_tokens=1800,
+            user_message=(
+                f"Дай разбор совместимости: {name_a} и {name_b}."
+                + _gender_note(name_a, user.gender, name_b, guess_gender(name_b))
+            ),
+            max_tokens=2800,
             kind=_KIND,
         )
         text = response.text
