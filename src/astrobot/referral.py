@@ -72,5 +72,6 @@ async def try_apply_referral(
     return inviter, inviter_credited
 
 
-async def build_share_link(bot_username: str, code: str) -> str:
-    return f"https://t.me/{bot_username}?start=ref_{code}"
+def build_share_link(bot_username: str, code: str, platform: str = "telegram") -> str:
+    host = "https://max.ru" if platform == "max" else "https://t.me"
+    return f"{host}/{bot_username}?start=ref_{code}"

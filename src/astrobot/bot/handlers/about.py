@@ -7,6 +7,7 @@ from astrobot.bot.platform import Keyboard, PlatformContext
 from astrobot.config import get_settings
 from astrobot.db.models import User
 from astrobot.legal.disclaimer import SHORT_DISCLAIMER
+from astrobot.referral import build_share_link
 
 router = Router(name="about")
 
@@ -41,8 +42,8 @@ async def on_about(ctx: PlatformContext) -> None:
 
 @router.callback_query(F.data == "referral:show")
 async def on_referral_show(ctx: PlatformContext, user: User) -> None:
-    bot_username = get_settings().bot_username or "your_bot"
-    link = f"https://t.me/{bot_username}?start=ref_{user.referral_code}"
+    s = get_settings()
+    link = build_share_link(s.bot_username or "your_bot", user.referral_code, s.platform)
     text = (
         "🤝 <b>Пригласи друга к Астре</b>\n\n"
         f"Твоя реферальная ссылка:\n<code>{link}</code>\n\n"

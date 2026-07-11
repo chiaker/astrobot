@@ -57,7 +57,7 @@ from astrobot.bot.states import (
 from astrobot.config import get_settings
 from astrobot.db.models import User
 from astrobot.db.session import get_sessionmaker
-from astrobot.referral import generate_code
+from astrobot.referral import generate_code, parse_start_arg, try_apply_referral
 
 log = structlog.get_logger(__name__)
 
@@ -269,7 +269,30 @@ def build_max_dispatcher(bot: Bot) -> Dispatcher:
 
     # bot_started → main menu (build via bot since there's no ctx for this event).
     @dp.bot_started()
-    async def _on_bot_started(event, session, user):
+    async def _on_bot_started(event, session, user, is_new_user=False):
+        # Referral deep link arrives in bot_started.payload on MAX (not /start text).
+        payload = getattr(event, "payload", None)
+        code = parse_start_arg(f"/start {payload}") if payload else None
+        if code and is_new_user:
+            applied = await try_apply_referral(session, user, code)
+            if applied is not None:
+                inviter, credited = applied
+                await session.commit()
+                await bot.send_message(
+                    user_id=user.tg_user_id,
+                    text="🎁 Друг тебя пригласил — я добавила <b>+2 бесплатных вопроса</b> ✨",
+                    format=TextFormat.HTML,
+                )
+                if credited:
+                    try:
+                        await bot.send_message(
+                            user_id=inviter.tg_user_id,
+                            text="🎁 По твоей реферальной ссылке зарегистрировался новый "
+                            "пользователь — тебе <b>+2 бесплатных вопроса</b>! ✨",
+                            format=TextFormat.HTML,
+                        )
+                    except Exception:
+                        pass
         text, kb = await h_menu.render_main_menu(user, session)
         await bot.send_message(
             user_id=user.tg_user_id, text=text,
