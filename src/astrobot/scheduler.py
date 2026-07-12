@@ -28,6 +28,7 @@ from astrobot.db.models import (
     BirthProfile,
     Broadcast,
     BroadcastVariant,
+    FollowupConfig,
     HoroscopeCache,
     LLMUsageLog,
     LunarEvent,
@@ -526,33 +527,51 @@ def _animation_media(ref: str) -> Media:
     return Media.from_url(ref) if "://" in ref else Media.from_file_id(ref)
 
 
-async def _send_followup(pbot: PlatformBot, chat_id: int, animation: str) -> None:
+def _followup_media(config: FollowupConfig | None) -> Media | None:
+    """Resolve the follow-up animation: admin-cached id/url first, then uploaded
+    bytes, then the FOLLOWUP_ANIMATION env fallback. None → text-only."""
+    if config and config.animation:
+        return _animation_media(config.animation)
+    if config and config.animation_data:
+        return Media.from_bytes(
+            bytes(config.animation_data), filename=config.animation_name or "animation.mp4"
+        )
+    env = get_settings().followup_animation
+    return _animation_media(env) if env else None
+
+
+async def _send_followup(
+    pbot: PlatformBot, chat_id: int, text: str, media: Media | None
+) -> str | None:
     """Send the follow-up: animation+caption if configured (falling back to text
-    on a bad file_id), else plain text. Lets TelegramRetryAfter bubble up."""
+    on a bad file_id), else plain text. Returns a platform file_id to cache after a
+    first upload, else None. Lets TelegramRetryAfter bubble up."""
     kb = followup_cta_kb()
-    if animation:
+    if media is not None:
         try:
-            await pbot.send_animation(
-                chat_id, _animation_media(animation), caption=_FOLLOWUP_TEXT, kb=kb
-            )
-            return
+            sent = await pbot.send_animation(chat_id, media, caption=text, kb=kb)
+            return sent.file_id
         except TelegramRetryAfter:
             raise
         except Exception as e:
             log.warning("followup_animation_failed", chat_id=chat_id, error=str(e))
-    await pbot.send_message(chat_id, _FOLLOWUP_TEXT, kb)
+    await pbot.send_message(chat_id, text, kb)
+    return None
 
 
 async def day2_followup_job(pbot: PlatformBot) -> None:
     """Once per user, ~48h after registration: send the follow-up nudge. Only to
     users who completed onboarding (have a BirthProfile), since the copy talks
-    about their natal chart. Deduped via User.followup_sent_at."""
+    about their natal chart. Deduped via User.followup_sent_at. Text/animation are
+    admin-editable (FollowupConfig), falling back to the hardcoded default."""
     now = datetime.now(UTC)
     cutoff = now - timedelta(hours=FOLLOWUP_DELAY_HOURS)
-    animation = get_settings().followup_animation
 
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as session:
+        config = await session.get(FollowupConfig, 1)
+        text = config.text.strip() if config and config.text.strip() else _FOLLOWUP_TEXT
+        media = _followup_media(config)
         users = list(
             await session.scalars(
                 select(User)
@@ -567,7 +586,10 @@ async def day2_followup_job(pbot: PlatformBot) -> None:
         )
         for user in users:
             try:
-                await _send_followup(pbot, user.tg_user_id, animation)
+                new_id = await _send_followup(pbot, user.tg_user_id, text, media)
+                # Cache the file_id after the first upload so the batch reuses it.
+                if new_id and config and not config.animation:
+                    config.animation = new_id
                 user.followup_sent_at = now
                 await session.commit()
                 PUSH_SENT.labels(kind="followup", result="ok").inc()
