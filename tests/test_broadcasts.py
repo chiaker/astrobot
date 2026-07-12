@@ -7,7 +7,7 @@ from astrobot.bot.handlers.broadcast import _variant_question
 from astrobot.bot.keyboards import build_broadcast_kb
 from astrobot.db.models import BroadcastVariant, User
 from astrobot.limits import segment_of
-from astrobot.scheduler import _send_broadcast_variant
+from astrobot.scheduler import _send_broadcast_variant, _send_followup
 
 
 def _now() -> datetime:
@@ -174,22 +174,53 @@ async def test_send_plain_text_when_no_animation():
 
 
 async def test_send_uploads_bytes_and_returns_file_id():
-    from unittest.mock import MagicMock
+    from astrobot.bot.platform.base import Media, SentMessage
 
-    from aiogram.types import BufferedInputFile
-
-    bot = AsyncMock()
-    msg = MagicMock()
-    msg.animation.file_id = "cached_123"
-    msg.document = None
-    bot.send_animation.return_value = msg
+    pbot = AsyncMock()
+    pbot.send_animation.return_value = SentMessage(message_id=1, file_id="cached_123")
 
     v = BroadcastVariant(id=1, text="hi", animation="", animation_name="a.gif", buttons=[])
     v.animation_data = b"GIF89a-bytes"
-    fid = await _send_broadcast_variant(bot, 5, v)
+    fid = await _send_broadcast_variant(pbot, 5, v)
 
     assert fid == "cached_123"  # caller caches this into variant.animation
-    bot.send_animation.assert_awaited_once()
-    # Sent as an actual upload, not a file_id string.
-    assert isinstance(bot.send_animation.await_args.kwargs["animation"], BufferedInputFile)
-    bot.send_message.assert_not_awaited()
+    pbot.send_animation.assert_awaited_once()
+    # Sent as an actual upload (raw bytes), not a cached id/URL string.
+    media = pbot.send_animation.await_args.args[1]
+    assert isinstance(media, Media) and media.data == b"GIF89a-bytes"
+    pbot.send_message.assert_not_awaited()
+
+
+# ─── day-2 follow-up config resolution ─────────────────────────────────────────
+
+def test_followup_media_resolution(monkeypatch):
+    from astrobot import scheduler
+    from astrobot.db.models import FollowupConfig
+
+    class _S:
+        followup_animation = ""
+
+    monkeypatch.setattr(scheduler, "get_settings", lambda: _S())
+
+    # cached id/url wins
+    c = FollowupConfig(id=1, animation="https://x/a.gif")
+    assert scheduler._followup_media(c).url == "https://x/a.gif"
+
+    # uploaded bytes next
+    c = FollowupConfig(id=1, animation="", animation_name="a.gif")
+    c.animation_data = b"GIF89a"
+    assert scheduler._followup_media(c).data == b"GIF89a"
+
+    # nothing configured + no env → text-only
+    assert scheduler._followup_media(None) is None
+
+    # env fallback when config empty
+    _S.followup_animation = "file_env"
+    assert scheduler._followup_media(None).file_id == "file_env"
+
+
+async def test_send_followup_plain_text_when_no_media():
+    pbot = AsyncMock()
+    await _send_followup(pbot, 7, "hello", None)
+    pbot.send_animation.assert_not_awaited()
+    pbot.send_message.assert_awaited_once()

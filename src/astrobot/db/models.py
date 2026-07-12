@@ -396,6 +396,22 @@ class BroadcastVariant(Base):
     broadcast: Mapped[Broadcast] = relationship(back_populates="variants")
 
 
+class FollowupConfig(Base):
+    """Editable content for the day-2 (48h) follow-up nudge. Single row (id=1),
+    managed in the admin under Рассылки. When unset the scheduler falls back to
+    the hardcoded default text + FOLLOWUP_ANIMATION env. Animation storage mirrors
+    BroadcastVariant: uploaded bytes are the source of truth, `animation` caches
+    the platform file_id after the first send."""
+
+    __tablename__ = "followup_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)  # always 1
+    text: Mapped[str] = mapped_column(Text, default="", server_default="")
+    animation: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    animation_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    animation_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 class LLMUsageLog(Base):
     __tablename__ = "llm_usage_logs"
 

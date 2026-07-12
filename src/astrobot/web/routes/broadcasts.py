@@ -13,7 +13,13 @@ from sqlalchemy.orm import defer
 from starlette.datastructures import UploadFile
 
 from astrobot.config import get_settings
-from astrobot.db.models import BirthProfile, Broadcast, BroadcastVariant, User
+from astrobot.db.models import (
+    BirthProfile,
+    Broadcast,
+    BroadcastVariant,
+    FollowupConfig,
+    User,
+)
 from astrobot.db.session import get_session
 from astrobot.limits import (
     BROADCAST_SEGMENT_LABELS,
@@ -204,7 +210,14 @@ def _render_list(rows: list[Broadcast]) -> str:
         "<form method='post' action='/admin/broadcasts' style='display:flex;gap:8px'>"
         "<input type='text' name='name' placeholder='Название кампании' required style='flex:1'>"
         "<button type='submit' class='btn btn-p'>Создать</button>"
-        "</form></div>"
+        "</form></div>",
+        "<div class='card'>"
+        "<div class='card-head'><span class='card-title'>📩 Day-2 follow-up</span></div>"
+        "<p class='muted'>Сообщение, которое уходит юзеру через 48ч после онбординга. "
+        "Можно менять текст и прикрепить гифку.</p>"
+        "<p style='margin-top:8px'>"
+        "<a href='/admin/broadcasts/followup' class='btn btn-ghost'>Редактировать →</a>"
+        "</p></div>",
     ]
     if not rows:
         body.append("<div class='card'><p>Пока нет рассылок.</p></div>")
@@ -493,6 +506,88 @@ async def broadcast_create(
     session.add(b)
     await session.commit()
     return RedirectResponse(url=f"/admin/broadcasts/{b.id}", status_code=303)
+
+
+# NOTE: registered before /admin/broadcasts/{broadcast_id} so "followup" isn't
+# swallowed by the int path param.
+def _render_followup_editor(config: FollowupConfig | None, msg: str, err: str) -> str:
+    from astrobot.scheduler import _FOLLOWUP_TEXT  # default copy (lazy import)
+
+    text = config.text if (config and config.text) else ""
+    if config and config.animation_name:
+        anim = f"📎 {_esc(config.animation_name)}"
+    elif config and config.animation:
+        anim = f"🔗 {_esc(config.animation[:60])}"
+    else:
+        anim = "нет"
+    note = ""
+    if msg:
+        note = f"<div class='card' style='border-color:#059669'>{_esc(msg)}</div>"
+    elif err:
+        note = f"<div class='card' style='border-color:#dc2626'>{_esc(err)}</div>"
+    body = (
+        note
+        + "<div class='card'>"
+        "<div class='card-head'><span class='card-title'>📩 Day-2 follow-up</span></div>"
+        "<form method='post' action='/admin/broadcasts/followup' enctype='multipart/form-data'>"
+        "<label class='muted'>Текст сообщения</label>"
+        f"<textarea name='text' rows='9' style='width:100%' "
+        f"placeholder='{_esc(_FOLLOWUP_TEXT)}'>{_esc(text)}</textarea>"
+        f"<p class='muted' style='margin-top:10px'>Текущая гифка: {anim}</p>"
+        "<p><input type='file' name='animation_file' "
+        "accept='image/gif,video/mp4,image/*,video/*'></p>"
+        "<p><label><input type='checkbox' name='animation_clear'> удалить гифку</label></p>"
+        f"<p class='muted'>Пусто → дефолтный текст. Гифка ≤ {MAX_ANIM_MB} МБ; "
+        "на MAX загружается заново каждый раз (там нет переиспользуемого id).</p>"
+        "<p style='margin-top:12px'>"
+        "<button type='submit' class='btn btn-p'>Сохранить</button> "
+        "<a href='/admin/broadcasts' class='btn btn-ghost'>← Назад</a>"
+        "</p></form></div>"
+    )
+    return _layout("Day-2 follow-up", body, active="broadcasts")
+
+
+@router.get("/admin/broadcasts/followup", response_class=HTMLResponse)
+async def followup_editor(
+    request: Request, msg: str = "", err: str = "", session: AsyncSession = Depends(get_session)
+):
+    if (r := _auth_redirect(request)) is not None:
+        return r
+    config = await session.get(FollowupConfig, 1)
+    return HTMLResponse(_render_followup_editor(config, msg, err))
+
+
+@router.post("/admin/broadcasts/followup")
+async def followup_save(request: Request, session: AsyncSession = Depends(get_session)):
+    if (r := _auth_redirect(request)) is not None:
+        return r
+    form = await request.form()
+    config = await session.get(FollowupConfig, 1)
+    if config is None:
+        config = FollowupConfig(id=1)
+        session.add(config)
+
+    config.text = (form.get("text") or "").strip()
+
+    upload = form.get("animation_file")
+    if isinstance(upload, UploadFile) and upload.filename:
+        data = await upload.read()
+        if len(data) > MAX_ANIM_BYTES:
+            return RedirectResponse(
+                url=f"/admin/broadcasts/followup?err=Файл больше {MAX_ANIM_MB} МБ — не сохранён.",
+                status_code=303,
+            )
+        if data:
+            config.animation_data = data
+            config.animation_name = upload.filename[:255]
+            config.animation = ""  # drop stale cached id → re-cache on next send
+    elif form.get("animation_clear") == "on":
+        config.animation_data = None
+        config.animation_name = None
+        config.animation = ""
+
+    await session.commit()
+    return RedirectResponse(url="/admin/broadcasts/followup?msg=Сохранено.", status_code=303)
 
 
 @router.get("/admin/broadcasts/{broadcast_id}", response_class=HTMLResponse)
