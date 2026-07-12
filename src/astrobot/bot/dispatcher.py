@@ -1,4 +1,4 @@
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import DefaultKeyBuilder, RedisStorage
@@ -73,4 +73,36 @@ def build_dispatcher() -> Dispatcher:
     dp.include_router(support.router)
     dp.include_router(response_toggle.router)
     dp.include_router(fallback.router)
+
+    _adapt_ctx_handlers(dp)
     return dp
+
+
+def _adapt_ctx_handlers(dp: Dispatcher) -> None:
+    """Make platform-neutral (`ctx`-first) handlers callable by aiogram.
+
+    aiogram always binds the update to the handler's first positional param
+    (see CallableObject.call). Our migrated handlers take `ctx` there while the
+    ContextMiddleware also injects `ctx` via data — so aiogram passes it both
+    positionally and by keyword: `TypeError: got multiple values for 'ctx'`.
+    For handlers that don't take the raw event (no `message`/`callback_query`
+    param) we drop the positional event and call purely by keyword — the same
+    contract as the MAX dispatcher's `_wrap`. Handlers that still use the raw
+    event (fallback, successful-payment, the error handler) are left untouched.
+    """
+
+    def _drop_event(orig):
+        async def _adapted(_event, **kwargs):
+            return await orig(**kwargs)
+
+        return _adapted
+
+    def _walk(router: Router) -> None:
+        for name in ("message", "callback_query"):
+            for handler in router.observers[name].handlers:
+                if {"message", "callback_query"}.isdisjoint(handler.params):
+                    handler.callback = _drop_event(handler.callback)
+        for sub in router.sub_routers:
+            _walk(sub)
+
+    _walk(dp)

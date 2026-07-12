@@ -174,22 +174,18 @@ async def test_send_plain_text_when_no_animation():
 
 
 async def test_send_uploads_bytes_and_returns_file_id():
-    from unittest.mock import MagicMock
+    from astrobot.bot.platform.base import Media, SentMessage
 
-    from aiogram.types import BufferedInputFile
-
-    bot = AsyncMock()
-    msg = MagicMock()
-    msg.animation.file_id = "cached_123"
-    msg.document = None
-    bot.send_animation.return_value = msg
+    pbot = AsyncMock()
+    pbot.send_animation.return_value = SentMessage(message_id=1, file_id="cached_123")
 
     v = BroadcastVariant(id=1, text="hi", animation="", animation_name="a.gif", buttons=[])
     v.animation_data = b"GIF89a-bytes"
-    fid = await _send_broadcast_variant(bot, 5, v)
+    fid = await _send_broadcast_variant(pbot, 5, v)
 
     assert fid == "cached_123"  # caller caches this into variant.animation
-    bot.send_animation.assert_awaited_once()
-    # Sent as an actual upload, not a file_id string.
-    assert isinstance(bot.send_animation.await_args.kwargs["animation"], BufferedInputFile)
-    bot.send_message.assert_not_awaited()
+    pbot.send_animation.assert_awaited_once()
+    # Sent as an actual upload (raw bytes), not a cached id/URL string.
+    media = pbot.send_animation.await_args.args[1]
+    assert isinstance(media, Media) and media.data == b"GIF89a-bytes"
+    pbot.send_message.assert_not_awaited()
