@@ -510,7 +510,9 @@ async def broadcast_create(
 
 # NOTE: registered before /admin/broadcasts/{broadcast_id} so "followup" isn't
 # swallowed by the int path param.
-def _render_followup_editor(config: FollowupConfig | None, msg: str, err: str) -> str:
+def _render_followup_editor(
+    config: FollowupConfig | None, default_tg: int | str, msg: str, err: str
+) -> str:
     from astrobot.scheduler import _FOLLOWUP_TEXT  # default copy (lazy import)
 
     text = config.text if (config and config.text) else ""
@@ -543,6 +545,16 @@ def _render_followup_editor(config: FollowupConfig | None, msg: str, err: str) -
         "<button type='submit' class='btn btn-p'>Сохранить</button> "
         "<a href='/admin/broadcasts' class='btn btn-ghost'>← Назад</a>"
         "</p></form></div>"
+        # Test send — uses the CURRENTLY SAVED content, so save before testing.
+        "<div class='card'>"
+        "<div class='card-head'><span class='card-title'>Проверка</span></div>"
+        "<p class='muted'>Отправит сохранённый вариант указанному получателю "
+        "(по умолчанию — ops-чат). Сохрани перед проверкой.</p>"
+        "<form method='post' action='/admin/broadcasts/followup/test' style='display:flex;gap:8px'>"
+        f"<input type='text' name='tg_id' value='{_esc(str(default_tg or ''))}' "
+        "placeholder='ID получателя' style='flex:1'>"
+        "<button type='submit' class='btn btn-ghost'>Отправить себе</button>"
+        "</form></div>"
     )
     return _layout("Day-2 follow-up", body, active="broadcasts")
 
@@ -554,7 +566,39 @@ async def followup_editor(
     if (r := _auth_redirect(request)) is not None:
         return r
     config = await session.get(FollowupConfig, 1)
-    return HTMLResponse(_render_followup_editor(config, msg, err))
+    default_tg = get_settings().ops_chat_id
+    return HTMLResponse(_render_followup_editor(config, default_tg, msg, err))
+
+
+@router.post("/admin/broadcasts/followup/test")
+async def followup_test(
+    request: Request, tg_id: str = Form(default=""), session: AsyncSession = Depends(get_session)
+):
+    if (r := _auth_redirect(request)) is not None:
+        return r
+    try:
+        target = int(tg_id.strip())
+    except ValueError:
+        return RedirectResponse(
+            url="/admin/broadcasts/followup?err=Укажи корректный ID получателя.", status_code=303
+        )
+
+    # Send exactly what the scheduler would: saved text (or default) + resolved media.
+    from astrobot.scheduler import _FOLLOWUP_TEXT, _followup_media, _send_followup
+
+    config = await session.get(FollowupConfig, 1)
+    text = config.text.strip() if config and config.text.strip() else _FOLLOWUP_TEXT
+    media = _followup_media(config)
+    pbot = request.app.state.pbot
+    try:
+        new_id = await _send_followup(pbot, target, text, media)
+        if new_id and config and not config.animation:
+            config.animation = new_id
+            await session.commit()
+        out = f"msg=Тест отправлен в чат {target}."
+    except Exception as e:  # noqa: BLE001 — surface any send error to the admin
+        out = f"err=Не удалось отправить: {e}"
+    return RedirectResponse(url=f"/admin/broadcasts/followup?{out}", status_code=303)
 
 
 @router.post("/admin/broadcasts/followup")
@@ -723,9 +767,9 @@ async def broadcast_test(
     # Imported lazily to avoid a heavy import at module load.
     from astrobot.scheduler import _send_broadcast_variant
 
-    bot = request.app.state.bot
+    pbot = request.app.state.pbot
     try:
-        new_file_id = await _send_broadcast_variant(bot, target, variant)
+        new_file_id = await _send_broadcast_variant(pbot, target, variant)
         # Cache the file_id from the first upload so real sends skip re-uploading.
         if new_file_id and not variant.animation:
             variant.animation = new_file_id

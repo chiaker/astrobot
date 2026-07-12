@@ -74,6 +74,17 @@ def _to_input_media(media: Media) -> Any:
     raise ValueError("Media без источника (path/url/file_id/data)")
 
 
+# MAX has no persistent "Menu" button (unlike Telegram). To keep the menu one tap
+# away we attach this to any outgoing message that has no keyboard of its own.
+# Payload matches the menu:open handler; inlined (not imported from bot.keyboards)
+# to avoid a circular import — keyboards imports Button/Keyboard from this package.
+_MENU_FALLBACK_KB = Keyboard.from_rows([[Button(text="🔙 Меню", payload="menu:open")]])
+
+
+def _with_menu(kb: Keyboard | None, menu_fallback: bool) -> Keyboard | None:
+    return _MENU_FALLBACK_KB if (kb is None and menu_fallback) else kb
+
+
 def _attachments(kb: Keyboard | None, media: Any | None = None) -> list[Any] | None:
     """Собрать список attachments из медиа и/или клавиатуры (порядок: медиа, кнопки)."""
     items: list[Any] = []
@@ -158,18 +169,29 @@ class MaxContext(PlatformContext):
     # --- исходящие действия ---
 
     async def reply(
-        self, text: str, kb: Keyboard | None = None, *, disable_preview: bool = True
+        self,
+        text: str,
+        kb: Keyboard | None = None,
+        *,
+        disable_preview: bool = True,
+        menu_fallback: bool = True,
     ) -> SentMessage:
         sent = await self._event.message.answer(
-            text, attachments=_attachments(kb), format=TextFormat.HTML
+            text, attachments=_attachments(_with_menu(kb, menu_fallback)), format=TextFormat.HTML
         )
         return SentMessage(message_id=_message_id(sent))
 
     async def edit(
-        self, text: str, kb: Keyboard | None = None, *, disable_preview: bool = True
+        self,
+        text: str,
+        kb: Keyboard | None = None,
+        *,
+        disable_preview: bool = True,
+        menu_fallback: bool = True,
     ) -> SentMessage:
         # MAX не даёт per-message управления превью ссылок — disable_preview
         # принимается для совместимости интерфейса, но не применяется.
+        kb = _with_menu(kb, menu_fallback)
         if self._callback is not None:
             # attachments=[] очищает клавиатуру, если kb=None.
             await self._callback.edit(
@@ -178,7 +200,7 @@ class MaxContext(PlatformContext):
             self._responded = True  # the edit IS the callback's answer
             return SentMessage(message_id=_callback_message_id(self._callback))
         # У обычного сообщения нет edit — отправляем новое (как fallback в TG).
-        return await self.reply(text, kb)
+        return await self.reply(text, kb, menu_fallback=False)
 
     async def answer_callback(self, text: str | None = None, *, alert: bool = False) -> None:
         # Deferred: don't answer the callback now (that would consume the single

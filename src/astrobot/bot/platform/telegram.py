@@ -127,7 +127,12 @@ class TelegramContext(PlatformContext):
     # --- исходящие действия ---
 
     async def reply(
-        self, text: str, kb: Keyboard | None = None, *, disable_preview: bool = True
+        self,
+        text: str,
+        kb: Keyboard | None = None,
+        *,
+        disable_preview: bool = True,
+        menu_fallback: bool = True,  # Telegram has a native Menu button — ignored here
     ) -> SentMessage:
         sent = await self._safe_answer(
             text,
@@ -137,7 +142,12 @@ class TelegramContext(PlatformContext):
         return SentMessage(message_id=sent.message_id)
 
     async def edit(
-        self, text: str, kb: Keyboard | None = None, *, disable_preview: bool = True
+        self,
+        text: str,
+        kb: Keyboard | None = None,
+        *,
+        disable_preview: bool = True,
+        menu_fallback: bool = True,  # ignored on Telegram
     ) -> SentMessage:
         """Редактировать привязанное к кнопке сообщение; при неудаче — новое."""
         markup = to_markup(kb)

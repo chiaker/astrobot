@@ -188,12 +188,11 @@ async def _send_chunks_ctx(
     for i, chunk in enumerate(chunks):
         if i > 0:
             await asyncio.sleep(INTER_MESSAGE_DELAY)
-        kb = (
-            response_actions_kb(resp_id, extra_row, user)
-            if show_actions and i == len(chunks) - 1
-            else None
-        )
-        sent = await ctx.reply(chunk, kb)
+        is_last = i == len(chunks) - 1
+        kb = response_actions_kb(resp_id, extra_row, user) if show_actions and is_last else None
+        # Only the final chunk gets the MAX menu-fallback button; middle chunks stay
+        # bare so a long answer isn't peppered with "Меню" after every part.
+        sent = await ctx.reply(chunk, kb, menu_fallback=is_last)
         ids.append(sent.message_id)
     return ids
 

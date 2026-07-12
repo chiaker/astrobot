@@ -165,12 +165,23 @@ class PlatformContext(ABC):
         kb: Keyboard | None = None,
         *,
         disable_preview: bool = True,
+        menu_fallback: bool = True,
     ) -> SentMessage:
-        """Отправить НОВОЕ сообщение в чат. HTML-разметка включена адаптером."""
+        """Отправить НОВОЕ сообщение в чат. HTML-разметка включена адаптером.
+
+        menu_fallback: на платформах без постоянной кнопки «Меню» (MAX) к
+        сообщению без своей клавиатуры добавляется кнопка «🔙 Меню». Telegram
+        игнорирует флаг (там есть нативная кнопка). Ставь False для промежуточных
+        кусков длинного ответа, чтобы кнопка была только на последнем."""
 
     @abstractmethod
     async def edit(
-        self, text: str, kb: Keyboard | None = None, *, disable_preview: bool = True
+        self,
+        text: str,
+        kb: Keyboard | None = None,
+        *,
+        disable_preview: bool = True,
+        menu_fallback: bool = True,
     ) -> SentMessage:
         """Отредактировать сообщение, к которому привязана кнопка (навигация меню).
         Если редактирование невозможно (старое/без текста/не изменилось) — адаптер
