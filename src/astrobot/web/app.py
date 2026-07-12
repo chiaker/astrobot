@@ -120,6 +120,17 @@ def _create_max_app(settings) -> FastAPI:
         scheduler.start()
         log.info("max_scheduler_started")
 
+        # Command menu next to the input field (parity with Telegram's blue Menu).
+        try:
+            from maxapi.types.command import BotCommand
+
+            await bot.set_my_commands(
+                BotCommand(name="start", description="Начать / перезапустить"),
+                BotCommand(name="menu", description="Главное меню"),
+            )
+        except Exception as e:
+            log.warning("max_set_commands_failed", error=str(e))
+
         try:
             from astrobot.alerts import notify_ops
 
