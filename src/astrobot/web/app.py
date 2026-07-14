@@ -168,6 +168,24 @@ def _create_max_app(settings) -> FastAPI:
             same_site="strict" if secure else "lax",
         )
     webhook.setup(app, path=settings.max_webhook_path)
+
+    # maxapi enriches incoming updates (e.g. dialog_removed) by fetching the chat;
+    # for a just-removed dialog that fetch 404s and bubbles a 500 out of the webhook
+    # route, which makes MAX retry. Real handler work runs in background tasks
+    # (use_create_task) and never reaches here, so swallowing parse/enrich errors on
+    # the webhook path and acking 200 is safe.
+    from starlette.responses import JSONResponse
+
+    @app.middleware("http")
+    async def _tolerate_webhook_enrich_errors(request, call_next):
+        try:
+            return await call_next(request)
+        except Exception as e:
+            if request.url.path == settings.max_webhook_path:
+                log.warning("max_webhook_enrich_error", error=str(e))
+                return JSONResponse({"ok": True})
+            raise
+
     app.include_router(health.router)
     app.include_router(metrics.router)
     app.include_router(payments.router)
