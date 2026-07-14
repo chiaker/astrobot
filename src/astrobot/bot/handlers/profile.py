@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from astrobot.astrology.geocoding import geocode_city
 from astrobot.bot.keyboards import (
     MENU_BACK_BTN,
+    ONBOARDING_START_BTN,
     horoscope_period_kb,
     name_skip_kb,
     push_hour_kb,
@@ -24,6 +25,10 @@ from astrobot.db.models import (
     HoroscopeCache,
     LLMUsageLog,
     Payment,
+    QuestionLog,
+    Response,
+    Subscription,
+    SupportTicket,
     User,
 )
 from astrobot.limits import (
@@ -160,8 +165,8 @@ async def on_profile(ctx: PlatformContext, session: AsyncSession, user: User) ->
     profile = await session.get(BirthProfile, user.id)
     if profile is None:
         await ctx.edit(
-            "У тебя ещё нет сохранённого профиля. Нажми /start, чтобы пройти онбординг.",
-            with_back([]),
+            "У тебя ещё нет сохранённого профиля. Нажми кнопку ниже, чтобы пройти онбординг.",
+            with_back([[ONBOARDING_START_BTN]]),
         )
         return
     text = await _profile_text(profile, user, session)
@@ -409,7 +414,14 @@ async def on_profile_reset_warn(ctx: PlatformContext, session: AsyncSession, use
         await session.scalar(select(func.count(Favorite.id)).where(Favorite.user_id == user.id))
     ) or 0
 
-    lines = ["⚠️ <b>Сброс профиля</b>\n", "Это удалит твои данные рождения и настройки."]
+    lines = [
+        "⚠️ <b>Полный сброс аккаунта</b>\n",
+        "Аккаунт вернётся к состоянию нового пользователя: удалятся данные рождения, "
+        "настройки, история вопросов, избранное, гороскопы, а премиум и подписка "
+        "будут сброшены. (Чеки об оплате сохранятся.)",
+    ]
+    if is_premium(user):
+        lines.append("\n💎 <b>Внимание:</b> активный премиум тоже будет сброшен.")
     if natal_this_month > 0:
         lines.append(
             f"\n🌟 <b>Внимание:</b> натальная карта уже была рассчитана в этом месяце. "
@@ -431,19 +443,47 @@ async def on_profile_reset_confirm(
     session: AsyncSession,
     user: User,
 ) -> None:
-    profile = await session.get(BirthProfile, user.id)
+    # Full wipe to new-user level. Payment rows are kept for accounting/reconcile;
+    # everything else (profile, history, favorites, premium, subscription, prefs) is
+    # cleared and the User columns are reset to their new-user defaults.
+    uid = user.id
+    profile = await session.get(BirthProfile, uid)
     if profile is not None:
         await session.delete(profile)
-    await session.execute(delete(HoroscopeCache).where(HoroscopeCache.user_id == user.id))
+    for model in (HoroscopeCache, Favorite, Response, QuestionLog, LLMUsageLog,
+                  SupportTicket, Subscription):
+        await session.execute(delete(model).where(model.user_id == uid))
+
+    # Reset mutable columns to new-user defaults. Identity (tg_user_id, username,
+    # referral_code, created_at) and the admin-only excluded_from_stats flag stay.
+    user.default_response = "brief"
+    user.premium_until = None
+    user.premium_reminded_until = None
+    user.referred_by_user_id = None
+    user.bonus_questions = 0
+    user.free_questions_balance = 2
+    user.premium_questions_used = 0
+    user.questions_reset_at = None
+    user.push_horoscope_enabled = False
+    user.push_lunar_enabled = False
+    user.last_horoscope_push_at = None
+    user.followup_sent_at = None
+    user.legal_agreed_at = None
+    user.display_name = None
+    user.gender = None
+    user.email = None
+    user.astro_terms_enabled = True
+    user.natal_regens_bonus = 0
+    user.push_tz = None
+    user.push_hour = None
+    user.push_city_name = None
     await session.commit()
 
-    # Pre-fill existing prefs so the user doesn't re-enter name/gender/terms
-    await state.update_data(
-        display_name=user.display_name,
-        gender=user.gender,
-        astro_terms=user.astro_terms_enabled,
-    )
+    # Fresh onboarding, no pre-filled prefs — the account is now brand new.
+    await state.clear()
     await state.set_state(Onboarding.waiting_for_name)
-    hint = f" Сейчас: <b>{user.display_name}</b>." if user.display_name else ""
-    await ctx.reply(f"Прежние данные удалены. Как тебя зовут?{hint}", name_skip_kb())
+    await ctx.reply(
+        "🧹 Аккаунт полностью сброшен — как у нового пользователя.\n\nКак тебя зовут?",
+        name_skip_kb(),
+    )
     await ctx.answer_callback()

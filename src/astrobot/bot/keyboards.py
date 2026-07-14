@@ -19,6 +19,16 @@ MENU_BACK_BTN = Button(text="🔙 Меню", payload="menu:open")
 MENU_BACK_NEW_BTN = Button(text="🔙 Меню", payload="menu:new")
 
 
+# Starts onboarding via a button so users never have to type /start — essential
+# on MAX, where there's no easy "/start" tap. Payload reuses the onboarding-start
+# handler (on_broadcast_onboarding), which is registered on both platforms.
+ONBOARDING_START_BTN = Button(text="✨ Пройти знакомство", payload="bcast:onb")
+
+
+def onboarding_start_kb() -> Keyboard:
+    return Keyboard.from_rows([[ONBOARDING_START_BTN]])
+
+
 def menu_back_row() -> list[Button]:
     return [MENU_BACK_BTN]
 

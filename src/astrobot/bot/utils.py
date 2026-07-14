@@ -15,7 +15,7 @@ log = structlog.get_logger(__name__)
 
 _NO_PROFILE = (
     "🌙 Нам надо познакомиться — мне нужны твои дата, время и место рождения. "
-    "Нажми /start, чтобы начать."
+    "Нажми кнопку ниже, чтобы начать."
 )
 
 
@@ -38,7 +38,9 @@ async def need_profile_ctx(
     """ctx-based twin of need_profile."""
     profile = await session.get(BirthProfile, user.id)
     if profile is None:
-        await ctx.reply(_NO_PROFILE)
+        from astrobot.bot.keyboards import onboarding_start_kb
+
+        await ctx.reply(_NO_PROFILE, onboarding_start_kb())
     return profile
 
 

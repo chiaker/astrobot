@@ -44,6 +44,7 @@ from astrobot.bot.handlers import profile as h_profile
 from astrobot.bot.handlers import question as h_q
 from astrobot.bot.handlers import support as h_support
 from astrobot.bot.handlers import tarot as h_tarot
+from astrobot.bot.keyboards import name_skip_kb, onboarding_start_kb
 from astrobot.bot.platform.max import MaxBot, MaxContext, MaxState, to_markup
 from astrobot.bot.states import (
     AskingQuestion,
@@ -55,7 +56,7 @@ from astrobot.bot.states import (
     TarotFlow,
 )
 from astrobot.config import get_settings
-from astrobot.db.models import User
+from astrobot.db.models import BirthProfile, User
 from astrobot.db.session import get_sessionmaker
 from astrobot.redis_client import get_redis
 from astrobot.referral import generate_code, parse_start_arg, try_apply_referral
@@ -273,9 +274,11 @@ def build_max_dispatcher(bot: Bot) -> Dispatcher:
     dp.middleware(UserMiddleware())
     dp.middleware(ContextMiddleware(bot))
 
-    # bot_started → main menu (build via bot since there's no ctx for this event).
+    # bot_started → onboarding (new user) or main menu (build via bot since there's
+    # no ctx for this event; the FSM `context` is keyed the same as the user's DM
+    # messages, so setting the state here carries over to their next reply).
     @dp.bot_started()
-    async def _on_bot_started(event, session, user, is_new_user=False):
+    async def _on_bot_started(event, session, user, is_new_user=False, context=None):
         # Referral deep link arrives in bot_started.payload on MAX (not /start text).
         payload = getattr(event, "payload", None)
         code = parse_start_arg(f"/start {payload}") if payload else None
@@ -299,6 +302,37 @@ def build_max_dispatcher(bot: Bot) -> Dispatcher:
                         )
                     except Exception:
                         pass
+        # New user (no profile) → start onboarding immediately, mirroring Telegram's
+        # auto-/start. MAX has no /start on open, so we set the FSM state here and
+        # send the name prompt; the user's next message enters the flow. If the FSM
+        # context is somehow missing, fall back to a start button.
+        profile = await session.get(BirthProfile, user.id)
+        if profile is None:
+            if context is not None:
+                state = MaxState(context)
+                await state.update_data(
+                    display_name=user.display_name,
+                    gender=user.gender,
+                    astro_terms=user.astro_terms_enabled,
+                )
+                await bot.send_message(
+                    user_id=user.tg_user_id,
+                    text=h_onb.onboarding_welcome_text(user),
+                    attachments=[to_markup(name_skip_kb())],
+                    format=TextFormat.HTML,
+                )
+                await state.set_state(Onboarding.waiting_for_name)
+            else:
+                await bot.send_message(
+                    user_id=user.tg_user_id,
+                    text=(
+                        "🌙 Привет! Я Astra — твой астролог. Нажми кнопку ниже, "
+                        "чтобы познакомиться ✨"
+                    ),
+                    attachments=[to_markup(onboarding_start_kb())],
+                    format=TextFormat.HTML,
+                )
+            return
         text, kb = await h_menu.render_main_menu(user, session)
         await bot.send_message(
             user_id=user.tg_user_id, text=text,

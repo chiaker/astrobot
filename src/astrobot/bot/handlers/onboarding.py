@@ -17,6 +17,7 @@ from astrobot.bot.keyboards import (
     final_confirm_kb,
     gender_kb,
     name_skip_kb,
+    onboarding_start_kb,
     time_unknown_kb,
 )
 from astrobot.bot.platform import Media, PlatformBot, PlatformContext
@@ -79,23 +80,28 @@ def _welcome_media(value: str) -> Media:
     return Media.from_url(value) if value.startswith("http") else Media.from_file_id(value)
 
 
-async def prompt_for_name(ctx: PlatformContext, state, user: User) -> None:
-    """Send the welcome + 'how should I call you?' prompt and enter the name step."""
+def onboarding_welcome_text(user: User) -> str:
+    """Welcome + 'how should I call you?' copy. Shared by /start and MAX bot_started."""
     from astrobot.legal.disclaimer import ONBOARDING_CONSENT
 
-    await state.update_data(
-        display_name=user.display_name,
-        gender=user.gender,
-        astro_terms=user.astro_terms_enabled,
-    )
     hint = f"\nСейчас: <b>{user.display_name}</b>." if user.display_name else ""
-    welcome_text = (
+    return (
         "🌙 Здравствуй.\n\n"
         "Меня зовут <b>Астра</b>. Я читаю карты звёзд и расскажу о тебе то, "
         "что записано в небе при твоём рождении.\n\n"
         f"Сначала — как тебя зовут?{hint}\n\n"
         + ONBOARDING_CONSENT
     )
+
+
+async def prompt_for_name(ctx: PlatformContext, state, user: User) -> None:
+    """Send the welcome + 'how should I call you?' prompt and enter the name step."""
+    await state.update_data(
+        display_name=user.display_name,
+        gender=user.gender,
+        astro_terms=user.astro_terms_enabled,
+    )
+    welcome_text = onboarding_welcome_text(user)
     animation = get_settings().welcome_animation
     if animation:
         try:
@@ -318,7 +324,9 @@ async def on_confirm_save(ctx: PlatformContext, state, session: AsyncSession, us
     if "birth_date" not in data:
         # Stale confirm button (state was cleared, e.g. a fresh /start mid-flow).
         await ctx.answer_callback()
-        await ctx.reply("Что-то сбилось — начнём заново. Нажми /start.")
+        await ctx.reply(
+            "Что-то сбилось — начнём заново. Нажми кнопку ниже.", onboarding_start_kb()
+        )
         await state.clear()
         return
     profile = await session.get(BirthProfile, user.id)
