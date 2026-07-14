@@ -23,11 +23,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # fail TLS verification. aiohttp (maxapi's client) reads the system store, so
 # update-ca-certificates is sufficient. Harmless for the Telegram deploy (just
 # extra trusted CAs) — keeps one image for both platforms.
-RUN curl -fsSL https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt \
-        -o /usr/local/share/ca-certificates/russian_trusted_root_ca.crt \
- && curl -fsSL https://gu-st.ru/content/lending/russian_trusted_sub_ca_pem.crt \
-        -o /usr/local/share/ca-certificates/russian_trusted_sub_ca.crt \
- && update-ca-certificates
+# Vendored (docker/certs/) instead of downloaded — gu-st.ru is unreachable from
+# the GitHub Actions build runners (foreign IPs time out), and the certs are
+# static public roots that rarely change.
+COPY docker/certs/russian_trusted_root_ca.crt docker/certs/russian_trusted_sub_ca.crt \
+     /usr/local/share/ca-certificates/
+RUN update-ca-certificates
 
 RUN pip install --no-cache-dir uv
 
