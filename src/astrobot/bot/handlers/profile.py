@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import structlog
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import delete, desc, func, select
@@ -42,6 +43,7 @@ from astrobot.limits import (
 from astrobot.payments.catalog import get_item
 
 router = Router(name="profile")
+log = structlog.get_logger(__name__)
 
 
 _GENDER_LABEL = {"m": "мужской", "f": "женский"}
@@ -443,16 +445,31 @@ async def on_profile_reset_confirm(
     session: AsyncSession,
     user: User,
 ) -> None:
+    await ctx.answer_callback()
     # Full wipe to new-user level. Payment rows are kept for accounting/reconcile;
     # everything else (profile, history, favorites, premium, subscription, prefs) is
     # cleared and the User columns are reset to their new-user defaults.
     uid = user.id
-    profile = await session.get(BirthProfile, uid)
-    if profile is not None:
-        await session.delete(profile)
-    for model in (HoroscopeCache, Favorite, Response, QuestionLog, LLMUsageLog,
-                  SupportTicket, Subscription):
-        await session.execute(delete(model).where(model.user_id == uid))
+    log.info("account_reset_start", user_id=uid)
+    try:
+        await session.execute(
+            delete(BirthProfile).where(BirthProfile.user_id == uid)
+        )
+        # synchronize_session=False: several of these tables are User relationships;
+        # the default session-sync would try to touch the loaded `user` collections
+        # (a lazy load under async → greenlet error). We commit + re-onboard right
+        # after, so identity-map sync is unnecessary.
+        for model in (HoroscopeCache, Favorite, Response, QuestionLog, LLMUsageLog,
+                      SupportTicket, Subscription):
+            await session.execute(
+                delete(model).where(model.user_id == uid),
+                execution_options={"synchronize_session": False},
+            )
+    except Exception:
+        await session.rollback()
+        log.exception("account_reset_failed", user_id=uid)
+        await ctx.reply("🌧 Не получилось сбросить аккаунт — попробуй ещё раз чуть позже.")
+        return
 
     # Reset mutable columns to new-user defaults. Identity (tg_user_id, username,
     # referral_code, created_at) and the admin-only excluded_from_stats flag stay.
@@ -478,6 +495,7 @@ async def on_profile_reset_confirm(
     user.push_hour = None
     user.push_city_name = None
     await session.commit()
+    log.info("account_reset_done", user_id=uid)
 
     # Fresh onboarding, no pre-filled prefs — the account is now brand new.
     await state.clear()
@@ -486,4 +504,3 @@ async def on_profile_reset_confirm(
         "🧹 Аккаунт полностью сброшен — как у нового пользователя.\n\nКак тебя зовут?",
         name_skip_kb(),
     )
-    await ctx.answer_callback()
