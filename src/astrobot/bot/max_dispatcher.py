@@ -65,7 +65,13 @@ log = structlog.get_logger(__name__)
 
 
 def build_max_bot() -> Bot:
-    return Bot(token=get_settings().bot_token, format=TextFormat.HTML)
+    # auto_requests=False: maxapi otherwise enriches every update with an eager
+    # get_chat_by_id / resolve-user API call. For a chat that was just removed
+    # (dialog_removed) that fetch 404s ("chat.not.found") and drops the update, so
+    # the bot goes silent. We read chat_id/user_id straight off the message and
+    # never touch event.chat, so lazy refs are enough — and it saves an API call
+    # per update.
+    return Bot(token=get_settings().bot_token, format=TextFormat.HTML, auto_requests=False)
 
 
 # ─────────────────────────── helpers ───────────────────────────
