@@ -65,6 +65,9 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           envs: IMAGE_NAME,IMAGE_TAG
+          # A cold pull of the ~750MB deps layer (after a dep/Dockerfile change) can
+          # exceed the 10m default over the server's slow ghcr link — give it room.
+          command_timeout: 25m
           script: |
             set -euo pipefail
             cd /opt/astrobot
