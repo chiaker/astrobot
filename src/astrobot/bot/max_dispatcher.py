@@ -166,11 +166,15 @@ class ContextMiddleware(BaseMiddleware):
         self._pbot = MaxBot(bot)
 
     async def __call__(self, handler, event, data):
+        # Inside an FSM flow → suppress the auto "Меню" fallback button on bare
+        # replies (intermediate onboarding/tarot/... prompts shouldn't offer an
+        # accidental way out of the flow). raw_state is None outside any flow.
+        suppress = bool(data.get("raw_state"))
         ctx = None
         if isinstance(event, MessageCallback):
-            ctx = MaxContext(bot=self._bot, callback=event)
+            ctx = MaxContext(bot=self._bot, callback=event, suppress_menu_fallback=suppress)
         elif isinstance(event, MessageCreated):
-            ctx = MaxContext(bot=self._bot, message=event)
+            ctx = MaxContext(bot=self._bot, message=event, suppress_menu_fallback=suppress)
         if ctx is not None:
             data["ctx"] = ctx
         data["pbot"] = self._pbot

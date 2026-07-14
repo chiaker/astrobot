@@ -108,10 +108,15 @@ class MaxContext(PlatformContext):
         bot: Bot,
         message: MessageCreated | None = None,
         callback: MessageCallback | None = None,
+        suppress_menu_fallback: bool = False,
     ) -> None:
         self._bot = bot
         self._created = message
         self._callback = callback
+        # True while the user is inside an FSM flow (onboarding, tarot input, …):
+        # intermediate prompts shouldn't sprout a "Меню" button — tapping it would
+        # abandon the flow. The menu fallback is for terminal screens only.
+        self._suppress_menu = suppress_menu_fallback
         if message is None and callback is None:
             raise ValueError("MaxContext требует message или callback")
         # MAX lets a callback be "answered" exactly once (ack/answer/edit all count).
@@ -177,7 +182,9 @@ class MaxContext(PlatformContext):
         menu_fallback: bool = True,
     ) -> SentMessage:
         sent = await self._event.message.answer(
-            text, attachments=_attachments(_with_menu(kb, menu_fallback)), format=TextFormat.HTML
+            text,
+            attachments=_attachments(_with_menu(kb, menu_fallback and not self._suppress_menu)),
+            format=TextFormat.HTML,
         )
         return SentMessage(message_id=_message_id(sent))
 
@@ -191,7 +198,7 @@ class MaxContext(PlatformContext):
     ) -> SentMessage:
         # MAX не даёт per-message управления превью ссылок — disable_preview
         # принимается для совместимости интерфейса, но не применяется.
-        kb = _with_menu(kb, menu_fallback)
+        kb = _with_menu(kb, menu_fallback and not self._suppress_menu)
         if self._callback is not None:
             # attachments=[] очищает клавиатуру, если kb=None.
             await self._callback.edit(
