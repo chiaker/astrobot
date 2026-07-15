@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import desc, func, or_, select, true, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from astrobot.account import reset_account
 from astrobot.config import get_settings
 from astrobot.db.models import (
     BirthProfile,
@@ -1031,7 +1032,7 @@ def _render_user_detail(user, profile, stats: dict, now: datetime, msg: str = ""
       <button type='submit' name='quick' value='reset_prem' class='btn btn-danger btn-sm'>Сбросить премиум</button>
       <button type='submit' name='quick' value='unlimited_natal' class='btn btn-ghost btn-sm'>∞ Natal (тест)</button>
       {"<button type='submit' name='quick' value='toggle_excluded' class='btn btn-g btn-sm'>↩ Вернуть в статистику</button>" if user.excluded_from_stats else "<button type='submit' name='quick' value='toggle_excluded' class='btn btn-ghost btn-sm'>🚫 Исключить из статистики</button>"}
-      <button type='submit' name='quick' value='reset_all' class='btn btn-danger' onclick="return confirm('Полный сброс аккаунта — премиум, бонусы и лимиты. Продолжить?')">⚠ Полный сброс</button>
+      <button type='submit' name='quick' value='reset_all' class='btn btn-danger' onclick="return confirm('УДАЛИТЬ данные аккаунта: профиль рождения, историю вопросов, гороскопы, избранное, подписку, премиум и лимиты. Платежи сохранятся. Пользователь пройдёт знакомство заново. Необратимо. Продолжить?')">⚠ Полный сброс</button>
     </div>
   </form>
 </div>
@@ -1641,13 +1642,11 @@ async def user_edit(
         user.excluded_from_stats = not user.excluded_from_stats
         msg = "Исключён из статистики." if user.excluded_from_stats else "Возвращён в статистику."
     elif quick == "reset_all":
-        user.premium_until = None
-        user.bonus_questions = 0
-        user.natal_regens_bonus = 0
-        user.questions_reset_at = now
-        user.free_questions_balance = 2
-        user.premium_questions_used = 0
-        msg = "Аккаунт полностью сброшен."
+        # Тот же самый сброс, что и кнопкой в боте: профиль рождения, история и
+        # LLMUsageLog тоже удаляются, иначе аккаунт остаётся пройденным онбордингом
+        # с израсходованными лимитами.
+        await reset_account(session, user)
+        msg = "Аккаунт полностью сброшен — профиль, история и лимиты."
     else:
         # Manual form submission
         if premium_until.strip():

@@ -8,7 +8,9 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from astrobot.account import reset_profile
 from astrobot.astrology.geocoding import geocode_city
+from astrobot.bot.handlers.onboarding import clean_name
 from astrobot.bot.keyboards import (
     MENU_BACK_BTN,
     ONBOARDING_START_BTN,
@@ -22,14 +24,9 @@ from astrobot.bot.platform import Button, Keyboard, PlatformContext
 from astrobot.bot.states import Onboarding, PushSetup
 from astrobot.db.models import (
     BirthProfile,
-    Favorite,
     HoroscopeCache,
     LLMUsageLog,
     Payment,
-    QuestionLog,
-    Response,
-    Subscription,
-    SupportTicket,
     User,
 )
 from astrobot.limits import (
@@ -412,26 +409,18 @@ async def on_profile_reset_warn(ctx: PlatformContext, session: AsyncSession, use
         )
     ) or 0
 
-    fav_count = (
-        await session.scalar(select(func.count(Favorite.id)).where(Favorite.user_id == user.id))
-    ) or 0
-
     lines = [
-        "⚠️ <b>Полный сброс аккаунта</b>\n",
-        "Аккаунт вернётся к состоянию нового пользователя: удалятся данные рождения, "
-        "настройки, история вопросов, избранное, гороскопы, а премиум и подписка "
-        "будут сброшены. (Чеки об оплате сохранятся.)",
+        "⚠️ <b>Сброс данных профиля</b>\n",
+        "Удалятся данные рождения (дата, время, город), имя, пол и режим "
+        "астротерминов — знакомство начнётся заново.\n\n"
+        "Премиум, подписка, избранное и история вопросов <b>останутся</b>.",
     ]
-    if is_premium(user):
-        lines.append("\n💎 <b>Внимание:</b> активный премиум тоже будет сброшен.")
     if natal_this_month > 0:
         lines.append(
             f"\n🌟 <b>Внимание:</b> натальная карта уже была рассчитана в этом месяце. "
-            f"После сброса — новая генерация только через 30 дней "
+            f"Сброс не возвращает лимит: новая генерация — через 30 дней "
             f"или за <b>{NATAL_REGEN_PRICE_RUB} ₽</b>."
         )
-    if fav_count > 0:
-        lines.append(f"\n⭐ Будет удалено <b>{fav_count}</b> записей из Избранного.")
     lines.append("\nПродолжить?")
 
     await ctx.reply("\n".join(lines), reset_confirm_kb())
@@ -446,61 +435,19 @@ async def on_profile_reset_confirm(
     user: User,
 ) -> None:
     await ctx.answer_callback()
-    # Full wipe to new-user level. Payment rows are kept for accounting/reconcile;
-    # everything else (profile, history, favorites, premium, subscription, prefs) is
-    # cleared and the User columns are reset to their new-user defaults.
-    uid = user.id
-    log.info("account_reset_start", user_id=uid)
+    # Профиль, не аккаунт: премиум, подписка, избранное, история и квоты остаются
+    # (сброс квот дал бы бесконечные бесплатные вопросы). Полный сброс — в админке.
     try:
-        await session.execute(
-            delete(BirthProfile).where(BirthProfile.user_id == uid)
-        )
-        # synchronize_session=False: several of these tables are User relationships;
-        # the default session-sync would try to touch the loaded `user` collections
-        # (a lazy load under async → greenlet error). We commit + re-onboard right
-        # after, so identity-map sync is unnecessary.
-        for model in (HoroscopeCache, Favorite, Response, QuestionLog, LLMUsageLog,
-                      SupportTicket, Subscription):
-            await session.execute(
-                delete(model).where(model.user_id == uid),
-                execution_options={"synchronize_session": False},
-            )
+        await reset_profile(session, user)
     except Exception:
         await session.rollback()
-        log.exception("account_reset_failed", user_id=uid)
-        await ctx.reply("🌧 Не получилось сбросить аккаунт — попробуй ещё раз чуть позже.")
+        log.exception("profile_reset_failed", user_id=user.id)
+        await ctx.reply("🌧 Не получилось сбросить профиль — попробуй ещё раз чуть позже.")
         return
 
-    # Reset mutable columns to new-user defaults. Identity (tg_user_id, username,
-    # referral_code, created_at) and the admin-only excluded_from_stats flag stay.
-    user.default_response = "brief"
-    user.premium_until = None
-    user.premium_reminded_until = None
-    user.referred_by_user_id = None
-    user.bonus_questions = 0
-    user.free_questions_balance = 2
-    user.premium_questions_used = 0
-    user.questions_reset_at = None
-    user.push_horoscope_enabled = False
-    user.push_lunar_enabled = False
-    user.last_horoscope_push_at = None
-    user.followup_sent_at = None
-    user.legal_agreed_at = None
-    user.display_name = None
-    user.gender = None
-    user.email = None
-    user.astro_terms_enabled = True
-    user.natal_regens_bonus = 0
-    user.push_tz = None
-    user.push_hour = None
-    user.push_city_name = None
-    await session.commit()
-    log.info("account_reset_done", user_id=uid)
-
-    # Fresh onboarding, no pre-filled prefs — the account is now brand new.
+    offered = clean_name(ctx.first_name)
     await state.clear()
+    await state.update_data(suggested_name=offered)
     await state.set_state(Onboarding.waiting_for_name)
-    await ctx.reply(
-        "🧹 Аккаунт полностью сброшен — как у нового пользователя.\n\nКак тебя зовут?",
-        name_kb(),
-    )
+    hint = f"Обращаться <b>{offered}</b>?" if offered else "Как тебя зовут?"
+    await ctx.reply(f"🧹 Данные профиля сброшены — знакомимся заново.\n\n{hint}", name_kb(offered))
