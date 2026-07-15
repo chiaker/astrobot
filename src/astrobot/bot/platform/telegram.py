@@ -113,6 +113,10 @@ class TelegramContext(PlatformContext):
         return self._from_user.username
 
     @property
+    def first_name(self) -> str | None:
+        return self._from_user.first_name
+
+    @property
     def text(self) -> str | None:
         return self._message.text if not self._callback else None
 

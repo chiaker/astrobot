@@ -178,14 +178,11 @@ QUESTION_TOPICS: dict[str, tuple[str, list[tuple[str, str]]]] = {
 CHAT_EXIT_BTN = Button(text="🚪 Выйти из чата", payload="chat:exit")
 
 
-def chat_answer_kb(response_id: int, show_premium: bool = False) -> Keyboard:
-    rows: list[list[Button]] = [
+def chat_answer_kb(response_id: int) -> Keyboard:
+    return Keyboard.from_rows([
         [Button(text="⭐ Сохранить", payload=f"fav:save:{response_id}")],
-    ]
-    if show_premium:
-        rows.append([Button(text="💎 Открыть Премиум", payload="menu:premium")])
-    rows.append([CHAT_EXIT_BTN])
-    return Keyboard.from_rows(rows)
+        [CHAT_EXIT_BTN],
+    ])
 
 
 _OWN_QUESTION_BTN = Button(text="✏️ Задать свой вопрос", payload="chat:own_question")
@@ -333,8 +330,14 @@ def compat_time_unknown_kb() -> Keyboard:
     )
 
 
-def name_skip_kb() -> Keyboard:
-    return Keyboard.from_rows([[Button(text="Пропустить", payload="onb:name:skip")]])
+def name_kb(suggested: str | None = None) -> Keyboard:
+    """Шаг «как тебя зовут». suggested — имя из профиля мессенджера: если оно есть,
+    предлагаем подтвердить его одной кнопкой вместо ввода."""
+    rows: list[list[Button]] = []
+    if suggested:
+        rows.append([Button(text=f"✅ Да, {suggested}", payload="onb:name:ok")])
+    rows.append([Button(text="Пропустить", payload="onb:name:skip")])
+    return Keyboard.from_rows(rows)
 
 
 def gender_kb() -> Keyboard:

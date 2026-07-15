@@ -13,7 +13,7 @@ from astrobot.bot.keyboards import (
     MENU_BACK_BTN,
     ONBOARDING_START_BTN,
     horoscope_period_kb,
-    name_skip_kb,
+    name_kb,
     push_hour_kb,
     reset_confirm_kb,
     with_back,
@@ -502,5 +502,5 @@ async def on_profile_reset_confirm(
     await state.set_state(Onboarding.waiting_for_name)
     await ctx.reply(
         "🧹 Аккаунт полностью сброшен — как у нового пользователя.\n\nКак тебя зовут?",
-        name_skip_kb(),
+        name_kb(),
     )

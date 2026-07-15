@@ -44,7 +44,7 @@ from astrobot.bot.handlers import profile as h_profile
 from astrobot.bot.handlers import question as h_q
 from astrobot.bot.handlers import support as h_support
 from astrobot.bot.handlers import tarot as h_tarot
-from astrobot.bot.keyboards import name_skip_kb, onboarding_start_kb
+from astrobot.bot.keyboards import name_kb, onboarding_start_kb
 from astrobot.bot.platform.max import MaxBot, MaxContext, MaxState, to_markup
 from astrobot.bot.states import (
     AskingQuestion,
@@ -320,15 +320,20 @@ def build_max_dispatcher(bot: Bot) -> Dispatcher:
         if profile is None:
             if context is not None:
                 state = MaxState(context)
+                started_by = getattr(event, "user", None)
+                offered = user.display_name or h_onb.clean_name(
+                    getattr(started_by, "first_name", None) or getattr(started_by, "name", None)
+                )
                 await state.update_data(
                     display_name=user.display_name,
                     gender=user.gender,
                     astro_terms=user.astro_terms_enabled,
+                    suggested_name=offered,
                 )
                 await bot.send_message(
                     user_id=user.tg_user_id,
-                    text=h_onb.onboarding_welcome_text(user),
-                    attachments=[to_markup(name_skip_kb())],
+                    text=h_onb.onboarding_welcome_text(user, offered),
+                    attachments=[to_markup(name_kb(offered))],
                     format=TextFormat.HTML,
                 )
                 await state.set_state(Onboarding.waiting_for_name)

@@ -148,13 +148,23 @@ class MaxContext(PlatformContext):
         return self._event.message.recipient.chat_id
 
     @property
-    def username(self) -> str | None:
+    def _sender(self) -> Any:
         try:
             if self._callback is not None:
-                return self._callback.callback.user.username
-            return self._created.message.sender.username
+                return self._callback.callback.user
+            return self._created.message.sender
         except AttributeError:
             return None
+
+    @property
+    def username(self) -> str | None:
+        return getattr(self._sender, "username", None)
+
+    @property
+    def first_name(self) -> str | None:
+        # MAX отдаёт имя то как first_name, то как name — берём что есть.
+        u = self._sender
+        return getattr(u, "first_name", None) or getattr(u, "name", None)
 
     @property
     def text(self) -> str | None:

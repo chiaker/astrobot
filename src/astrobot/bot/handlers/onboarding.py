@@ -16,7 +16,7 @@ from astrobot.bot.keyboards import (
     confirm_kb,
     final_confirm_kb,
     gender_kb,
-    name_skip_kb,
+    name_kb,
     onboarding_start_kb,
     time_unknown_kb,
 )
@@ -80,37 +80,51 @@ def _welcome_media(value: str) -> Media:
     return Media.from_url(value) if value.startswith("http") else Media.from_file_id(value)
 
 
-def onboarding_welcome_text(user: User) -> str:
-    """Welcome + 'how should I call you?' copy. Shared by /start and MAX bot_started."""
+def clean_name(raw: str | None) -> str | None:
+    """Имя из профиля мессенджера → пригодная подсказка, либо None.
+
+    Профильное имя бывает «Олег Петров», «Олег 🌟», «✨✨» — берём первое слово и
+    принимаем, только если это чистое имя по тем же правилам, что и ручной ввод."""
+    first = (raw or "").strip().split(" ")[0] if raw else ""
+    return first if 1 < len(first) <= 64 and _NAME_RE.match(first) else None
+
+
+def onboarding_welcome_text(user: User, suggested: str | None = None) -> str:
+    """Welcome + 'how should I call you?' copy. Shared by /start and MAX bot_started.
+
+    Намеренно НЕ пересказывает описание бота (setdescription) — пользователь
+    только что его прочитал."""
     from astrobot.legal.disclaimer import ONBOARDING_CONSENT
 
-    hint = f"\nСейчас: <b>{user.display_name}</b>." if user.display_name else ""
-    return (
-        "🌙 Здравствуй.\n\n"
-        "Меня зовут <b>Астра</b>. Я читаю карты звёзд и расскажу о тебе то, "
-        "что записано в небе при твоём рождении.\n\n"
-        f"Сначала — как тебя зовут?{hint}\n\n"
-        + ONBOARDING_CONSENT
+    name = user.display_name or suggested
+    ask = (
+        f"Как к тебе обращаться — <b>{name}</b>?\nЕсли не так — просто напиши имя."
+        if name
+        else "Как к тебе обращаться? Напиши имя одним словом."
     )
+    return f"🌙 Здравствуй. Я — <b>Астра</b>.\n\n{ask}\n\n" + ONBOARDING_CONSENT
 
 
 async def prompt_for_name(ctx: PlatformContext, state, user: User) -> None:
     """Send the welcome + 'how should I call you?' prompt and enter the name step."""
+    offered = user.display_name or clean_name(ctx.first_name)
     await state.update_data(
         display_name=user.display_name,
         gender=user.gender,
         astro_terms=user.astro_terms_enabled,
+        suggested_name=offered,
     )
-    welcome_text = onboarding_welcome_text(user)
+    welcome_text = onboarding_welcome_text(user, offered)
+    kb = name_kb(offered)
     animation = get_settings().welcome_animation
     if animation:
         try:
-            await ctx.send_animation(_welcome_media(animation), caption=welcome_text, kb=name_skip_kb())
+            await ctx.send_animation(_welcome_media(animation), caption=welcome_text, kb=kb)
         except Exception as e:
             log.warning("welcome_animation_failed", error=str(e))
-            await ctx.reply(welcome_text, name_skip_kb())
+            await ctx.reply(welcome_text, kb)
     else:
-        await ctx.reply(welcome_text, name_skip_kb())
+        await ctx.reply(welcome_text, kb)
     await state.set_state(Onboarding.waiting_for_name)
 
 
@@ -175,16 +189,32 @@ async def on_name(ctx: PlatformContext, state) -> None:
     name = "".join(ch for ch in name if ch not in "<>" and (ch == " " or ch.isprintable()))
     name = name.strip()
     if len(name) > 64 or not _NAME_RE.match(name):
-        await ctx.reply(_NAME_HINT, name_skip_kb())
+        data = await state.get_data()
+        await ctx.reply(_NAME_HINT, name_kb(data.get("suggested_name")))
         return
-    await state.update_data(display_name=name)
+    await _accept_name(ctx, state, name)
 
+
+async def _accept_name(ctx: PlatformContext, state, name: str) -> None:
+    await state.update_data(display_name=name)
     guessed = guess_gender(name)
     if guessed is not None:
         await state.update_data(gender=guessed)
         await _ask_date(ctx, state)
     else:
         await _ask_gender(ctx, state)
+
+
+@router.callback_query(Onboarding.waiting_for_name, F.data == "onb:name:ok")
+async def on_name_confirm(ctx: PlatformContext, state) -> None:
+    """«Да, <имя>» — принять имя из профиля мессенджера без ввода."""
+    data = await state.get_data()
+    name = data.get("suggested_name")
+    await ctx.answer_callback()
+    if not name:
+        await ctx.reply(_NAME_HINT, name_kb())
+        return
+    await _accept_name(ctx, state, name)
 
 
 @router.callback_query(Onboarding.waiting_for_name, F.data == "onb:name:skip")
@@ -416,14 +446,16 @@ async def on_final_restart(ctx: PlatformContext, state, session: AsyncSession, u
     await session.commit()
 
     await state.clear()
+    offered = user.display_name or clean_name(ctx.first_name)
     await state.update_data(
         display_name=user.display_name,
         gender=user.gender,
         astro_terms=user.astro_terms_enabled,
+        suggested_name=offered,
     )
     await state.set_state(Onboarding.waiting_for_name)
-    hint = f" Сейчас: <b>{user.display_name}</b>." if user.display_name else ""
-    await ctx.reply(f"Хорошо, начнём сначала. Как тебя зовут?{hint}", name_skip_kb())
+    hint = f" Обращаться <b>{offered}</b>?" if offered else " Как тебя зовут?"
+    await ctx.reply(f"Хорошо, начнём сначала.{hint}", name_kb(offered))
     await ctx.answer_callback()
 
 

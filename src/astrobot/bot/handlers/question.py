@@ -28,7 +28,6 @@ from astrobot.db.models import BirthProfile, LLMUsageLog, QuestionLog, Response,
 from astrobot.limits import (
     check_question,
     consume_question_from_priority_bucket,
-    is_premium,
     paywall_text,
     reset_premium_questions_if_due,
 )
@@ -135,16 +134,16 @@ async def _answer_question(
             kb = chat_answer_kb(resp_row.id) if i == len(chunks) - 1 else None
             await ctx.reply(chunk, kb)
 
-        # Paywall only when the free quota is actually exhausted.
-        if not is_premium(user):
-            q_left_check = await check_question(session, user)
-            left = max(0, q_left_check.limit - q_left_check.used)
-            if left == 0:
-                await ctx.reply(
-                    "🌙 Это был твой последний бесплатный вопрос. "
-                    "Если хочешь продолжать — открой <b>💎 Премиум</b>.",
-                    premium_or_back_kb(),
-                )
+        # Пока вопросы ещё есть — премиум не упоминаем, просто зовём спросить
+        # дальше. Пейволл только когда спрашивать больше нечем.
+        after = await check_question(session, user)
+        if not after.allowed:
+            await ctx.reply(paywall_text("question", after), premium_or_back_kb())
+            return
+        await ctx.reply(
+            "🌙 Что разберём дальше? Выбери тему — или просто напиши свой вопрос:",
+            topics_kb(),
+        )
 
 
 @router.message(AskingQuestion.waiting_for_text)

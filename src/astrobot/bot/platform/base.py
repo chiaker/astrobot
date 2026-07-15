@@ -143,6 +143,11 @@ class PlatformContext(ABC):
 
     @property
     @abstractmethod
+    def first_name(self) -> str | None:
+        """Имя из профиля мессенджера (может быть с эмодзи/фамилией), либо None."""
+
+    @property
+    @abstractmethod
     def text(self) -> str | None:
         """Текст входящего сообщения (None для callback без текста)."""
 
