@@ -23,7 +23,7 @@ from astrobot.bot.keyboards import (
 from astrobot.bot.platform import Keyboard, PlatformContext
 from astrobot.bot.responses import chunk_text
 from astrobot.bot.states import AskingQuestion
-from astrobot.bot.utils import need_profile_ctx, user_llm_lock
+from astrobot.bot.utils import need_profile_ctx, rate_limit_ok, user_llm_lock
 from astrobot.db.models import BirthProfile, LLMUsageLog, QuestionLog, Response, User
 from astrobot.limits import (
     check_question,
@@ -45,6 +45,12 @@ _REFUSAL_RE = re.compile(
 )
 
 _EXIT_KB = Keyboard.from_rows([[CHAT_EXIT_BTN]])
+
+# Окно, в котором повторное нажатие того же вопроса считается дублем тапа, а не
+# намерением спросить ещё раз. Ответ генерируется ~15–30 с, так что окно должно
+# перекрывать генерацию с запасом на лаг доставки колбэка. Если MAX начнёт
+# задерживать колбэки сильнее — поднять.
+DUP_PRESS_WINDOW = 60
 
 
 @router.callback_query(F.data == "menu:question")
@@ -234,6 +240,16 @@ async def on_question_pick(
         await state.clear()
         await ctx.answer_callback()
         await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
+        return
+
+    # Одно нажатие на конкретный вопрос за DUP_PRESS_WINDOW секунд. MAX иногда
+    # лагает: человек жмёт кнопку второй раз, а второй колбэк доезжает уже ПОСЛЕ
+    # первого ответа — user_llm_lock его не ловит (он про одновременность), и тот
+    # же вопрос задаётся и списывается дважды. У соседних дорогих кнопок такой
+    # дыры нет: натал и гороскоп на второе нажатие отдают кэш.
+    # Проверка последней — чтобы отбитое пейволлом нажатие не съело окно.
+    if not await rate_limit_ok(f"q:pick:{user.id}:{key}:{raw_idx}", 1, DUP_PRESS_WINDOW):
+        await ctx.answer_callback("Уже отвечаю на этот вопрос ✨")
         return
 
     await ctx.answer_callback()
