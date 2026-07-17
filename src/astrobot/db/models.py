@@ -49,7 +49,13 @@ class User(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     bonus_questions: Mapped[int] = mapped_column(Integer, default=0)
-    free_questions_balance: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
+    free_questions_balance: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
+    # One-off "free plan 2→5" gift: TRUE on every existing user topped up by the
+    # 0027 migration, cleared once the gift message is delivered (scheduler). New
+    # users never get it — they start with 5 already.
+    free_gift_pending: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     premium_questions_used: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # Questions asked before this moment don't count against the monthly quota —
     # set on premium purchase so a buyer gets a full fresh allowance.

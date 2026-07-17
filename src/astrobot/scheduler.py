@@ -611,6 +611,58 @@ async def day2_followup_job(pbot: PlatformBot) -> None:
                 log.info("followup_undeliverable", user_id=user.id, error=str(e))
 
 
+# ─── One-off "free plan 2→5" gift notification ────────────────────────────────
+
+GIFT_BATCH = 300
+GIFT_SEND_DELAY = 0.05  # ~20 msg/s, same budget as followup/broadcast
+
+_GIFT_TEXT = (
+    "🎁 <b>Подарок от нас!</b>\n\n"
+    "Я добавила тебе <b>+3 дополнительных бесплатных вопроса</b> ✨\n\n"
+    "Заходи и спрашивай — звёзды готовы говорить."
+)
+
+
+async def free_gift_notify_job(pbot: PlatformBot) -> None:
+    """One-off drain: tell users topped up by the 0027 migration about their +3
+    gift. Deduped via User.free_gift_pending (set only on existing free users by
+    that migration; new users never have it). Resumable in batches, backs off on
+    Telegram rate limits. Neutral text → runs on both platforms. Becomes a cheap
+    no-op once every pending user is notified; safe to remove after the rollout."""
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        users = list(
+            await session.scalars(
+                select(User)
+                .where(User.free_gift_pending.is_(True))
+                .order_by(User.id)
+                .limit(GIFT_BATCH)
+            )
+        )
+        kb = followup_cta_kb()
+        for user in users:
+            try:
+                await pbot.send_message(user.tg_user_id, _GIFT_TEXT, kb)
+                user.free_gift_pending = False
+                await session.commit()
+                PUSH_SENT.labels(kind="free_gift", result="ok").inc()
+                log.info("free_gift_sent", user_id=user.id)
+                await asyncio.sleep(GIFT_SEND_DELAY)
+            except TelegramRetryAfter as e:
+                await session.rollback()
+                log.warning("free_gift_rate_limited", seconds=e.retry_after)
+                await asyncio.sleep(e.retry_after + 0.5)
+                break
+            except Exception as e:
+                # Blocked / undeliverable: the +3 is already granted (migration), so
+                # just stop trying to tell them. One attempt per user, like followup.
+                await session.rollback()
+                user.free_gift_pending = False
+                await session.commit()
+                PUSH_SENT.labels(kind="free_gift", result="fail").inc()
+                log.info("free_gift_undeliverable", user_id=user.id, error=str(e))
+
+
 # ─── Admin-authored broadcast campaigns ───────────────────────────────────────
 
 BROADCAST_BATCH = 300          # users scanned per pass (resumable via cursor)
@@ -873,6 +925,17 @@ def build_scheduler(pbot: PlatformBot) -> AsyncIOScheduler:
         minute="*",
         args=[pbot],
         id="broadcast_dispatch",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    # One-off gift drain (both platforms). No-op once all pending users notified.
+    sched.add_job(
+        free_gift_notify_job,
+        trigger="cron",
+        minute="*/5",
+        args=[pbot],
+        id="free_gift_notify",
         replace_existing=True,
         coalesce=True,
         max_instances=1,

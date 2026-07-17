@@ -35,7 +35,7 @@ class LimitSpec:
 FREE_LIMITS = LimitSpec(
     natal_per_month=NATAL_PER_MONTH,
     horoscope_per_day=1,
-    question_lifetime=2,
+    question_lifetime=5,
     question_per_month=None,
 )
 
@@ -274,7 +274,7 @@ def paywall_text(kind: Kind, allowance: Allowance) -> str:
             f"или <b>{QUESTION_PACK_30_SIZE} за {QUESTION_PACK_30_PRICE_RUB} ₽</b> ✨"
         )
     return (
-        f"🌙 Ты использовал все {allowance.limit} бесплатных вопроса. "
+        f"🌙 Ты использовал все {allowance.limit} бесплатных вопросов. "
         f"Открой <b>💎 Премиум</b> — там {PREMIUM_LIMITS.question_per_month} вопросов в месяц, "
         f"или пакеты по {QUESTION_PACK_SIZE} вопросов за {QUESTION_PACK_PRICE_RUB} ₽ ✨"
     )

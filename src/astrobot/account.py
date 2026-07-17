@@ -95,7 +95,7 @@ async def reset_account(session: AsyncSession, user: User) -> None:
     user.premium_reminded_until = None
     user.referred_by_user_id = None
     user.bonus_questions = 0
-    user.free_questions_balance = 2
+    user.free_questions_balance = 5
     user.premium_questions_used = 0
     user.questions_reset_at = None
     user.push_horoscope_enabled = False
