@@ -55,6 +55,12 @@ UPDATE_LAG = Histogram(
     buckets=(0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120),
 )
 
+CALLBACK_UNANSWERED = Counter(
+    "astrobot_callback_unanswered_total",
+    "Button presses the handler never answered (MAX rejects a contentless ack). "
+    "Suspected of making MAX withhold the user's NEXT press until it times out",
+)
+
 MAX_API_DURATION = Histogram(
     "astrobot_max_api_duration_seconds",
     "One outgoing call to the MAX API, including maxapi's internal retries",

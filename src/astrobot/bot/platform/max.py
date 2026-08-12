@@ -35,7 +35,7 @@ from astrobot.bot.platform.base import (
     PlatformContext,
     SentMessage,
 )
-from astrobot.metrics import MAX_API_DURATION
+from astrobot.metrics import CALLBACK_UNANSWERED, MAX_API_DURATION
 
 log = structlog.get_logger(__name__)
 
@@ -264,6 +264,7 @@ class MaxContext(PlatformContext):
             # NEXT callback from this user until its own timeout (~minutes), which
             # would explain button presses that land long after the press. Logged
             # so a slow press can be correlated with an unanswered one before it.
+            CALLBACK_UNANSWERED.inc()
             log.info("max_callback_unanswered", payload=self.payload)
             return
         try:
