@@ -54,6 +54,20 @@ UPDATE_DURATION = Histogram(
     buckets=(0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120),
 )
 
+UPDATE_PREP = Histogram(
+    "astrobot_update_prep_seconds",
+    "Between the update arriving and the handler starting: acquiring a pooled DB "
+    "connection and the get-or-create user query",
+    ["kind"],
+    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30),
+)
+
+DB_POOL_IN_USE = Gauge(
+    "astrobot_db_pool_in_use",
+    "DB connections checked out of the pool. Pinned at pool_size+max_overflow "
+    "means every new update waits up to pool_timeout for a free one",
+)
+
 UPDATE_LAG = Histogram(
     "astrobot_update_lag_seconds",
     "Delay from the messenger-side event timestamp to the start of our handling "

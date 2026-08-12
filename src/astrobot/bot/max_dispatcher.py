@@ -59,8 +59,8 @@ from astrobot.bot.states import (
 )
 from astrobot.config import get_settings
 from astrobot.db.models import BirthProfile, User
-from astrobot.db.session import get_sessionmaker
-from astrobot.metrics import UPDATE_DURATION, UPDATE_LAG
+from astrobot.db.session import get_engine, get_sessionmaker
+from astrobot.metrics import DB_POOL_IN_USE, UPDATE_DURATION, UPDATE_LAG, UPDATE_PREP
 from astrobot.redis_client import get_redis
 from astrobot.referral import generate_code, parse_start_arg, try_apply_referral
 
@@ -163,6 +163,27 @@ def _wrap(body):
 # ─────────────────────────── middlewares ───────────────────────────
 
 
+class TimingMiddleware(BaseMiddleware):
+    """Outermost middleware: stamps arrival BEFORE anything of ours runs.
+
+    Registered first on purpose. The lag used to be measured in ContextMiddleware,
+    which sits behind the DB session and the user lookup — so waiting on an
+    exhausted connection pool was being reported as "MAX delivered it late". This
+    is the honest boundary: everything before here is genuinely not ours."""
+
+    async def __call__(self, handler, event, data):
+        data["_t_received"] = time.monotonic()
+        if isinstance(event, (MessageCallback, MessageCreated)):
+            # Only where a human is waiting. On message_edited the timestamp is the
+            # ORIGINAL message's, so its "lag" is just how old that message was.
+            ts = getattr(event, "timestamp", None)
+            if ts:
+                lag = max(0.0, time.time() - ts / 1000)
+                UPDATE_LAG.labels(kind=_update_kind(event)).observe(lag)
+                data["_lag"] = lag
+        return await handler(event, data)
+
+
 class DbSessionMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         async with get_sessionmaker()() as session:
@@ -219,23 +240,18 @@ class ContextMiddleware(BaseMiddleware):
         data["pbot"] = self._pbot
 
         kind = _update_kind(event)
-        # Everything that happened BEFORE this middleware and is therefore invisible
-        # to the duration timer below: MAX's own delivery queue, the webhook request,
-        # `asyncio.create_task` waiting for a busy event loop, and the Redis
-        # get_state() the dispatcher does ahead of the middleware chain. The user
-        # waits lag + duration, so a small duration with a large lag means the delay
-        # isn't ours. MAX's clock isn't ours either — skew shows up here, so treat
-        # small values as noise and clamp negatives away.
-        #
-        # Only where a human is actually waiting, i.e. `ctx` exists (a message or a
-        # button press). On `message_edited` the timestamp is the ORIGINAL message's,
-        # so the "lag" is just how old the edited message was — minutes of pure
-        # noise on a graph nobody is waiting on.
-        ts = getattr(event, "timestamp", None)
-        lag = max(0.0, time.time() - ts / 1000) if ts else 0.0
-        if ctx is not None:
-            UPDATE_LAG.labels(kind=kind).observe(lag)
+        # What the two middlewares ahead of us cost: waiting for a pooled DB
+        # connection and the get-or-create user query. Pool exhaustion shows up
+        # here (and nowhere else), together with the gauge below.
+        t_received = data.get("_t_received")
+        if t_received is not None:
+            UPDATE_PREP.labels(kind=kind).observe(time.monotonic() - t_received)
+        try:
+            DB_POOL_IN_USE.set(get_engine().sync_engine.pool.checkedout())
+        except Exception:  # noqa: BLE001 — a metric must never break an update
+            pass
 
+        lag = data.get("_lag", 0.0)
         started = time.monotonic()
         try:
             return await handler(event, data)
@@ -350,6 +366,7 @@ def build_max_dispatcher(bot: Bot) -> Dispatcher:
     # ponytail: concurrent per-user updates possible; the expensive LLM path is
     # already serialized by user_llm_lock.
     dp = Dispatcher(storage=RedisContext, redis_client=get_redis(), use_create_task=True)
+    dp.middleware(TimingMiddleware())  # first: the only honest "before us" boundary
     dp.middleware(DbSessionMiddleware())
     dp.middleware(UserMiddleware())
     dp.middleware(ContextMiddleware(bot))
