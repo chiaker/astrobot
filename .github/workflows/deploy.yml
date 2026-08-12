@@ -5,6 +5,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Several pushes in quick succession would otherwise run `docker rollout` on the
+# same server at the same time, racing each other's container swaps. Queue them:
+# never cancel one in flight, just wait it out.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}

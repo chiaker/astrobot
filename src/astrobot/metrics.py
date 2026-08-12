@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from prometheus_client import Counter, Histogram
+import os
+
+from prometheus_client import Counter, Gauge, Histogram
+
+# Which build produced the numbers on a graph. Every debugging session so far has
+# stalled on "is the fix even deployed yet?" — this answers it in Grafana, next to
+# the data, instead of over ssh.
+BUILD_INFO = Gauge("astrobot_build_info", "Build metadata; the value is always 1", ["sha"])
+BUILD_INFO.labels(sha=os.environ.get("ASTROBOT_GIT_SHA", "unknown")).set(1)
 
 MESSAGES_TOTAL = Counter(
     "astrobot_messages_total",
