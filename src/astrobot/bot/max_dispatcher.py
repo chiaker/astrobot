@@ -103,6 +103,20 @@ def build_max_bot() -> Bot:
 SLOW_UPDATE_SECONDS = 15.0
 
 
+def _press_time_ms(event) -> int | None:
+    """When the user actually acted, in epoch ms.
+
+    For a button press that is `callback.timestamp`. The update-level `timestamp`
+    is NOT interchangeable: on `message_edited` it demonstrably carries the ORIGINAL
+    message's time, and on `message_callback` it can do the same — which turns "how
+    long the user waited" into "how old the pressed message was". The auto-attached
+    "🔙 Меню" button lives on messages that sit in the chat for minutes, so that
+    difference is the whole graph."""
+    cb = getattr(event, "callback", None)
+    ts = getattr(cb, "timestamp", None) if cb is not None else None
+    return ts or getattr(event, "timestamp", None)
+
+
 def _update_kind(event) -> str:
     """Metric label: callback payload prefix (`cb:menu`, `cb:q`…) or update type."""
     cb = getattr(event, "callback", None)
@@ -174,13 +188,23 @@ class TimingMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         data["_t_received"] = time.monotonic()
         if isinstance(event, (MessageCallback, MessageCreated)):
-            # Only where a human is waiting. On message_edited the timestamp is the
-            # ORIGINAL message's, so its "lag" is just how old that message was.
-            ts = getattr(event, "timestamp", None)
+            # Only where a human is waiting — and off the press time, not the update
+            # time (see _press_time_ms).
+            ts = _press_time_ms(event)
             if ts:
                 lag = max(0.0, time.time() - ts / 1000)
                 UPDATE_LAG.labels(kind=_update_kind(event)).observe(lag)
                 data["_lag"] = lag
+                # Same event, both fields: if these disagree by minutes, the old
+                # "MAX delivers callbacks late" reading was measuring message age.
+                update_ts = getattr(event, "timestamp", None)
+                if update_ts and abs(update_ts - ts) / 1000 > 5:
+                    log.info(
+                        "max_timestamp_fields_differ",
+                        kind=_update_kind(event),
+                        press_age=round(lag, 1),
+                        update_age=round(max(0.0, time.time() - update_ts / 1000), 1),
+                    )
         return await handler(event, data)
 
 
