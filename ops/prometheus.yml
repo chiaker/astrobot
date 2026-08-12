@@ -9,6 +9,13 @@ scrape_configs:
           - app:8000
     metrics_path: /metrics
 
+  # MAX bot — separate container, same metric names. Tell them apart by `job`.
+  - job_name: astrobot-max
+    static_configs:
+      - targets:
+          - app-max:8000
+    metrics_path: /metrics
+
   # Host server resources (CPU, RAM, disk, network, load)
   - job_name: node
     static_configs:
