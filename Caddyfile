@@ -1,21 +1,44 @@
 # Bot (webhook, /admin, /metrics, /health) on the main domain.
 {$BOT_DOMAIN} {
+	# MAX's webhook rides THIS hostname, not max.$BOT_DOMAIN. The `max.` subdomain
+	# resolves intermittently (public resolvers alternate between the right A
+	# record and NXDOMAIN), so MAX's delivery workers burned 20-30s per event
+	# retrying the lookup — while this hostname resolves reliably. Only the
+	# webhook moves; the MAX admin panel stays on its own subdomain, where a slow
+	# lookup costs a human one page load instead of every button press.
+	handle /max/* {
+		reverse_proxy {
+			dynamic a {
+				name app-max
+				port 8000
+				refresh 2s
+				resolvers 127.0.0.11
+			}
+			lb_policy round_robin
+			lb_try_duration 5s
+			fail_duration 10s
+		}
+	}
+
 	# Dynamic upstreams so deploys are zero-downtime: docker-rollout briefly runs
 	# two `app` replicas, and Docker's embedded DNS (127.0.0.11) returns an A
 	# record per replica. Re-resolving every 2s lets Caddy pick up the new
 	# container and drop the old one without a config reload. lb_try_duration +
 	# fail_duration retry a request that lands on a container being torn down.
-	reverse_proxy {
-		dynamic a {
-			name app
-			port 8000
-			refresh 2s
-			resolvers 127.0.0.11
+	handle {
+		reverse_proxy {
+			dynamic a {
+				name app
+				port 8000
+				refresh 2s
+				resolvers 127.0.0.11
+			}
+			lb_policy round_robin
+			lb_try_duration 5s
+			fail_duration 10s
 		}
-		lb_policy round_robin
-		lb_try_duration 5s
-		fail_duration 10s
 	}
+
 	encode gzip
 	log {
 		output stderr

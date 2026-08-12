@@ -141,6 +141,19 @@ def _create_max_app(settings) -> FastAPI:
         try:
             async with webhook.lifespan(app):
                 if settings.run_mode == "webhook":
+                    # MAX keeps a LIST of subscriptions and POST /subscriptions
+                    # APPENDS to it — there is no replace. Without this, changing
+                    # WEBHOOK_BASE_URL leaves the old URL subscribed forever and MAX
+                    # keeps delivering there too (that old host is the one whose DNS
+                    # is unreliable, so half the events would still crawl).
+                    try:
+                        existing = await bot.get_subscriptions()
+                        for sub in existing.subscriptions or []:
+                            if sub.url != settings.max_webhook_url:
+                                await bot.unsubscribe_webhook(url=sub.url)
+                                log.info("max_webhook_stale_removed", url=sub.url)
+                    except Exception as e:  # noqa: BLE001 — never block startup
+                        log.warning("max_webhook_cleanup_failed", error=str(e))
                     await bot.subscribe_webhook(
                         url=settings.max_webhook_url, secret=settings.webhook_secret
                     )
