@@ -94,6 +94,12 @@ def _to_input_media(media: Media) -> Any:
 _MENU_FALLBACK_KB = Keyboard.from_rows([[Button(text="🔙 Меню", payload="menu:open")]])
 
 
+# The quietest answer MAX accepts for a callback: it refuses an empty body, but a
+# whitespace notification renders as nothing the user notices. Answering at all is
+# what matters — see MaxContext.finish().
+_SILENT_ACK = " "
+
+
 def _with_menu(kb: Keyboard | None, menu_fallback: bool) -> Keyboard | None:
     return _MENU_FALLBACK_KB if (kb is None and menu_fallback) else kb
 
@@ -249,28 +255,29 @@ class MaxContext(PlatformContext):
             self._ack_text = text
 
     async def finish(self) -> None:
-        """Flush a pending callback ack. Called by the dispatcher after each handler.
+        """Answer the callback. Called by the dispatcher after each handler.
 
-        If the handler already responded (edit) — nothing to do. MAX rejects an
-        EMPTY ack (`ack()` with no notification → 400 'message or notification
-        required'), so we ack ONLY when there's notification text; otherwise the
-        edit/reply the handler already sent is the feedback. Never let a background
-        ack failure break the handler flow."""
+        Every callback MUST be answered. Measured on MAX: presses that follow an
+        unanswered one arrive 60–180s late (astrobot_update_lag_seconds), i.e. MAX
+        withholds the user's next press until the previous callback times out. That
+        was the "bot reacts slowly to buttons" report.
+
+        A handler that called edit() has already answered (edit IS the answer). One
+        that only replied hasn't — and MAX rejects a contentless ack (`{}` → 400
+        'message or notification required'), so the quietest answer available is a
+        whitespace notification. Never let an ack failure break the handler flow."""
         if self._callback is None or self._responded:
             return
         self._responded = True
-        if not self._ack_text:
-            # Leaving a callback unanswered is suspected of making MAX hold the
-            # NEXT callback from this user until its own timeout (~minutes), which
-            # would explain button presses that land long after the press. Logged
-            # so a slow press can be correlated with an unanswered one before it.
-            CALLBACK_UNANSWERED.inc()
-            log.info("max_callback_unanswered", payload=self.payload)
-            return
+        silent = not self._ack_text
         try:
-            await _timed("ack", self._callback.ack(notification=self._ack_text))
+            await _timed("ack", self._callback.ack(notification=self._ack_text or _SILENT_ACK))
         except Exception as e:  # noqa: BLE001
-            log.warning("max_ack_failed", error=str(e))
+            # Counted, not just logged: if MAX turns out to reject a whitespace
+            # notification too, this counter stays >0 and the lag never drops —
+            # then the answer has to come from a real edit via PUT /messages.
+            CALLBACK_UNANSWERED.inc()
+            log.warning("max_ack_failed", error=str(e), silent=silent)
 
     async def send_photo(
         self, media: Media, caption: str | None = None, kb: Keyboard | None = None
