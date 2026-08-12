@@ -226,9 +226,15 @@ class ContextMiddleware(BaseMiddleware):
         # waits lag + duration, so a small duration with a large lag means the delay
         # isn't ours. MAX's clock isn't ours either — skew shows up here, so treat
         # small values as noise and clamp negatives away.
+        #
+        # Only where a human is actually waiting, i.e. `ctx` exists (a message or a
+        # button press). On `message_edited` the timestamp is the ORIGINAL message's,
+        # so the "lag" is just how old the edited message was — minutes of pure
+        # noise on a graph nobody is waiting on.
         ts = getattr(event, "timestamp", None)
         lag = max(0.0, time.time() - ts / 1000) if ts else 0.0
-        UPDATE_LAG.labels(kind=kind).observe(lag)
+        if ctx is not None:
+            UPDATE_LAG.labels(kind=kind).observe(lag)
 
         started = time.monotonic()
         try:

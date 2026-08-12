@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import structlog
@@ -34,8 +35,20 @@ from astrobot.bot.platform.base import (
     PlatformContext,
     SentMessage,
 )
+from astrobot.metrics import MAX_API_DURATION
 
 log = structlog.get_logger(__name__)
+
+
+async def _timed(op: str, coro):
+    """Time one MAX API call. Splits `update_duration` (which lumps LLM + DB +
+    network together) into "us" and "waiting on MAX", so a slow update points at
+    a culprit instead of a range of suspects."""
+    start = time.monotonic()
+    try:
+        return await coro
+    finally:
+        MAX_API_DURATION.labels(op=op).observe(time.monotonic() - start)
 
 
 # ─────────────────────────── конвертеры ───────────────────────────
@@ -191,10 +204,15 @@ class MaxContext(PlatformContext):
         disable_preview: bool = True,
         menu_fallback: bool = True,
     ) -> SentMessage:
-        sent = await self._event.message.answer(
-            text,
-            attachments=_attachments(_with_menu(kb, menu_fallback and not self._suppress_menu)),
-            format=TextFormat.HTML,
+        sent = await _timed(
+            "send",
+            self._event.message.answer(
+                text,
+                attachments=_attachments(
+                    _with_menu(kb, menu_fallback and not self._suppress_menu)
+                ),
+                format=TextFormat.HTML,
+            ),
         )
         return SentMessage(message_id=_message_id(sent))
 
@@ -211,8 +229,11 @@ class MaxContext(PlatformContext):
         kb = _with_menu(kb, menu_fallback and not self._suppress_menu)
         if self._callback is not None:
             # attachments=[] очищает клавиатуру, если kb=None.
-            await self._callback.edit(
-                text, attachments=_attachments(kb) or [], format=TextFormat.HTML
+            await _timed(
+                "edit",
+                self._callback.edit(
+                    text, attachments=_attachments(kb) or [], format=TextFormat.HTML
+                ),
             )
             self._responded = True  # the edit IS the callback's answer
             return SentMessage(message_id=_callback_message_id(self._callback))
@@ -246,17 +267,20 @@ class MaxContext(PlatformContext):
             log.info("max_callback_unanswered", payload=self.payload)
             return
         try:
-            await self._callback.ack(notification=self._ack_text)
+            await _timed("ack", self._callback.ack(notification=self._ack_text))
         except Exception as e:  # noqa: BLE001
             log.warning("max_ack_failed", error=str(e))
 
     async def send_photo(
         self, media: Media, caption: str | None = None, kb: Keyboard | None = None
     ) -> SentMessage:
-        sent = await self._event.message.answer(
-            caption or "",
-            attachments=_attachments(kb, _to_input_media(media)),
-            format=TextFormat.HTML,
+        sent = await _timed(
+            "send_media",
+            self._event.message.answer(
+                caption or "",
+                attachments=_attachments(kb, _to_input_media(media)),
+                format=TextFormat.HTML,
+            ),
         )
         return SentMessage(message_id=_message_id(sent))
 
@@ -335,19 +359,25 @@ class MaxBot(PlatformBot):
     async def send_message(
         self, user_id: int, text: str, kb: Keyboard | None = None
     ) -> SentMessage:
-        sent = await self._bot.send_message(
-            user_id=user_id, text=text, attachments=_attachments(kb), format=TextFormat.HTML
+        sent = await _timed(
+            "push",
+            self._bot.send_message(
+                user_id=user_id, text=text, attachments=_attachments(kb), format=TextFormat.HTML
+            ),
         )
         return SentMessage(message_id=_message_id(sent))
 
     async def send_photo(
         self, user_id: int, media: Media, caption: str | None = None, kb: Keyboard | None = None
     ) -> SentMessage:
-        sent = await self._bot.send_message(
-            user_id=user_id,
-            text=caption or "",
-            attachments=_attachments(kb, _to_input_media(media)),
-            format=TextFormat.HTML,
+        sent = await _timed(
+            "push_media",
+            self._bot.send_message(
+                user_id=user_id,
+                text=caption or "",
+                attachments=_attachments(kb, _to_input_media(media)),
+                format=TextFormat.HTML,
+            ),
         )
         return SentMessage(message_id=_message_id(sent))
 

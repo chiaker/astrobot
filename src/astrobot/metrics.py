@@ -55,6 +55,13 @@ UPDATE_LAG = Histogram(
     buckets=(0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120),
 )
 
+MAX_API_DURATION = Histogram(
+    "astrobot_max_api_duration_seconds",
+    "One outgoing call to the MAX API, including maxapi's internal retries",
+    ["op"],
+    buckets=(0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120),
+)
+
 ERRORS_TOTAL = Counter(
     "astrobot_errors_total",
     "Unhandled errors caught by global handler",
