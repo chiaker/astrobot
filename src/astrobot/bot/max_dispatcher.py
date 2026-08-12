@@ -60,7 +60,7 @@ from astrobot.bot.states import (
 from astrobot.config import get_settings
 from astrobot.db.models import BirthProfile, User
 from astrobot.db.session import get_sessionmaker
-from astrobot.metrics import UPDATE_DURATION
+from astrobot.metrics import UPDATE_DURATION, UPDATE_LAG
 from astrobot.redis_client import get_redis
 from astrobot.referral import generate_code, parse_start_arg, try_apply_referral
 
@@ -217,20 +217,36 @@ class ContextMiddleware(BaseMiddleware):
         if ctx is not None:
             data["ctx"] = ctx
         data["pbot"] = self._pbot
+
+        kind = _update_kind(event)
+        # Everything that happened BEFORE this middleware and is therefore invisible
+        # to the duration timer below: MAX's own delivery queue, the webhook request,
+        # `asyncio.create_task` waiting for a busy event loop, and the Redis
+        # get_state() the dispatcher does ahead of the middleware chain. The user
+        # waits lag + duration, so a small duration with a large lag means the delay
+        # isn't ours. MAX's clock isn't ours either — skew shows up here, so treat
+        # small values as noise and clamp negatives away.
+        ts = getattr(event, "timestamp", None)
+        lag = max(0.0, time.time() - ts / 1000) if ts else 0.0
+        UPDATE_LAG.labels(kind=kind).observe(lag)
+
         started = time.monotonic()
         try:
             return await handler(event, data)
         finally:
             if ctx is not None:
                 await ctx.finish()
-            # End-to-end time from "update reached the middleware" to "callback
-            # acked / reply sent" — the only thing that answers "why was the bot
-            # slow just now": handler work, DB, LLM and MAX API all roll up here.
+            # Our own share: handler work, DB, LLM and MAX API sends, up to and
+            # including the callback ack in finish().
             elapsed = time.monotonic() - started
-            kind = _update_kind(event)
             UPDATE_DURATION.labels(kind=kind).observe(elapsed)
-            if elapsed > SLOW_UPDATE_SECONDS:
-                log.warning("max_update_slow", kind=kind, seconds=round(elapsed, 1))
+            if elapsed + lag > SLOW_UPDATE_SECONDS:
+                log.warning(
+                    "max_update_slow",
+                    kind=kind,
+                    seconds=round(elapsed, 1),
+                    lag_seconds=round(lag, 1),
+                )
 
 
 # ─────────────────────────── dispatcher ───────────────────────────

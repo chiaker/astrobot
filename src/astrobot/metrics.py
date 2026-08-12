@@ -46,6 +46,15 @@ UPDATE_DURATION = Histogram(
     buckets=(0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120),
 )
 
+UPDATE_LAG = Histogram(
+    "astrobot_update_lag_seconds",
+    "Delay from the messenger-side event timestamp to the start of our handling "
+    "(platform delivery queue + webhook + event-loop backlog). Subject to clock "
+    "skew between the platform and this host; clamped at 0",
+    ["kind"],
+    buckets=(0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120),
+)
+
 ERRORS_TOTAL = Counter(
     "astrobot_errors_total",
     "Unhandled errors caught by global handler",
