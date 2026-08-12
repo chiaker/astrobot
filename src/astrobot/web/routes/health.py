@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
@@ -40,5 +42,9 @@ async def health(session: AsyncSession = Depends(get_session)) -> dict[str, str]
 
 @router.get("/health/live")
 async def liveness() -> dict[str, str]:
-    """Lightweight liveness probe — no dependency checks."""
-    return {"status": "alive"}
+    """Lightweight liveness probe — no dependency checks.
+
+    Also reports the image's git SHA (baked in by the Dockerfile). A deploy that
+    fails partway leaves an older container running and nothing else tells you
+    which commit is actually live — so debugging prod starts here."""
+    return {"status": "alive", "git_sha": os.environ.get("ASTROBOT_GIT_SHA", "unknown")}
