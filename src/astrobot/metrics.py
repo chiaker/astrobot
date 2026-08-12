@@ -39,6 +39,13 @@ LLM_COST_TOTAL = Counter(
     ["kind", "model"],
 )
 
+UPDATE_DURATION = Histogram(
+    "astrobot_update_duration_seconds",
+    "End-to-end handling time of one incoming update, by callback prefix / update type",
+    ["kind"],
+    buckets=(0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120),
+)
+
 ERRORS_TOTAL = Counter(
     "astrobot_errors_total",
     "Unhandled errors caught by global handler",

@@ -17,10 +17,12 @@ Telegram Stars handlers are intentionally NOT wired (MAX has no Stars checkout).
 from __future__ import annotations
 
 import inspect
+import time
 from functools import cache
 
 import structlog
 from maxapi import Bot, Dispatcher, F
+from maxapi.client.default import DefaultConnectionProperties
 from maxapi.context.context import RedisContext
 from maxapi.enums.parse_mode import TextFormat
 from maxapi.filters.command import Command, CommandStart
@@ -58,6 +60,7 @@ from astrobot.bot.states import (
 from astrobot.config import get_settings
 from astrobot.db.models import BirthProfile, User
 from astrobot.db.session import get_sessionmaker
+from astrobot.metrics import UPDATE_DURATION
 from astrobot.redis_client import get_redis
 from astrobot.referral import generate_code, parse_start_arg, try_apply_referral
 
@@ -71,7 +74,43 @@ def build_max_bot() -> Bot:
     # the bot goes silent. We read chat_id/user_id straight off the message and
     # never touch event.chat, so lazy refs are enough — and it saves an API call
     # per update.
-    return Bot(token=get_settings().bot_token, format=TextFormat.HTML, auto_requests=False)
+    #
+    # Connection limits: maxapi's defaults are total=150s, sock_connect=30s,
+    # 3 retries with 1s/2s/4s backoff — one flaky MAX API call could stall a
+    # reply for ~10 minutes with no sign of life. A chat message send that hasn't
+    # come back in 15s isn't coming back usefully; fail fast and retry twice.
+    # after_input_media_delay: maxapi sleeps this long BEFORE every send that
+    # carries an InputMedia (tarot cards, natal wheel) to let the upload settle —
+    # a flat 2s tax on every image. Its `attachment.not.ready` retry loop
+    # (5 tries × 2s) already covers an upload that really wasn't ready.
+    return Bot(
+        token=get_settings().bot_token,
+        format=TextFormat.HTML,
+        auto_requests=False,
+        default_connection=DefaultConnectionProperties(
+            timeout=15,
+            sock_connect=5,
+            max_retries=2,
+            retry_backoff_factor=0.3,
+        ),
+        after_input_media_delay=0.5,
+    )
+
+
+# Updates slower than this get a log line with the payload that caused them. LLM
+# handlers (question/natal/horoscope) legitimately land here; everything else is
+# a real finding.
+SLOW_UPDATE_SECONDS = 15.0
+
+
+def _update_kind(event) -> str:
+    """Metric label: callback payload prefix (`cb:menu`, `cb:q`…) or update type."""
+    cb = getattr(event, "callback", None)
+    payload = getattr(cb, "payload", None) if cb is not None else None
+    if payload:
+        return "cb:" + payload.split(":", 1)[0]
+    ut = getattr(event, "update_type", None)
+    return str(getattr(ut, "value", ut))
 
 
 # ─────────────────────────── helpers ───────────────────────────
@@ -178,11 +217,20 @@ class ContextMiddleware(BaseMiddleware):
         if ctx is not None:
             data["ctx"] = ctx
         data["pbot"] = self._pbot
+        started = time.monotonic()
         try:
             return await handler(event, data)
         finally:
             if ctx is not None:
                 await ctx.finish()
+            # End-to-end time from "update reached the middleware" to "callback
+            # acked / reply sent" — the only thing that answers "why was the bot
+            # slow just now": handler work, DB, LLM and MAX API all roll up here.
+            elapsed = time.monotonic() - started
+            kind = _update_kind(event)
+            UPDATE_DURATION.labels(kind=kind).observe(elapsed)
+            if elapsed > SLOW_UPDATE_SECONDS:
+                log.warning("max_update_slow", kind=kind, seconds=round(elapsed, 1))
 
 
 # ─────────────────────────── dispatcher ───────────────────────────
