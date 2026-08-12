@@ -239,6 +239,11 @@ class MaxContext(PlatformContext):
             return
         self._responded = True
         if not self._ack_text:
+            # Leaving a callback unanswered is suspected of making MAX hold the
+            # NEXT callback from this user until its own timeout (~minutes), which
+            # would explain button presses that land long after the press. Logged
+            # so a slow press can be correlated with an unanswered one before it.
+            log.info("max_callback_unanswered", payload=self.payload)
             return
         try:
             await self._callback.ack(notification=self._ack_text)
