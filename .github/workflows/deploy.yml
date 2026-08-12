@@ -57,18 +57,39 @@ jobs:
         id: image
         run: echo "name=${REGISTRY}/$(echo ${IMAGE_NAME} | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
+      - name: Install SSH key
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          # printf (not echo) with an explicit trailing newline: OpenSSH rejects a
+          # key file whose final line isn't terminated ("invalid format").
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+      # Plain ssh instead of appleboy/ssh-action: that action downloads its
+      # drone-ssh binary from GitHub Releases on every run, so a 503 from the
+      # release CDN fails the deploy for reasons unrelated to the code. ssh is
+      # already on the runner. accept-new keeps the same trust-on-first-use
+      # posture the action had; keepalives stop a NAT idle-timeout from killing
+      # the connection during a quiet multi-minute `docker compose pull`.
+      # timeout-minutes replaces the action's command_timeout: a cold pull of the
+      # ~750MB deps layer over the server's slow ghcr link needs the room.
+      #
+      # `cat > file && bash file </dev/null` rather than `bash -s`: with `bash -s`
+      # the script itself arrives on stdin, and the first command that reads stdin
+      # (`docker compose run --rm migrate` attaches it) would swallow the rest of
+      # the script. cat drains the heredoc to EOF first, then the script runs with
+      # stdin closed.
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          envs: IMAGE_NAME,IMAGE_TAG
-          # A cold pull of the ~750MB deps layer (after a dep/Dockerfile change) can
-          # exceed the 10m default over the server's slow ghcr link — give it room.
-          command_timeout: 25m
-          script: |
+        timeout-minutes: 30
+        run: |
+          ssh -i ~/.ssh/id_deploy \
+              -p "${{ secrets.SSH_PORT || 22 }}" \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=accept-new \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=20 \
+              "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+              'cat > /tmp/astrobot-deploy.sh && bash /tmp/astrobot-deploy.sh </dev/null' <<'REMOTE'
             set -euo pipefail
             cd /opt/astrobot
             git fetch --quiet origin main
@@ -137,6 +158,4 @@ jobs:
             # dangling ones — old :<short_sha> tags accumulate otherwise and fill
             # /var/lib/docker/overlay2. Rollbacks re-pull from the registry.
             docker image prune -af
-        env:
-          IMAGE_NAME: ${{ steps.image.outputs.name }}
-          IMAGE_TAG: ${{ needs.build.outputs.tag }}
+          REMOTE
