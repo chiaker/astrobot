@@ -122,6 +122,11 @@ REFERRALS_REGISTERED = Counter(
     "Successful referral applications",
 )
 
+CHANNEL_BONUS_CLAIMED = Counter(
+    "astrobot_channel_bonus_claimed_total",
+    "Channel-subscription bonuses granted",
+)
+
 FAVORITES_SAVED = Counter(
     "astrobot_favorites_saved_total",
     "Items added to favorites",

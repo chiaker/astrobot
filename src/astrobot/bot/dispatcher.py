@@ -25,6 +25,7 @@ def build_dispatcher() -> Dispatcher:
     from astrobot.bot.handlers import (
         about,
         broadcast,
+        channel_bonus,
         compatibility,
         fallback,
         favorites,
@@ -69,6 +70,7 @@ def build_dispatcher() -> Dispatcher:
     dp.include_router(compatibility.router)
     dp.include_router(payment.router)
     dp.include_router(about.router)
+    dp.include_router(channel_bonus.router)
     dp.include_router(favorites.router)
     dp.include_router(support.router)
     dp.include_router(response_toggle.router)

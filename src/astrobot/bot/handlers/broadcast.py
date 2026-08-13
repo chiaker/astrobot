@@ -62,7 +62,7 @@ async def on_broadcast_ask(
 
     allowance = await check_question(session, user)
     if not allowance.allowed:
-        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
+        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb(user))
         return
 
     await state.set_state(AskingQuestion.waiting_for_text)
@@ -99,7 +99,7 @@ async def on_broadcast_chat(
         return
     allowance = await check_question(session, user)
     if not allowance.allowed:
-        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
+        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb(user))
         return
     await state.set_state(AskingQuestion.waiting_for_text)
     await ctx.reply("🌙 Выбери тему — или напиши свой вопрос:", topics_kb())

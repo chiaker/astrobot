@@ -34,6 +34,7 @@ from sqlalchemy import select
 
 from astrobot.bot.handlers import about as h_about
 from astrobot.bot.handlers import broadcast as h_bcast
+from astrobot.bot.handlers import channel_bonus as h_chbonus
 from astrobot.bot.handlers import compatibility as h_compat
 from astrobot.bot.handlers import favorites as h_fav
 from astrobot.bot.handlers import horoscope as h_horo
@@ -303,6 +304,8 @@ _CB_EXACT = {
     "menu:new": h_menu.on_menu_new,
     "menu:about": h_about.on_about,
     "referral:show": h_about.on_referral_show,
+    "chbonus:show": h_chbonus.on_channel_bonus_show,
+    "chbonus:claim": h_chbonus.on_channel_bonus_claim,
     "legal:privacy": h_legal.cb_privacy,
     "legal:terms": h_legal.cb_terms,
     "menu:natal": h_natal.on_natal,

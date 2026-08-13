@@ -49,6 +49,11 @@ class User(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     bonus_questions: Mapped[int] = mapped_column(Integer, default=0)
+    # When the "subscribe to our channel → +2 questions" bonus was granted.
+    # NULL = not claimed yet; the column IS the one-per-account guard.
+    channel_bonus_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     free_questions_balance: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
     # One-off "free plan 2→5" gift: TRUE on every existing user topped up by the
     # 0027 migration, cleared once the gift message is delivered (scheduler). New

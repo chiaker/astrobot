@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from astrobot.bot.platform import Button, Keyboard
+from astrobot.config import get_settings
 from astrobot.db.models import User
 
 MENU_NATAL = "🌟 Натальная карта"
@@ -24,6 +25,22 @@ MENU_BACK_NEW_BTN = Button(text="🔙 Меню", payload="menu:new")
 # handler (on_broadcast_onboarding), which is registered on both platforms.
 ONBOARDING_START_BTN = Button(text="✨ Пройти знакомство", payload="bcast:onb")
 
+# Акция «подпишись на канал → +2 вопроса». Показывается, пока бонус не забран;
+# доступность считает channel_bonus_available() (handlers/channel_bonus.py).
+CHANNEL_BONUS_BTN = Button(text="🎁 +1 вопрос за подписку", payload="chbonus:show")
+
+
+def channel_bonus_available(user: User | None) -> bool:
+    """Акция настроена и этот пользователь бонус ещё не забирал."""
+    if user is None:
+        return False
+    s = get_settings()
+    return bool(s.promo_channel_url and s.promo_channel_id) and user.channel_bonus_at is None
+
+
+def _channel_bonus_row(user: User | None) -> list[Button]:
+    return [CHANNEL_BONUS_BTN] if channel_bonus_available(user) else []
+
 
 def onboarding_start_kb() -> Keyboard:
     return Keyboard.from_rows([[ONBOARDING_START_BTN]])
@@ -46,9 +63,12 @@ def promo_row(user: User) -> list[Button]:
     return []
 
 
-def main_menu_inline() -> Keyboard:
+def main_menu_inline(user: User | None = None) -> Keyboard:
     return Keyboard.from_rows(
         [
+            # Ряд появляется, только пока бонус за подписку не забран (пустой ряд
+            # Keyboard.row отбрасывает сам).
+            _channel_bonus_row(user),
             [
                 Button(text=MENU_HOROSCOPE, payload="menu:horoscope"),
                 Button(text=MENU_NATAL, payload="menu:natal"),
@@ -303,9 +323,11 @@ def build_broadcast_kb(variant) -> Keyboard | None:
     return Keyboard.from_rows(rows)
 
 
-def premium_or_back_kb() -> Keyboard:
+def premium_or_back_kb(user: User | None = None) -> Keyboard:
     return Keyboard.from_rows(
         [
+            # Первым рядом: человек упёрся в лимит — здесь бесплатные +2 нужнее всего.
+            _channel_bonus_row(user),
             [Button(text="💎 Открыть Премиум", payload="menu:premium")],
             [MENU_BACK_BTN],
         ]

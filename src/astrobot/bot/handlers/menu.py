@@ -30,7 +30,7 @@ async def render_main_menu(user: User, session: AsyncSession) -> tuple[str, Keyb
             "💎 Премиум открывает больше звёзд ✨\n🤝 Пригласи друга — оба получите по 2 вопроса"
         )
     text = f"🔮 Привет, <b>{name}</b>! Выбери раздел:\n{sub}"
-    return text, main_menu_inline()
+    return text, main_menu_inline(user)
 
 
 async def send_main_menu(message: Message, user: User, session: AsyncSession) -> None:

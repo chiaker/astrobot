@@ -63,7 +63,7 @@ async def on_question_button(
         return
     allowance = await check_question(session, user)
     if not allowance.allowed:
-        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
+        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb(user))
         return
     await state.set_state(AskingQuestion.waiting_for_text)
     await ctx.edit("🌙 Выбери тему — или напиши свой вопрос:", topics_kb())
@@ -87,7 +87,7 @@ async def _answer_question(
         reset_premium_questions_if_due(user)
         allowance = await check_question(session, user)
         if not allowance.allowed:
-            await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
+            await ctx.reply(paywall_text("question", allowance), premium_or_back_kb(user))
             return
 
         await ctx.reply("🌟 Прикладываю карту к твоему вопросу…")
@@ -144,7 +144,7 @@ async def _answer_question(
         # дальше. Пейволл только когда спрашивать больше нечем.
         after = await check_question(session, user)
         if not after.allowed:
-            await ctx.reply(paywall_text("question", after), premium_or_back_kb())
+            await ctx.reply(paywall_text("question", after), premium_or_back_kb(user))
             return
         await ctx.reply(
             "🌙 Что разберём дальше? Выбери тему — или просто напиши свой вопрос:",
@@ -239,7 +239,7 @@ async def on_question_pick(
     if not allowance.allowed:
         await state.clear()
         await ctx.answer_callback()
-        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
+        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb(user))
         return
 
     # Одно нажатие на конкретный вопрос за DUP_PRESS_WINDOW секунд. MAX иногда

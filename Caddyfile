@@ -1,11 +1,12 @@
 # Bot (webhook, /admin, /metrics, /health) on the main domain.
 {$BOT_DOMAIN} {
-	# MAX's webhook rides THIS hostname, not max.$BOT_DOMAIN. The `max.` subdomain
-	# resolves intermittently (public resolvers alternate between the right A
-	# record and NXDOMAIN), so MAX's delivery workers burned 20-30s per event
-	# retrying the lookup — while this hostname resolves reliably. Only the
-	# webhook moves; the MAX admin panel stays on its own subdomain, where a slow
-	# lookup costs a human one page load instead of every button press.
+	# Fallback route for MAX's webhook. It lived here because the old dns.army
+	# `max.` subdomain resolved intermittently (public resolvers alternated
+	# between the right A record and NXDOMAIN) and MAX's delivery workers burned
+	# 20-30s per event on the lookup. On astra-ezoterika.ru the subdomain resolves
+	# fine and MAX subscribes to $MAX_DOMAIN, so this handle is unused — kept as a
+	# working URL to fail over to if that ever regresses. Safe to delete once the
+	# new domain has a few quiet weeks.
 	handle /max/* {
 		reverse_proxy {
 			dynamic a {
@@ -64,6 +65,15 @@
 		output stderr
 		format console
 	}
+}
+
+# Marketing landing — static files straight off disk, no app container involved.
+# LANDING_DOMAIN defaults to landing.localhost when unset (internal cert, no
+# public ACME) so this block never breaks the bot's site.
+{$LANDING_DOMAIN} {
+	root * /srv/landing
+	file_server
+	encode gzip
 }
 
 # Grafana on its own subdomain (served at root — no sub-path quirks).

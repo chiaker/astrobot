@@ -69,8 +69,14 @@ services:
       # grafana.localhost is harmless (Caddy internal cert, no public ACME) when
       # unset, so the bot's site never breaks.
       GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:-grafana.localhost}
+      # Marketing landing, e.g. astra-ezoterika.ru. Default landing.localhost is
+      # harmless (internal cert) when unset.
+      LANDING_DOMAIN: ${LANDING_DOMAIN:-landing.localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The deploy does `git reset --hard origin/main` in /opt/astrobot, so a new
+      # index.html is on disk after every push — Caddy serves it with no rebuild.
+      - ./landing:/srv/landing:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Astra — эзотерический сервис: Таро, гороскопы, натальная карта</title>
+<meta name="description" content="Расклады Таро, гороскоп на каждый день, натальная карта и совместимость в чате Telegram и MAX.">
+<link rel="canonical" href="https://astra-ezoterika.ru/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://astra-ezoterika.ru/">
+<meta property="og:title" content="Astra — эзотерический сервис">
+<meta property="og:description" content="Расклады Таро, гороскоп на каждый день, натальная карта и совместимость. Прямо в чате.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🔮</text></svg>">
+<style>
+  /* Single committed night palette — the page is a candlelit room, not a document. */
+  :root {
+    --ink:        #0A0513;
+    --ink-2:      #130A26;
+    --ink-3:      #1C1036;
+    --gold:       #E3BC72;
+    --gold-lit:   #F7E6B8;
+    --lilac:      #B9A0EA;
+    --violet:     #7C4DF0;
+    --text:       #EDE6FA;
+    --muted:      #A292C4;
+    --line:       rgba(227, 188, 114, .22);
+
+    --f-display: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+    --f-body: "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif;
+
+    --step--1: clamp(.78rem, .74rem + .2vw, .86rem);
+    --step-0:  clamp(1rem, .96rem + .25vw, 1.1rem);
+    --step-1:  clamp(1.2rem, 1.1rem + .5vw, 1.45rem);
+    --step-2:  clamp(1.6rem, 1.35rem + 1.2vw, 2.4rem);
+    --step-3:  clamp(2.4rem, 1.8rem + 3vw, 4rem);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--text);
+    font-family: var(--f-body);
+    font-size: var(--step-0);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  #sky {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  .glow {
+    position: fixed;
+    z-index: 0;
+    pointer-events: none;
+    border-radius: 50%;
+    filter: blur(90px);
+    opacity: .5;
+  }
+  .glow.a { top: -14vh; left: -10vw; width: 60vw; height: 60vw; background: radial-gradient(circle, #3B1F7A 0%, transparent 68%); }
+  .glow.b { bottom: -22vh; right: -14vw; width: 66vw; height: 66vw; background: radial-gradient(circle, #5A2A6B 0%, transparent 70%); }
+
+  .page {
+    position: relative;
+    z-index: 1;
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 0 24px 72px;
+  }
+
+  section { padding-block: clamp(56px, 8vw, 104px); }
+
+  /* ---- hero ---- */
+
+  .hero {
+    display: grid;
+    grid-template-columns: 1.05fr .95fr;
+    gap: clamp(32px, 5vw, 72px);
+    align-items: center;
+    padding-top: clamp(20px, 3vw, 40px);
+  }
+
+  .eyebrow {
+    font-size: var(--step--1);
+    letter-spacing: .42em;
+    text-transform: uppercase;
+    color: var(--lilac);
+    margin: 0 0 18px;
+  }
+
+  .wordmark {
+    font-family: var(--f-display);
+    font-size: var(--step-3);
+    font-weight: 500;
+    letter-spacing: .3em;
+    line-height: 1;
+    margin: 0;
+    background: linear-gradient(170deg, var(--gold-lit) 8%, var(--gold) 45%, #A97C33 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  h2 {
+    font-family: var(--f-display);
+    font-size: var(--step-2);
+    font-weight: 500;
+    line-height: 1.15;
+    text-wrap: balance;
+    margin: 0 0 20px;
+  }
+
+  .hero h2 { margin-top: 28px; }
+
+  .lede {
+    max-width: 46ch;
+    color: var(--muted);
+    margin: 0 0 32px;
+  }
+
+  /* ornamental rule, straight off a tarot card back */
+  .rule {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--gold);
+    margin: 26px 0;
+    max-width: 380px;
+  }
+  .rule::before, .rule::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--line), transparent);
+  }
+  .rule span { font-size: .8rem; letter-spacing: .3em; }
+
+  .features {
+    list-style: none;
+    margin: 0 0 36px;
+    padding: 0;
+    display: grid;
+    gap: 13px;
+  }
+  .features li {
+    display: grid;
+    grid-template-columns: 40px 1fr;
+    align-items: center;
+    gap: 16px;
+    font-size: var(--step-1);
+    font-family: var(--f-display);
+  }
+  .features svg { width: 30px; height: 30px; stroke: var(--gold); fill: none; stroke-width: 1.2; }
+
+  .cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 15px 26px;
+    border-radius: 999px;
+    text-decoration: none;
+    font-size: var(--step-0);
+    font-weight: 600;
+    border: 1px solid transparent;
+    transition: transform .2s ease, box-shadow .2s ease, background-color .2s ease;
+  }
+  .btn svg { width: 20px; height: 20px; }
+  .btn-tg {
+    background: linear-gradient(140deg, var(--gold-lit), var(--gold));
+    color: #2A1904;
+    box-shadow: 0 12px 34px rgba(227, 188, 114, .22);
+  }
+  .btn-max {
+    background: rgba(124, 77, 240, .14);
+    border-color: rgba(185, 160, 234, .45);
+    color: var(--text);
+  }
+  .btn:hover { transform: translateY(-2px); }
+  .btn-tg:hover { box-shadow: 0 16px 40px rgba(227, 188, 114, .34); }
+  .btn-max:hover { background: rgba(124, 77, 240, .26); }
+  a:focus-visible, .btn:focus-visible {
+    outline: 2px solid var(--gold-lit);
+    outline-offset: 3px;
+  }
+
+  /* ---- phone ---- */
+
+  .phone {
+    justify-self: center;
+    width: min(320px, 82vw);
+    border-radius: 42px;
+    padding: 12px;
+    background: linear-gradient(160deg, #2B1D49, #0D0720 60%);
+    border: 1px solid rgba(185, 160, 234, .28);
+    box-shadow: 0 40px 90px rgba(0, 0, 0, .6), 0 0 0 1px rgba(0, 0, 0, .5) inset;
+  }
+  .screen {
+    border-radius: 32px;
+    background: var(--ink-2);
+    overflow: hidden;
+    display: grid;
+    gap: 10px;
+    padding: 14px 12px 16px;
+  }
+  .bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: .7rem;
+    color: var(--muted);
+    padding: 0 6px 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, .06);
+  }
+  .bar b { color: var(--text); font-size: .82rem; font-weight: 600; }
+
+  .card-art {
+    border-radius: 18px;
+    background: radial-gradient(circle at 50% 42%, #37205E, #150B2B 72%);
+    border: 1px solid var(--line);
+    display: grid;
+    justify-items: center;
+    gap: 6px;
+    padding: 16px 0 18px;
+  }
+  .card-art .name {
+    font-family: var(--f-display);
+    letter-spacing: .32em;
+    text-indent: .32em;
+    color: var(--gold-lit);
+    font-size: 1.05rem;
+  }
+  #wheel { width: 150px; height: 150px; }
+
+  .bubble {
+    background: rgba(255, 255, 255, .05);
+    border-radius: 14px 14px 14px 4px;
+    padding: 10px 13px;
+    font-size: .82rem;
+    line-height: 1.5;
+    color: #E2D8F5;
+  }
+  .send {
+    margin-top: 2px;
+    text-align: center;
+    background: var(--violet);
+    border-radius: 12px;
+    padding: 11px;
+    font-size: .84rem;
+    font-weight: 600;
+  }
+
+  /* ---- steps ---- */
+
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 22px;
+    counter-reset: step;
+  }
+  .step {
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 26px 24px;
+    background: linear-gradient(160deg, rgba(255, 255, 255, .04), transparent);
+  }
+  .step::before {
+    counter-increment: step;
+    content: counter(step);
+    font-family: var(--f-display);
+    font-size: 1.6rem;
+    color: var(--gold);
+    display: block;
+    margin-bottom: 10px;
+  }
+  .step h3 {
+    font-family: var(--f-display);
+    font-weight: 500;
+    font-size: var(--step-1);
+    margin: 0 0 6px;
+  }
+  .step p { margin: 0; color: var(--muted); font-size: var(--step--1); }
+
+  /* ---- questions ---- */
+
+  .asks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 26px;
+  }
+  .ask {
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 10px 20px;
+    font-size: var(--step--1);
+    color: #DCD1F2;
+    background: rgba(255, 255, 255, .03);
+  }
+
+  /* ---- closing ---- */
+
+  .close {
+    text-align: center;
+    border-top: 1px solid rgba(255, 255, 255, .07);
+  }
+  .close .lede { margin-inline: auto; }
+  .close .cta { justify-content: center; }
+
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: var(--step--1);
+    padding-top: 34px;
+  }
+
+  .reveal {
+    opacity: 0;
+    transform: translateY(14px);
+    transition: opacity .7s ease, transform .7s ease;
+  }
+  .reveal.in { opacity: 1; transform: none; }
+
+  @media (max-width: 860px) {
+    .hero { grid-template-columns: 1fr; text-align: left; }
+    .phone { order: -1; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; transition: none; }
+    .btn { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="sky"></canvas>
+<div class="glow a"></div>
+<div class="glow b"></div>
+
+<main class="page">
+
+  <section class="hero">
+    <div>
+      <p class="eyebrow">Эзотерический сервис</p>
+      <h1 class="wordmark">ASTRA</h1>
+      <h2>Ответы на важные вопросы уже ждут тебя</h2>
+      <p class="lede">Расклады Таро, гороскоп на каждый день, натальная карта и совместимость — и понятный разбор твоей ситуации. Прямо в чате, в любое время суток.</p>
+
+      <div class="rule"><span>✦ ✦ ✦</span></div>
+
+      <ul class="features">
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="11" height="16" rx="2"/><path d="M6 6 3.6 16.6a2 2 0 0 0 1.5 2.4l7 1.6"/><path d="M13.5 8.5 15 11l-1.5 2.5L12 11z"/></svg>
+          Расклады Таро
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 14.5A8 8 0 0 1 9 4a8.2 8.2 0 1 0 10.5 10.5z"/><path d="M17 4.5v3M15.5 6h3"/></svg>
+          Гороскоп на каждый день
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.4"/><path d="M12 3.5v3M12 17.5v3M3.5 12h3M17.5 12h3M6 6l2.1 2.1M15.9 15.9 18 18M18 6l-2.1 2.1M8.1 15.9 6 18"/></svg>
+          Натальная карта
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8.6" cy="12" r="5.4"/><circle cx="15.4" cy="12" r="5.4"/></svg>
+          Совместимость
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 13.6 9 20 12l-6.4 3L12 21.5 10.4 15 4 12l6.4-3z"/></svg>
+          Анализ ситуаций
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.4-7-9.3A3.9 3.9 0 0 1 12 8a3.9 3.9 0 0 1 7 2.7c0 4.9-7 9.3-7 9.3z"/></svg>
+          Отношения, финансы, предназначение
+        </li>
+      </ul>
+
+      <div class="cta">
+        <a class="btn btn-tg" href="https://t.me/astrology_bbot">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.9 4.3 18.7 19.5c-.24 1.07-.88 1.33-1.78.83l-4.92-3.63-2.37 2.28c-.26.26-.48.48-.99.48l.35-5.02 9.13-8.25c.4-.35-.09-.55-.62-.2L6.24 13.1 1.4 11.6c-1.05-.33-1.07-1.05.22-1.55L20.5 2.7c.88-.32 1.65.2 1.4 1.6z"/></svg>
+          Открыть в Telegram
+        </a>
+        <a class="btn btn-max" href="https://max.ru/astrology_bbot">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9.2"/><path d="M8 15.5v-7l4 4.4 4-4.4v7"/></svg>
+          Открыть в MAX
+        </a>
+      </div>
+    </div>
+
+    <div class="phone">
+      <div class="screen">
+        <div class="bar"><b>Astra</b><span>бот</span></div>
+        <div class="card-art">
+          <svg id="wheel" viewBox="0 0 200 200" aria-hidden="true"></svg>
+          <span class="name">ASTRA</span>
+        </div>
+        <div class="bubble">Приветствую, я Astra ✦</div>
+        <div class="bubble">Я здесь, чтобы помочь найти ответы, подсказать верное направление и раскрыть тайны судьбы.</div>
+        <div class="bubble">Задай свой вопрос, и я подготовлю для тебя послание Вселенной 💜</div>
+        <div class="send">Задать вопрос</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2>Как это работает</h2>
+    <div class="steps">
+      <div class="step">
+        <h3>Расскажи о себе</h3>
+        <p>Имя, дата, время и место рождения — минута на всё. По ним Астра строит твою натальную карту.</p>
+      </div>
+      <div class="step">
+        <h3>Получи натальную карту</h3>
+        <p>Сразу после анкеты — разбор твоей карты. С астрологическими терминами или простыми словами, как удобнее.</p>
+      </div>
+      <div class="step">
+        <h3>Спрашивай дальше</h3>
+        <p>Расклад Таро, гороскоп на день, совместимость или личный вопрос — Астра уже знает твою карту.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2>О чём спрашивают чаще всего</h2>
+    <p class="lede">Вопрос может быть любым — вот с чего начинают другие.</p>
+    <div class="asks">
+      <span class="ask">Что меня ждёт в этих отношениях?</span>
+      <span class="ask">Стоит ли менять работу сейчас?</span>
+      <span class="ask">Почему всё застыло на месте?</span>
+      <span class="ask">Что думает обо мне этот человек?</span>
+      <span class="ask">Когда придут деньги?</span>
+      <span class="ask">В чём моё предназначение?</span>
+    </div>
+  </section>
+
+  <section class="close reveal">
+    <div class="rule" style="margin-inline:auto"><span>✦ ✦ ✦</span></div>
+    <h2>Задай вопрос прямо сейчас</h2>
+    <p class="lede">Вселенная уже готова ответить — осталось спросить.</p>
+    <div class="cta">
+      <a class="btn btn-tg" href="https://t.me/astrology_bbot">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.9 4.3 18.7 19.5c-.24 1.07-.88 1.33-1.78.83l-4.92-3.63-2.37 2.28c-.26.26-.48.48-.99.48l.35-5.02 9.13-8.25c.4-.35-.09-.55-.62-.2L6.24 13.1 1.4 11.6c-1.05-.33-1.07-1.05.22-1.55L20.5 2.7c.88-.32 1.65.2 1.4 1.6z"/></svg>
+        Открыть в Telegram
+      </a>
+      <a class="btn btn-max" href="https://max.ru/astrology_bbot">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9.2"/><path d="M8 15.5v-7l4 4.4 4-4.4v7"/></svg>
+        Открыть в MAX
+      </a>
+    </div>
+    <footer>
+      <p>Astra — развлекательный сервис. 18+. Не заменяет консультацию врача, юриста или финансового советника.</p>
+    </footer>
+  </section>
+
+</main>
+
+<script>
+  const NS = "http://www.w3.org/2000/svg";
+  const wheel = document.getElementById("wheel");
+  const el = (n, a) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); return e; };
+
+  // Astrological wheel: 12 sectors, zodiac glyphs on the rim, radial ticks between.
+  const gold = "#E3BC72";
+  wheel.append(el("circle", { cx: 100, cy: 100, r: 74, fill: "none", stroke: gold, "stroke-opacity": .5 }));
+  wheel.append(el("circle", { cx: 100, cy: 100, r: 60, fill: "none", stroke: gold, "stroke-opacity": .25 }));
+  wheel.append(el("circle", { cx: 100, cy: 100, r: 30, fill: "none", stroke: gold, "stroke-opacity": .35 }));
+
+  const signs = ["♈", "♉", "♊", "♋", "♌", "♍", "♎", "♏", "♐", "♑", "♒", "♓"];
+  signs.forEach((s, i) => {
+    const a = (i / 12) * Math.PI * 2 - Math.PI / 2;
+    const mid = a + Math.PI / 12;
+    const t = el("text", {
+      x: 100 + Math.cos(mid) * 67, y: 100 + Math.sin(mid) * 67,
+      fill: gold, "font-size": 11, "text-anchor": "middle", "dominant-baseline": "central", "fill-opacity": .85
+    });
+    t.textContent = s;
+    wheel.append(t);
+    wheel.append(el("line", {
+      x1: 100 + Math.cos(a) * 30, y1: 100 + Math.sin(a) * 30,
+      x2: 100 + Math.cos(a) * 60, y2: 100 + Math.sin(a) * 60,
+      stroke: gold, "stroke-opacity": .3
+    }));
+  });
+  // eight-pointed star at the centre
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    wheel.append(el("line", {
+      x1: 100, y1: 100,
+      x2: 100 + Math.cos(a) * (i % 2 ? 16 : 28), y2: 100 + Math.sin(a) * (i % 2 ? 16 : 28),
+      stroke: "#F7E6B8", "stroke-opacity": .8
+    }));
+  }
+
+  // Ambient starfield.
+  const sky = document.getElementById("sky");
+  const ctx = sky.getContext("2d");
+  const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let stars = [];
+
+  function seed() {
+    const dpr = devicePixelRatio || 1;
+    sky.width = innerWidth * dpr;
+    sky.height = innerHeight * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    stars = Array.from({ length: Math.round(innerWidth * innerHeight / 9000) }, () => ({
+      x: Math.random() * innerWidth,
+      y: Math.random() * innerHeight,
+      r: Math.random() * 1.1 + .3,
+      p: Math.random() * Math.PI * 2
+    }));
+  }
+
+  function draw(t) {
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    for (const s of stars) {
+      const tw = calm ? .55 : .45 + Math.sin(t / 900 + s.p) * .3;
+      ctx.globalAlpha = tw;
+      ctx.fillStyle = s.r > 1 ? "#F7E6B8" : "#CBB8F2";
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (!calm) requestAnimationFrame(draw);
+  }
+
+  addEventListener("resize", seed);
+  seed();
+  requestAnimationFrame(draw);
+
+  // Scroll reveals.
+  const io = new IntersectionObserver((es) => {
+    for (const e of es) if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+  }, { threshold: .15 });
+  document.querySelectorAll(".reveal").forEach((n) => io.observe(n));
+</script>
+</body>
+</html>

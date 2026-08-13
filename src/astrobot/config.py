@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     admin_secret: str = Field(default="", alias="ADMIN_SECRET")
 
     bot_username: str = Field(default="", alias="BOT_USERNAME")
+
+    # "Subscribe to our channel → +2 free questions" promo. Per-platform values:
+    # a t.me link in .env, a max.ru link in .env.max. Both must be set or the
+    # promo stays invisible — and the bot MUST be an admin of that channel, or
+    # the membership check can't see anyone.
+    promo_channel_url: str = Field(default="", alias="PROMO_CHANNEL_URL")
+    promo_channel_id: str = Field(default="", alias="PROMO_CHANNEL_ID")
     ops_chat_id: int | None = Field(default=None, alias="OPS_CHAT_ID")
     # Optional welcome animation on first /start: a direct gif/mp4 URL or a
     # Telegram file_id. Empty → text-only greeting (current behaviour).

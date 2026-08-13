@@ -69,7 +69,7 @@ async def _start_new(ctx: PlatformContext, state, session: AsyncSession, user: U
         return
     allowance = await check_question(session, user)
     if not allowance.allowed:
-        await ctx.edit(paywall_text("question", allowance), premium_or_back_kb())
+        await ctx.edit(paywall_text("question", allowance), premium_or_back_kb(user))
         return
     await state.set_state(CompatFlow.waiting_for_name)
     await ctx.edit(
@@ -179,7 +179,7 @@ async def on_compat_city(ctx: PlatformContext, state, session: AsyncSession, use
 
     allowance = await check_question(session, user)
     if not allowance.allowed:
-        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
+        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb(user))
         return
 
     profile = await session.get(BirthProfile, user.id)
@@ -224,7 +224,7 @@ async def _do_compat(
         reset_premium_questions_if_due(user)
         allowance = await check_question(session, user)
         if not allowance.allowed:
-            await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
+            await ctx.reply(paywall_text("question", allowance), premium_or_back_kb(user))
             return
 
         await ctx.reply("💞 Сравниваю ваши карты…")

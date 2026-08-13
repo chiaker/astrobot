@@ -42,7 +42,7 @@ def _last_kb(resp_id: int, user: User) -> Keyboard:
 async def _start_new(ctx: PlatformContext, state, session: AsyncSession, user: User) -> None:
     allowance = await check_question(session, user)
     if not allowance.allowed:
-        await ctx.edit(paywall_text("question", allowance), premium_or_back_kb())
+        await ctx.edit(paywall_text("question", allowance), premium_or_back_kb(user))
         return
     await state.set_state(TarotFlow.waiting_for_question)
     await ctx.edit(
@@ -81,7 +81,7 @@ async def on_tarot_draw(ctx: PlatformContext, state, session: AsyncSession, user
     await state.clear()
     allowance = await check_question(session, user)
     if not allowance.allowed:
-        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
+        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb(user))
         return
     await _do_tarot(ctx, session, user, question=None)
 
@@ -99,7 +99,7 @@ async def on_tarot_question(
     await state.clear()
     allowance = await check_question(session, user)
     if not allowance.allowed:
-        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
+        await ctx.reply(paywall_text("question", allowance), premium_or_back_kb(user))
         return
     await _do_tarot(ctx, session, user, question=question[:500] or None)
 
@@ -117,7 +117,7 @@ async def _do_tarot(
         reset_premium_questions_if_due(user)
         allowance = await check_question(session, user)
         if not allowance.allowed:
-            await ctx.reply(paywall_text("question", allowance), premium_or_back_kb())
+            await ctx.reply(paywall_text("question", allowance), premium_or_back_kb(user))
             return
 
         await ctx.reply("🃏 Тасую колоду и раскладываю карты…")
