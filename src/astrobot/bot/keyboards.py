@@ -66,9 +66,6 @@ def promo_row(user: User) -> list[Button]:
 def main_menu_inline(user: User | None = None) -> Keyboard:
     return Keyboard.from_rows(
         [
-            # Ряд появляется, только пока бонус за подписку не забран (пустой ряд
-            # Keyboard.row отбрасывает сам).
-            _channel_bonus_row(user),
             [
                 Button(text=MENU_HOROSCOPE, payload="menu:horoscope"),
                 Button(text=MENU_NATAL, payload="menu:natal"),
@@ -85,10 +82,13 @@ def main_menu_inline(user: User | None = None) -> Keyboard:
                 Button(text=MENU_PREMIUM, payload="menu:premium"),
                 Button(text=MENU_PROFILE, payload="menu:profile"),
             ],
+            # Оба «бесплатных» способа получить вопросы — в одном ряду. Кнопка
+            # подписки пропадает, когда бонус забран, тогда ряд из одной кнопки.
             [
                 Button(text="🤝 Пригласить друга", payload="referral:show"),
-                Button(text=MENU_ABOUT, payload="menu:about"),
+                *_channel_bonus_row(user),
             ],
+            [Button(text=MENU_ABOUT, payload="menu:about")],
         ]
     )
 

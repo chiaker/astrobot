@@ -92,3 +92,17 @@ async def test_subscription_check_failure_is_not_a_grant(monkeypatch):
     await cb.on_channel_bonus_claim(ctx, session, user, pbot=Boom())
     assert user.bonus_questions == 0
     assert session.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_broken_config_is_not_a_grant(monkeypatch):
+    """Нечитаемый конфиг (нет .env в CI) — тоже «не подписан», а не 500."""
+
+    def boom():
+        raise ValueError("no settings")
+
+    monkeypatch.setattr(cb, "get_settings", boom)
+    user, ctx, session = _user(), FakeCtx(), FakeSession()
+    await cb.on_channel_bonus_claim(ctx, session, user, pbot=None)
+    assert user.bonus_questions == 0
+    assert session.commits == 0

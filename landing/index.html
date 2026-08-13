@@ -37,6 +37,8 @@
 
   * { box-sizing: border-box; }
 
+  html { scroll-behavior: smooth; }
+
   body {
     margin: 0;
     background: var(--ink);
@@ -252,6 +254,7 @@
     color: #E2D8F5;
   }
   .send {
+    display: block;
     margin-top: 2px;
     text-align: center;
     background: var(--violet);
@@ -259,7 +262,11 @@
     padding: 11px;
     font-size: .84rem;
     font-weight: 600;
+    color: var(--text);
+    text-decoration: none;
+    transition: background-color .2s ease;
   }
+  .send:hover { background: #8f66f5; }
 
   /* ---- steps ---- */
 
@@ -338,6 +345,7 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
     .reveal { opacity: 1; transform: none; transition: none; }
     .btn { transition: none; }
   }
@@ -388,11 +396,11 @@
       </ul>
 
       <div class="cta">
-        <a class="btn btn-tg" href="https://t.me/astrology_bbot">
+        <a class="btn btn-tg" href="https://t.me/astra_provodnik_bot">
           <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.9 4.3 18.7 19.5c-.24 1.07-.88 1.33-1.78.83l-4.92-3.63-2.37 2.28c-.26.26-.48.48-.99.48l.35-5.02 9.13-8.25c.4-.35-.09-.55-.62-.2L6.24 13.1 1.4 11.6c-1.05-.33-1.07-1.05.22-1.55L20.5 2.7c.88-.32 1.65.2 1.4 1.6z"/></svg>
           Открыть в Telegram
         </a>
-        <a class="btn btn-max" href="https://max.ru/astrology_bbot">
+        <a class="btn btn-max" href="https://max.ru/id231129141847_bot">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9.2"/><path d="M8 15.5v-7l4 4.4 4-4.4v7"/></svg>
           Открыть в MAX
         </a>
@@ -409,7 +417,7 @@
         <div class="bubble">Приветствую, я Astra ✦</div>
         <div class="bubble">Я здесь, чтобы помочь найти ответы, подсказать верное направление и раскрыть тайны судьбы.</div>
         <div class="bubble">Задай свой вопрос, и я подготовлю для тебя послание Вселенной 💜</div>
-        <div class="send">Задать вопрос</div>
+        <a class="send" href="#start">Задать вопрос</a>
       </div>
     </div>
   </section>
@@ -445,16 +453,16 @@
     </div>
   </section>
 
-  <section class="close reveal">
+  <section class="close reveal" id="start">
     <div class="rule" style="margin-inline:auto"><span>✦ ✦ ✦</span></div>
     <h2>Задай вопрос прямо сейчас</h2>
     <p class="lede">Вселенная уже готова ответить — осталось спросить.</p>
     <div class="cta">
-      <a class="btn btn-tg" href="https://t.me/astrology_bbot">
+      <a class="btn btn-tg" href="https://t.me/astra_provodnik_bot">
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.9 4.3 18.7 19.5c-.24 1.07-.88 1.33-1.78.83l-4.92-3.63-2.37 2.28c-.26.26-.48.48-.99.48l.35-5.02 9.13-8.25c.4-.35-.09-.55-.62-.2L6.24 13.1 1.4 11.6c-1.05-.33-1.07-1.05.22-1.55L20.5 2.7c.88-.32 1.65.2 1.4 1.6z"/></svg>
         Открыть в Telegram
       </a>
-      <a class="btn btn-max" href="https://max.ru/astrology_bbot">
+      <a class="btn btn-max" href="https://max.ru/id231129141847_bot">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9.2"/><path d="M8 15.5v-7l4 4.4 4-4.4v7"/></svg>
         Открыть в MAX
       </a>

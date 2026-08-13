@@ -12,7 +12,7 @@ import structlog
 from aiogram import F, Router
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from astrobot.bot.keyboards import MENU_BACK_BTN, with_back
+from astrobot.bot.keyboards import MENU_BACK_BTN, MENU_QUESTION, with_back
 from astrobot.bot.platform import Button, Keyboard, PlatformBot, PlatformContext
 from astrobot.bot.utils import rate_limit_ok
 from astrobot.config import get_settings
@@ -35,8 +35,10 @@ async def _is_subscribed(pbot: PlatformBot, user_id: int) -> bool:
     """Проверить подписку на канал. Любая ошибка → False (бонус не выдаём).
 
     Требует, чтобы бот был админом канала: без этого API не отдаёт участников."""
-    s = get_settings()
     try:
+        # get_settings() внутри try намеренно: кривой/пустой конфиг тоже должен
+        # означать «не подписан», а не 500 в хендлере.
+        s = get_settings()
         if s.platform == "max":
             return await _is_subscribed_max(pbot, user_id)
         member = await pbot.raw.get_chat_member(s.promo_channel_id, user_id)
@@ -116,5 +118,5 @@ async def on_channel_bonus_claim(
     await ctx.edit(
         "🎁 Спасибо! Я добавила тебе <b>+1 бесплатный вопрос</b> ✨\n\n"
         "Спрашивай — я слушаю.",
-        with_back([]),
+        with_back([[Button(text=MENU_QUESTION, payload="menu:question")]]),
     )
