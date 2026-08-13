@@ -55,7 +55,9 @@ async def _is_subscribed_max(pbot: PlatformBot, user_id: int) -> bool:
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.get(
             f"https://botapi.max.ru/chats/{s.promo_channel_id}/members",
-            params={"access_token": s.bot_token, "user_ids": user_id},
+            params={"user_ids": user_id},
+            # Токен в query MAX больше не принимает: только заголовок, без Bearer.
+            headers={"Authorization": s.bot_token},
         )
         r.raise_for_status()
         return bool(r.json().get("members"))
