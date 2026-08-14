@@ -423,6 +423,27 @@ class FollowupConfig(Base):
     animation_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
+class AutopostConfig(Base):
+    """Settings for the LLM-authored astro autopost. Single row (id=1), managed in
+    the admin under Рассылки → Автопосты. The scheduler generates a Broadcast
+    campaign every `interval_days` days at `hour_msk` and lets the normal dispatch
+    job send it; last_event_key keeps two posts in a row off the same event."""
+
+    __tablename__ = "autopost_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)  # always 1
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    interval_days: Mapped[int] = mapped_column(Integer, default=3, server_default="3")
+    hour_msk: Mapped[int] = mapped_column(Integer, default=11, server_default="11")
+    # Chosen weekdays as "0,2,4" (Monday = 0) — at most one post per chosen day.
+    # Empty = fully automatic mode: every interval_days days.
+    weekdays: Mapped[str] = mapped_column(String(16), default="", server_default="")
+    last_generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_event_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
 class LLMUsageLog(Base):
     __tablename__ = "llm_usage_logs"
 

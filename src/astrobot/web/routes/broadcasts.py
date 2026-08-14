@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -12,8 +12,16 @@ from sqlalchemy.orm import defer
 # subclass, so isinstance against it is always False. Check the base class.
 from starlette.datastructures import UploadFile
 
+from astrobot.astro_events import pick_event, scan_events
+from astrobot.autopost import (
+    WEEKDAY_LABELS,
+    create_campaign,
+    generate_post,
+    parse_weekdays,
+)
 from astrobot.config import get_settings
 from astrobot.db.models import (
+    AutopostConfig,
     BirthProfile,
     Broadcast,
     BroadcastVariant,
@@ -217,6 +225,13 @@ def _render_list(rows: list[Broadcast]) -> str:
         "Можно менять текст и прикрепить гифку.</p>"
         "<p style='margin-top:8px'>"
         "<a href='/admin/broadcasts/followup' class='btn btn-ghost'>Редактировать →</a>"
+        "</p></div>",
+        "<div class='card'>"
+        "<div class='card-head'><span class='card-title'>🤖 Автопосты</span></div>"
+        "<p class='muted'>Астра сама пишет пост под ближайшее астрособытие и рассылает "
+        "его с кнопкой вопроса — раз в несколько дней.</p>"
+        "<p style='margin-top:8px'>"
+        "<a href='/admin/broadcasts/auto' class='btn btn-ghost'>Настроить →</a>"
         "</p></div>",
     ]
     if not rows:
@@ -632,6 +647,145 @@ async def followup_save(request: Request, session: AsyncSession = Depends(get_se
 
     await session.commit()
     return RedirectResponse(url="/admin/broadcasts/followup?msg=Сохранено.", status_code=303)
+
+
+# ─── autopost (LLM post about a sky event) ────────────────────────────────────
+# NOTE: registered before /admin/broadcasts/{broadcast_id} for the same reason as
+# the follow-up routes above — "auto" must not be parsed as an int path param.
+
+def _form_int(raw, default: int) -> int:
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _render_autopost(cfg: AutopostConfig | None, msg: str, err: str) -> str:
+    enabled = cfg.enabled if cfg else False
+    interval = cfg.interval_days if cfg else 3
+    hour = cfg.hour_msk if cfg else 11
+    last = (
+        f"{_fmt_msk(cfg.last_generated_at)} · {_esc(cfg.last_event_key or '—')}"
+        if cfg and cfg.last_generated_at
+        else "ещё не было"
+    )
+    today = datetime.now(_MSK).date()
+    rows = "".join(
+        f"<tr><td>{e.when.isoformat()}</td><td>{_esc(e.title)}</td>"
+        f"<td class='muted'>{e.weight}</td></tr>"
+        for e in scan_events(today, today + timedelta(days=14))
+    )
+    picked = parse_weekdays(cfg.weekdays if cfg else "")
+    day_boxes = "".join(
+        f"<label class='bc-toggle' style='margin-right:14px'>"
+        f"<input type='checkbox' name='weekdays' value='{i}'"
+        f"{' checked' if i in picked else ''}> {label}</label>"
+        for i, label in enumerate(WEEKDAY_LABELS)
+    )
+    mode = (
+        f"по дням недели ({', '.join(WEEKDAY_LABELS[i] for i in sorted(picked))}) в {hour}:00 МСК"
+        if picked
+        else f"каждые {interval} дн. в {hour}:00 МСК"
+    )
+    note = ""
+    if msg:
+        note = f"<div class='card' style='border-color:#059669'>{_esc(msg)}</div>"
+    elif err:
+        note = f"<div class='card' style='border-color:#dc2626'>{_esc(err)}</div>"
+
+    body = (
+        f"<style>{_BC_STYLE}</style>"
+        + note
+        + "<div class='card'>"
+        "<div class='card-head'><span class='card-title'>🤖 Автопосты</span></div>"
+        "<form method='post' action='/admin/broadcasts/auto'>"
+        "<p><label class='bc-toggle'><input type='checkbox' name='enabled'"
+        f"{' checked' if enabled else ''}> Включить автопосты</label></p>"
+        "<p class='muted' style='margin-top:6px'>Выключатель останавливает только "
+        "автогенерацию — уже созданные кампании и ручные рассылки работают как раньше.</p>"
+        "<p style='margin-top:14px'><label class='muted'>Дни недели</label><br>"
+        f"<span style='display:inline-block;margin-top:6px'>{day_boxes}</span></p>"
+        "<p class='bc-hint'>Отмечены дни — пост выходит только в них (не чаще раза в день). "
+        "Не отмечено ничего — полностью автоматический режим по интервалу ниже.</p>"
+        "<p style='margin-top:14px'><label class='muted'>Раз в сколько дней "
+        "(если дни недели не отмечены)</label><br>"
+        f"<input class='bc-in' type='number' name='interval_days' min='1' max='30' "
+        f"value='{interval}' style='max-width:120px'></p>"
+        "<p style='margin-top:10px'><label class='muted'>Час отправки (МСК)</label><br>"
+        f"<input class='bc-in' type='number' name='hour_msk' min='0' max='23' "
+        f"value='{hour}' style='max-width:120px'></p>"
+        f"<p class='muted' style='margin-top:10px'>Расписание: {_esc(mode)}"
+        f"{'' if enabled else ' — <b>выключено</b>'}</p>"
+        f"<p class='muted'>Последний автопост: {last}</p>"
+        "<p class='muted'>Пост уходит всем сегментам: текст один, кнопка «Спросить Астру» "
+        "сразу задаёт вопрос (или показывает пейволл), а не прошедшим онбординг "
+        "предлагает его пройти.</p>"
+        "<p style='margin-top:12px'>"
+        "<button type='submit' class='btn btn-p'>Сохранить</button> "
+        "<a href='/admin/broadcasts' class='btn btn-ghost'>← Назад</a>"
+        "</p></form></div>"
+        # Manual run: a DRAFT, so the text can be read (and fixed) before sending.
+        "<div class='card'>"
+        "<div class='card-head'><span class='card-title'>Проверка</span></div>"
+        "<p class='muted'>Сгенерирует пост по ближайшему событию и создаст "
+        "<b>черновик</b> — его можно поправить, отправить себе и запустить руками. "
+        "Расписание автопостов при этом не сдвигается.</p>"
+        "<form method='post' action='/admin/broadcasts/auto/generate'>"
+        "<button type='submit' class='btn btn-ghost'>✨ Сгенерировать черновик</button>"
+        "</form></div>"
+        "<div class='card'>"
+        "<div class='card-head'><span class='card-title'>События на 14 дней</span></div>"
+        "<table><thead><tr><th>Дата</th><th>Событие</th><th>Вес</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+        "<p class='bc-hint'>Для поста берётся самое «весомое» событие в окне "
+        "вчера…+3 дня, кроме того, о котором был прошлый пост.</p></div>"
+    )
+    return _layout("Автопосты", body, active="broadcasts")
+
+
+@router.get("/admin/broadcasts/auto", response_class=HTMLResponse)
+async def autopost_editor(
+    request: Request, msg: str = "", err: str = "", session: AsyncSession = Depends(get_session)
+):
+    if (r := _auth_redirect(request)) is not None:
+        return r
+    return HTMLResponse(_render_autopost(await session.get(AutopostConfig, 1), msg, err))
+
+
+@router.post("/admin/broadcasts/auto")
+async def autopost_save(request: Request, session: AsyncSession = Depends(get_session)):
+    if (r := _auth_redirect(request)) is not None:
+        return r
+    # Read the raw form: "weekdays" is a multi-checkbox, so it needs getlist().
+    form = await request.form()
+    cfg = await session.get(AutopostConfig, 1)
+    if cfg is None:
+        cfg = AutopostConfig(id=1)
+        session.add(cfg)
+    cfg.enabled = form.get("enabled") == "on"
+    cfg.interval_days = min(30, max(1, _form_int(form.get("interval_days"), 3)))
+    cfg.hour_msk = min(23, max(0, _form_int(form.get("hour_msk"), 11)))
+    cfg.weekdays = ",".join(
+        str(d) for d in sorted(parse_weekdays(",".join(form.getlist("weekdays"))))
+    )
+    await session.commit()
+    return RedirectResponse(url="/admin/broadcasts/auto?msg=Сохранено.", status_code=303)
+
+
+@router.post("/admin/broadcasts/auto/generate")
+async def autopost_generate(request: Request, session: AsyncSession = Depends(get_session)):
+    if (r := _auth_redirect(request)) is not None:
+        return r
+    cfg = await session.get(AutopostConfig, 1)
+    event = pick_event(datetime.now(_MSK).date(), cfg.last_event_key if cfg else None)
+    try:
+        text, question = await generate_post(event)
+    except Exception as e:  # noqa: BLE001 — surface the LLM error to the admin
+        return RedirectResponse(
+            url=f"/admin/broadcasts/auto?err=Не удалось сгенерировать: {e}", status_code=303
+        )
+    b = await create_campaign(session, event, text, question, schedule=False)
+    return RedirectResponse(url=f"/admin/broadcasts/{b.id}", status_code=303)
 
 
 @router.get("/admin/broadcasts/{broadcast_id}", response_class=HTMLResponse)

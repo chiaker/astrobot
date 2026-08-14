@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 import structlog
 from aiogram.exceptions import TelegramRetryAfter
@@ -10,6 +11,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from astrobot.alerts import notify_ops
+from astrobot.astro_events import pick_event
 from astrobot.astrology.chart import build_natal_chart
 from astrobot.astrology.serializer import chart_to_markdown
 from astrobot.astrology.transits import (
@@ -17,6 +20,7 @@ from astrobot.astrology.transits import (
     midnight_today_in,
     transit_report_to_markdown,
 )
+from astrobot.autopost import create_campaign, generate_post, is_due
 from astrobot.bot.formatting import md_to_telegram_html
 from astrobot.bot.handlers.horoscope import _period_label
 from astrobot.bot.handlers.natal import _profile_to_birth
@@ -25,6 +29,7 @@ from astrobot.bot.platform import Button, Keyboard, Media, PlatformBot
 from astrobot.bot.platform.telegram import TelegramBot
 from astrobot.config import get_settings
 from astrobot.db.models import (
+    AutopostConfig,
     BirthProfile,
     Broadcast,
     BroadcastVariant,
@@ -51,6 +56,8 @@ if TYPE_CHECKING:
     from aiogram import Bot
 
 log = structlog.get_logger(__name__)
+
+MSK = ZoneInfo("Europe/Moscow")  # admin-facing times (autopost hour) are Moscow
 
 
 async def _get_or_generate_horoscope(
@@ -845,6 +852,44 @@ async def broadcast_dispatch_job(pbot: PlatformBot) -> None:
         await _run_broadcast(pbot, broadcast_id)
 
 
+# ─── LLM autopost: a sky event → a ready broadcast campaign ───────────────────
+
+async def autopost_job(pbot: PlatformBot) -> None:
+    """On the schedule set in the admin (chosen weekdays, or every interval_days
+    days) write a post about the most notable sky event and queue it as a
+    broadcast — the dispatch job above sends it on the next tick. Everything is
+    decided from the DB config row, so the admin can switch it off without a
+    redeploy; see autopost.is_due."""
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        cfg = await session.get(AutopostConfig, 1)
+        now = datetime.now(UTC)
+        now_msk = now.astimezone(MSK)
+        if cfg is None or not is_due(cfg, now_msk):
+            return
+
+        event = pick_event(now_msk.date(), cfg.last_event_key)
+        try:
+            text, question = await generate_post(event)
+        except Exception as e:
+            # Leave last_generated_at alone — the remaining ticks of this hour
+            # retry, and after that it waits for tomorrow's slot.
+            log.warning("autopost_generation_failed", event_key=event.key, error=str(e))
+            await notify_ops(pbot, f"⚠️ Автопост не сгенерировался: {e}")
+            return
+
+        broadcast = await create_campaign(session, event, text, question, schedule=True)
+        cfg.last_generated_at = now
+        cfg.last_event_key = event.key
+        await session.commit()
+
+    await notify_ops(
+        pbot,
+        f"🤖 Автопост #{broadcast.id} «{event.title}» поставлен в отправку.\n"
+        f"Отменить: /admin/broadcasts/{broadcast.id}",
+    )
+
+
 def build_scheduler(pbot: PlatformBot) -> AsyncIOScheduler:
     # Neutral push/reconcile jobs run on both platforms via PlatformBot.
     # The animation/Stars-heavy jobs (followup, broadcast, card charging) are
@@ -925,6 +970,18 @@ def build_scheduler(pbot: PlatformBot) -> AsyncIOScheduler:
         minute="*",
         args=[pbot],
         id="broadcast_dispatch",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    # Frequent ticks; the job itself decides by the admin config whether it's due
+    # (so a failed LLM call gets a few retries inside the configured hour).
+    sched.add_job(
+        autopost_job,
+        trigger="cron",
+        minute="*/15",
+        args=[pbot],
+        id="autopost",
         replace_existing=True,
         coalesce=True,
         max_instances=1,
