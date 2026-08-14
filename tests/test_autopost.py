@@ -15,7 +15,7 @@ from astrobot.autopost import (
     parse_weekdays,
 )
 from astrobot.bot.keyboards import build_broadcast_kb
-from astrobot.db.models import AutopostConfig, Broadcast, BroadcastVariant
+from astrobot.db.models import AutopostConfig, AutopostMedia, Broadcast, BroadcastVariant
 from astrobot.limits import BROADCAST_SEGMENTS
 from astrobot.llm.prompts import AUTOPOST_MARKER
 from astrobot.lunar import compute_phases
@@ -267,6 +267,36 @@ async def test_campaign_button_renders_as_an_ask_callback():
     variant.id = 5
     kb = build_broadcast_kb(variant)
     assert "bcast:ask:5:0" in [b.payload for row in kb.rows for b in row]
+
+
+async def _campaign_with(media):
+    session = _FakeSession()
+    event = pick_event(date(2026, 8, 14))
+    await create_campaign(session, event, "текст", "Вопрос?", schedule=True, media=media)
+    return [o for o in session.added if isinstance(o, BroadcastVariant)]
+
+
+async def test_cached_file_id_is_referenced_not_copied():
+    # A gif that has already been sent once is attached by id — copying its bytes
+    # into all five variants of every campaign would bloat the DB for nothing.
+    media = AutopostMedia(id=1, animation="FILE123", animation_data=b"rawbytes",
+                          animation_name="stars.gif", use_count=2)
+    variants = await _campaign_with(media)
+    assert all(v.animation == "FILE123" and v.animation_data is None for v in variants)
+    assert media.use_count == 3
+
+
+async def test_never_sent_upload_carries_its_bytes():
+    media = AutopostMedia(id=1, animation="", animation_data=b"rawbytes",
+                          animation_name="stars.gif", use_count=0)
+    variants = await _campaign_with(media)
+    assert all(v.animation_data == b"rawbytes" for v in variants)
+    assert all(v.animation_name == "stars.gif" for v in variants)
+
+
+async def test_empty_pool_still_produces_a_text_post():
+    variants = await _campaign_with(None)
+    assert all(not v.animation and v.animation_data is None for v in variants)
 
 
 async def test_scheduled_campaign_is_due_immediately_and_draft_is_not():

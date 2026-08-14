@@ -75,6 +75,20 @@ class AstroEvent:
     detail: str   # the raw fact handed to the LLM
     weight: int
 
+    @property
+    def kind(self) -> str:
+        """Event family, taken from the key prefix (see KIND_LABELS)."""
+        return self.key.split(":", 1)[0]
+
+
+KIND_LABELS: dict[str, str] = {
+    "aspect": "Транзит",
+    "moon_phase": "Лунация",
+    "ingress": "Смена знака",
+    "retro": "Ретроград",
+    "direct": "Директ",
+}
+
 
 def _sign_of(lon: float) -> str:
     return sign_ru(_SIGN_CODES[int(lon // 30) % 12])

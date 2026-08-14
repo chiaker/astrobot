@@ -9,10 +9,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from astrobot.astro_events import AstroEvent
-from astrobot.db.models import Broadcast, BroadcastVariant
+from astrobot.db.models import AutopostMedia, Broadcast, BroadcastVariant
 from astrobot.limits import BROADCAST_SEGMENTS
 from astrobot.llm.client import get_llm
 from astrobot.llm.prompts import AUTOPOST_MARKER, build_system_autopost
@@ -97,6 +98,30 @@ def _buttons(segment: str, question: str) -> list[dict]:
     return [{"type": "ask", "label": ASK_LABEL, "value": question}]
 
 
+async def pick_media(session: AsyncSession) -> AutopostMedia | None:
+    """Next animation from the pool: the least used one, so the pool rotates
+    evenly and the same gif never lands on two posts in a row. None = empty pool
+    → text-only post, exactly as before."""
+    return await session.scalar(
+        select(AutopostMedia).order_by(AutopostMedia.use_count, AutopostMedia.id).limit(1)
+    )
+
+
+def _media_fields(media: AutopostMedia | None) -> dict:
+    """Animation columns for a variant. A cached file_id is referenced by string
+    (no blob copied); only a never-sent upload carries its bytes into the campaign,
+    and the send caches the id afterwards."""
+    if media is None:
+        return {}
+    media.use_count += 1
+    if media.animation:
+        return {"animation": media.animation, "animation_name": media.animation_name}
+    return {
+        "animation_data": media.animation_data,
+        "animation_name": media.animation_name,
+    }
+
+
 async def create_campaign(
     session: AsyncSession,
     event: AstroEvent,
@@ -104,6 +129,7 @@ async def create_campaign(
     question: str,
     *,
     schedule: bool,
+    media: AutopostMedia | None = None,
 ) -> Broadcast:
     """Create the campaign. schedule=True → goes out on the next dispatch tick;
     schedule=False → draft the admin can edit and send by hand."""
@@ -116,6 +142,7 @@ async def create_campaign(
     session.add(broadcast)
     await session.flush()  # need broadcast.id for the variants
 
+    animation = _media_fields(media)
     for segment in BROADCAST_SEGMENTS:
         session.add(
             BroadcastVariant(
@@ -124,6 +151,7 @@ async def create_campaign(
                 enabled=True,
                 text=text,
                 buttons=_buttons(segment, question),
+                **animation,
             )
         )
     await session.commit()
@@ -132,5 +160,6 @@ async def create_campaign(
         broadcast_id=broadcast.id,
         event_key=event.key,  # `event` is structlog's own message kwarg
         scheduled=schedule,
+        media_id=media.id if media else None,
     )
     return broadcast

@@ -444,6 +444,25 @@ class AutopostConfig(Base):
     last_event_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
+class AutopostMedia(Base):
+    """Pool of neutral animations attached to autoposts in rotation (the least
+    used one goes next). Not tied to any event — same storage deal as
+    BroadcastVariant: uploaded bytes are the source of truth, `animation` caches
+    the platform file_id so campaigns can reference it without copying blobs."""
+
+    __tablename__ = "autopost_media"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    animation: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    animation_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    animation_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    use_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class LLMUsageLog(Base):
     __tablename__ = "llm_usage_logs"
 

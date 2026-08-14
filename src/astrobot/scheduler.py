@@ -20,7 +20,7 @@ from astrobot.astrology.transits import (
     midnight_today_in,
     transit_report_to_markdown,
 )
-from astrobot.autopost import create_campaign, generate_post, is_due
+from astrobot.autopost import create_campaign, generate_post, is_due, pick_media
 from astrobot.bot.formatting import md_to_telegram_html
 from astrobot.bot.handlers.horoscope import _period_label
 from astrobot.bot.handlers.natal import _profile_to_birth
@@ -878,7 +878,9 @@ async def autopost_job(pbot: PlatformBot) -> None:
             await notify_ops(pbot, f"⚠️ Автопост не сгенерировался: {e}")
             return
 
-        broadcast = await create_campaign(session, event, text, question, schedule=True)
+        broadcast = await create_campaign(
+            session, event, text, question, schedule=True, media=await pick_media(session)
+        )
         cfg.last_generated_at = now
         cfg.last_event_key = event.key
         await session.commit()

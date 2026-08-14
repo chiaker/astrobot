@@ -12,16 +12,19 @@ from sqlalchemy.orm import defer
 # subclass, so isinstance against it is always False. Check the base class.
 from starlette.datastructures import UploadFile
 
-from astrobot.astro_events import pick_event, scan_events
+from astrobot.astro_events import KIND_LABELS, pick_event, scan_events
 from astrobot.autopost import (
     WEEKDAY_LABELS,
     create_campaign,
     generate_post,
     parse_weekdays,
+    pick_media,
 )
+from astrobot.bot.platform import Media
 from astrobot.config import get_settings
 from astrobot.db.models import (
     AutopostConfig,
+    AutopostMedia,
     BirthProfile,
     Broadcast,
     BroadcastVariant,
@@ -660,7 +663,46 @@ def _form_int(raw, default: int) -> int:
         return default
 
 
-def _render_autopost(cfg: AutopostConfig | None, msg: str, err: str) -> str:
+def _render_media_pool(media: list[AutopostMedia]) -> str:
+    """Gif pool card: what's in rotation, how often each has been used, upload/delete."""
+    if media:
+        rows = "".join(
+            f"<tr><td>{_esc(m.animation_name or m.title or f'#{m.id}')}</td>"
+            f"<td class='muted'>{'file_id' if m.animation else 'файл'}</td>"
+            f"<td class='muted'>{m.use_count}</td>"
+            f"<td><form method='post' "
+            f"action='/admin/broadcasts/auto/media/{m.id}/delete' style='margin:0'>"
+            "<button type='submit' class='btn btn-ghost'>Удалить</button>"
+            "</form></td></tr>"
+            for m in media
+        )
+        table = (
+            "<table><thead><tr><th>Файл</th><th>Хранение</th><th>Использований</th>"
+            f"<th></th></tr></thead><tbody>{rows}</tbody></table>"
+        )
+    else:
+        table = "<p class='muted'>Пул пуст — автопосты уходят просто текстом.</p>"
+    return (
+        "<div class='card'>"
+        "<div class='card-head'><span class='card-title'>🎞 Гифки для автопостов</span></div>"
+        "<p class='muted'>Нейтральные гифки, не привязанные к событиям. К каждому посту "
+        "цепляется та, что использовалась реже всех — по кругу, без повторов подряд.</p>"
+        + table
+        + "<form method='post' action='/admin/broadcasts/auto/media' "
+        "enctype='multipart/form-data' style='margin-top:12px'>"
+        "<p><input type='file' name='files' multiple "
+        "accept='image/gif,video/mp4,image/*,video/*'></p>"
+        f"<p class='bc-hint'>Можно выбрать сразу несколько файлов, каждый ≤ {MAX_ANIM_MB} МБ. "
+        "Если задан OPS_CHAT_ID, файл сразу уходит в ops-чат — так видно, как он выглядит "
+        "в боте, и запоминается file_id, чтобы не грузить его заново на каждую рассылку.</p>"
+        "<button type='submit' class='btn btn-p'>Загрузить</button>"
+        "</form></div>"
+    )
+
+
+def _render_autopost(
+    cfg: AutopostConfig | None, media: list[AutopostMedia], msg: str, err: str
+) -> str:
     enabled = cfg.enabled if cfg else False
     interval = cfg.interval_days if cfg else 3
     hour = cfg.hour_msk if cfg else 11
@@ -672,6 +714,7 @@ def _render_autopost(cfg: AutopostConfig | None, msg: str, err: str) -> str:
     today = datetime.now(_MSK).date()
     rows = "".join(
         f"<tr><td>{e.when.isoformat()}</td><td>{_esc(e.title)}</td>"
+        f"<td class='muted'>{_esc(KIND_LABELS.get(e.kind, e.kind))}</td>"
         f"<td class='muted'>{e.weight}</td></tr>"
         for e in scan_events(today, today + timedelta(days=14))
     )
@@ -733,14 +776,26 @@ def _render_autopost(cfg: AutopostConfig | None, msg: str, err: str) -> str:
         "<form method='post' action='/admin/broadcasts/auto/generate'>"
         "<button type='submit' class='btn btn-ghost'>✨ Сгенерировать черновик</button>"
         "</form></div>"
-        "<div class='card'>"
+        + _render_media_pool(media)
+        + "<div class='card'>"
         "<div class='card-head'><span class='card-title'>События на 14 дней</span></div>"
-        "<table><thead><tr><th>Дата</th><th>Событие</th><th>Вес</th></tr></thead>"
+        "<table><thead><tr><th>Дата</th><th>Событие</th><th>Тип</th><th>Вес</th></tr></thead>"
         f"<tbody>{rows}</tbody></table>"
         "<p class='bc-hint'>Для поста берётся самое «весомое» событие в окне "
         "вчера…+3 дня, кроме того, о котором был прошлый пост.</p></div>"
     )
     return _layout("Автопосты", body, active="broadcasts")
+
+
+async def _load_media(session: AsyncSession) -> list[AutopostMedia]:
+    """Pool in rotation order, WITHOUT the blobs (they're megabytes each)."""
+    return list(
+        await session.scalars(
+            select(AutopostMedia)
+            .options(defer(AutopostMedia.animation_data))
+            .order_by(AutopostMedia.use_count, AutopostMedia.id)
+        )
+    )
 
 
 @router.get("/admin/broadcasts/auto", response_class=HTMLResponse)
@@ -749,7 +804,83 @@ async def autopost_editor(
 ):
     if (r := _auth_redirect(request)) is not None:
         return r
-    return HTMLResponse(_render_autopost(await session.get(AutopostConfig, 1), msg, err))
+    return HTMLResponse(
+        _render_autopost(
+            await session.get(AutopostConfig, 1), await _load_media(session), msg, err
+        )
+    )
+
+
+@router.post("/admin/broadcasts/auto/media")
+async def autopost_media_upload(
+    request: Request, session: AsyncSession = Depends(get_session)
+):
+    if (r := _auth_redirect(request)) is not None:
+        return r
+    form = await request.form()
+    uploads = [
+        f for f in form.getlist("files") if isinstance(f, UploadFile) and f.filename
+    ]
+    if not uploads:
+        return RedirectResponse(
+            url="/admin/broadcasts/auto?err=Файлы не выбраны.", status_code=303
+        )
+
+    added: list[tuple[AutopostMedia, bytes]] = []
+    skipped = 0
+    for upload in uploads:
+        data = await upload.read()
+        if not data or len(data) > MAX_ANIM_BYTES:
+            skipped += 1
+            continue
+        item = AutopostMedia(
+            title=upload.filename[:120],
+            animation_data=data,
+            animation_name=upload.filename[:255],
+        )
+        session.add(item)
+        added.append((item, data))
+    await session.commit()
+
+    # Send each new gif to ops once: doubles as a preview and caches the file_id,
+    # so campaigns reference it by string instead of copying the bytes around.
+    ops = get_settings().ops_chat_id
+    if ops:
+        from astrobot.scheduler import _animation_filename
+
+        pbot = request.app.state.pbot
+        for item, data in added:
+            try:
+                sent = await pbot.send_animation(
+                    ops,
+                    Media.from_bytes(
+                        data, filename=_animation_filename(data, item.animation_name)
+                    ),
+                    caption=f"🎞 В пул автопостов: {item.animation_name or item.id}",
+                )
+                if sent.file_id:
+                    item.animation = sent.file_id
+                    await session.commit()
+            except Exception:  # noqa: BLE001 — preview is best-effort
+                await session.rollback()
+
+    note = f"Загружено: {len(added)}." + (
+        f" Пропущено (пусто или >{MAX_ANIM_MB} МБ): {skipped}." if skipped else ""
+    )
+    return RedirectResponse(url=f"/admin/broadcasts/auto?msg={note}", status_code=303)
+
+
+@router.post("/admin/broadcasts/auto/media/{media_id}/delete")
+async def autopost_media_delete(
+    request: Request, media_id: int, session: AsyncSession = Depends(get_session)
+):
+    if (r := _auth_redirect(request)) is not None:
+        return r
+    item = await session.get(AutopostMedia, media_id)
+    if item is not None:
+        await session.delete(item)
+        await session.commit()
+    return RedirectResponse(url="/admin/broadcasts/auto?msg=Удалено.", status_code=303)
 
 
 @router.post("/admin/broadcasts/auto")
@@ -784,7 +915,9 @@ async def autopost_generate(request: Request, session: AsyncSession = Depends(ge
         return RedirectResponse(
             url=f"/admin/broadcasts/auto?err=Не удалось сгенерировать: {e}", status_code=303
         )
-    b = await create_campaign(session, event, text, question, schedule=False)
+    b = await create_campaign(
+        session, event, text, question, schedule=False, media=await pick_media(session)
+    )
     return RedirectResponse(url=f"/admin/broadcasts/{b.id}", status_code=303)
 
 
