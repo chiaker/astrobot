@@ -331,6 +331,8 @@
     font-size: var(--step--1);
     padding-top: 34px;
   }
+  footer p { margin: 0 0 8px; }
+  footer a { color: var(--lilac); }
 
   .reveal {
     opacity: 0;
@@ -469,6 +471,8 @@
     </div>
     <footer>
       <p>Astra — развлекательный сервис. 18+. Не заменяет консультацию врача, юриста или финансового советника.</p>
+      <p>Сайт использует cookie и Яндекс.Метрику. Продолжая пользоваться сайтом, вы соглашаетесь
+        с <a href="/privacy.html">Политикой обработки персональных данных</a>.</p>
     </footer>
   </section>
 
@@ -552,6 +556,29 @@
     for (const e of es) if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
   }, { threshold: .15 });
   document.querySelectorAll(".reveal").forEach((n) => io.observe(n));
+</script>
+
+<!-- Яндекс.Метрика. YM_ID = 0 → счётчик не грузится (локально/до настройки). -->
+<script>
+  const YM_ID = 111769343;  // ← номер счётчика из metrika.yandex.ru
+
+  if (YM_ID) {
+    (function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+    m[i].l=1*new Date();
+    for (var j=0;j<document.scripts.length;j++){if(document.scripts[j].src===r){return;}}
+    k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})
+    (window, document, "script", "https://mc.yandex.ru/metrika/tag.js", "ym");
+
+    ym(YM_ID, "init", { webvisor: true, clickmap: true, trackLinks: true, accurateTrackBounce: true });
+
+    // Цели для Директа: клик по кнопке мессенджера = конверсия. Уход на другой
+    // домен, поэтому цель шлём до перехода — Метрика умеет это синхронно.
+    for (const [sel, goal] of [[".btn-tg", "tg_click"], [".btn-max", "max_click"]]) {
+      document.querySelectorAll(sel).forEach((a) => {
+        a.addEventListener("click", () => ym(YM_ID, "reachGoal", goal));
+      });
+    }
+  }
 </script>
 </body>
 </html>
