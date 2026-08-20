@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
@@ -214,6 +214,11 @@ async def _segment_counts(session: AsyncSession) -> dict[str, int]:
 
 # ─── rendering ────────────────────────────────────────────────────────────────
 
+def _deletable(b: Broadcast) -> bool:
+    """Черновики и отменённые кампании, которые никому не успели уйти."""
+    return b.status in ("draft", "canceled") and not b.sent_count
+
+
 def _render_list(rows: list[Broadcast]) -> str:
     body = [
         "<div class='card'>"
@@ -242,6 +247,18 @@ def _render_list(rows: list[Broadcast]) -> str:
     else:
         trs = []
         for b in rows:
+            # Удалять можно только то, что никому не ушло: у отправленной кампании
+            # живут кнопки в чатах (bcast:ask:{variant_id}), их нельзя обрывать.
+            if _deletable(b):
+                action = (
+                    f"<form method='post' action='/admin/broadcasts/{b.id}/delete' "
+                    "style='margin:0' onclick='event.stopPropagation()' "
+                    "onsubmit=\"return confirm('Удалить рассылку без возможности "
+                    "восстановления?')\">"
+                    "<button type='submit' class='btn btn-ghost'>Удалить</button></form>"
+                )
+            else:
+                action = "<span class='muted'>→</span>"
             trs.append(
                 f"<tr class='clickrow' onclick=\"location.href='/admin/broadcasts/{b.id}'\">"
                 f"<td>#{b.id}</td>"
@@ -249,7 +266,7 @@ def _render_list(rows: list[Broadcast]) -> str:
                 f"<td>{_status_badge(b.status)}</td>"
                 f"<td>{_fmt_msk(b.scheduled_at)}</td>"
                 f"<td>{b.sent_count} / {b.failed_count}</td>"
-                f"<td class='muted'>→</td>"
+                f"<td>{action}</td>"
                 "</tr>"
             )
         body.append(
@@ -1157,4 +1174,31 @@ async def broadcast_cancel(
         )
     return RedirectResponse(
         url=f"/admin/broadcasts/{broadcast_id}?err=Уже нельзя отменить.", status_code=303
+    )
+
+
+@router.post("/admin/broadcasts/{broadcast_id}/delete")
+async def broadcast_delete(
+    request: Request,
+    broadcast_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    if (r := _auth_redirect(request)) is not None:
+        return r
+    b = await session.get(Broadcast, broadcast_id)
+    if b is None:
+        return RedirectResponse(url="/admin/broadcasts", status_code=303)
+    if not _deletable(b):
+        return RedirectResponse(
+            url="/admin/broadcasts?err=Удалять можно только черновики и отменённые "
+            "кампании, которые никому не отправлялись.",
+            status_code=303,
+        )
+    # Bulk DELETE, not session.delete(b): the ORM would lazily load b.variants to
+    # cascade, which blows up in async. The FK is ON DELETE CASCADE, so the
+    # variants (and their blobs) go with it.
+    await session.execute(delete(Broadcast).where(Broadcast.id == broadcast_id))
+    await session.commit()
+    return RedirectResponse(
+        url=f"/admin/broadcasts?msg=Рассылка #{broadcast_id} удалена.", status_code=303
     )

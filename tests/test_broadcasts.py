@@ -224,3 +224,51 @@ async def test_send_followup_plain_text_when_no_media():
     await _send_followup(pbot, 7, "hello", None)
     pbot.send_animation.assert_not_awaited()
     pbot.send_message.assert_awaited_once()
+
+
+# ─── deleting campaigns from the admin list ────────────────────────────────────
+
+class _DeleteSession:
+    """Enough AsyncSession for the delete route: hand out one row, record DELETEs."""
+
+    def __init__(self, broadcast):
+        self.broadcast = broadcast
+        self.executed: list = []
+
+    async def get(self, model, pk):
+        return self.broadcast
+
+    async def execute(self, stmt):
+        self.executed.append(stmt)
+
+    async def commit(self) -> None:
+        pass
+
+
+class _Req:
+    session = {"authenticated": True}
+
+
+async def _try_delete(**kw):
+    from astrobot.db.models import Broadcast
+    from astrobot.web.routes.broadcasts import broadcast_delete
+
+    b = Broadcast(id=9, name="кампания", **kw)
+    s = _DeleteSession(b)
+    resp = await broadcast_delete(_Req(), 9, s)
+    return bool(s.executed), resp.headers["location"]
+
+
+async def test_draft_and_canceled_campaigns_can_be_deleted():
+    for status in ("draft", "canceled"):
+        deleted, _ = await _try_delete(status=status, sent_count=0)
+        assert deleted, status
+
+
+async def test_delivered_campaigns_are_never_deleted():
+    # A sent campaign still has live bcast:ask buttons in people's chats — dropping
+    # its variants would break them, so the guard is in the route, not just the UI.
+    for status, sent in (("sent", 120), ("sending", 3), ("scheduled", 0), ("canceled", 5)):
+        deleted, location = await _try_delete(status=status, sent_count=sent)
+        assert not deleted, status
+        assert "err=" in location
