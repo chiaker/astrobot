@@ -25,7 +25,7 @@ from astrobot.bot.formatting import md_to_telegram_html
 from astrobot.bot.handlers.horoscope import _period_label
 from astrobot.bot.handlers.natal import _profile_to_birth
 from astrobot.bot.keyboards import build_broadcast_kb, followup_cta_kb
-from astrobot.bot.platform import Button, Keyboard, Media, PlatformBot
+from astrobot.bot.platform import Button, Keyboard, Media, PlatformBot, media_kind
 from astrobot.bot.platform.telegram import TelegramBot
 from astrobot.config import get_settings
 from astrobot.db.models import (
@@ -529,20 +529,25 @@ _FOLLOWUP_TEXT = (
 )
 
 
-def _animation_media(ref: str) -> Media:
-    """A configured animation ref is a URL or a platform-native id/token."""
-    return Media.from_url(ref) if "://" in ref else Media.from_file_id(ref)
+def _animation_media(ref: str, name: str | None = None, data: bytes | None = None) -> Media:
+    """A configured animation ref is a URL or a platform-native id/token. A name
+    sniffed from the stored bytes rides along with the id: the id itself says
+    nothing about the type, and a photo re-sent as an animation is rejected."""
+    if "://" in ref:
+        return Media.from_url(ref)
+    return Media(file_id=ref, filename=media_kind(data, name)[1] if (data or name) else None)
 
 
 def _followup_media(config: FollowupConfig | None) -> Media | None:
     """Resolve the follow-up animation: admin-cached id/url first, then uploaded
     bytes, then the FOLLOWUP_ANIMATION env fallback. None → text-only."""
     if config and config.animation:
-        return _animation_media(config.animation)
-    if config and config.animation_data:
-        return Media.from_bytes(
-            bytes(config.animation_data), filename=config.animation_name or "animation.mp4"
+        return _animation_media(
+            config.animation, config.animation_name, config.animation_data
         )
+    if config and config.animation_data:
+        data = bytes(config.animation_data)
+        return Media.from_bytes(data, filename=media_kind(data, config.animation_name)[1])
     env = get_settings().followup_animation
     return _animation_media(env) if env else None
 
@@ -687,21 +692,10 @@ def _variant_has_content(variant) -> bool:
 
 
 def _animation_filename(data: bytes, fallback: str | None) -> str:
-    """Pick a filename whose extension matches the ACTUAL bytes. aiogram derives
-    the upload's content-type from the extension, and Telegram uses that to decide
-    animation vs document — so a 'gif' name on MP4 bytes (very common) makes it a
-    plain file. Sniff the magic bytes and normalise the extension."""
-    head = data[:16]
-    if head[:6] in (b"GIF87a", b"GIF89a"):
-        return "animation.gif"
-    if head[4:8] == b"ftyp":  # ISO base media (MP4/MOV)
-        return "animation.mp4"
-    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
-        return "animation.webp"
-    ext = (fallback or "").lower().rsplit(".", 1)[-1]
-    if ext in ("gif", "mp4", "webp", "webm"):
-        return fallback  # trust a known-good original extension
-    return "animation.mp4"
+    """Filename whose extension matches the ACTUAL bytes (see platform.media_kind).
+    Kept as a helper because both the broadcast sender and the admin uploader need
+    it; the photo-vs-animation choice itself lives in the platform adapter."""
+    return media_kind(data, fallback)[1]
 
 
 async def _send_broadcast_variant(pbot: PlatformBot, chat_id: int, variant) -> str | None:
@@ -717,7 +711,12 @@ async def _send_broadcast_variant(pbot: PlatformBot, chat_id: int, variant) -> s
     if variant.animation:
         try:
             await pbot.send_animation(
-                chat_id, _animation_media(variant.animation), caption=text, kb=kb
+                chat_id,
+                _animation_media(
+                    variant.animation, variant.animation_name, variant.animation_data
+                ),
+                caption=text,
+                kb=kb,
             )
             return None
         except TelegramRetryAfter:

@@ -21,6 +21,7 @@ from astrobot.bot.platform.base import (
     PlatformContext,
     SentMessage,
     StateStore,
+    media_kind,
 )
 
 __all__ = [
@@ -32,6 +33,7 @@ __all__ = [
     "SentMessage",
     "StateStore",
     "load_adapter",
+    "media_kind",
 ]
 
 

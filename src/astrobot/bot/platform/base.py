@@ -100,6 +100,45 @@ class Media:
     def from_file_id(cls, file_id: str) -> Media:
         return cls(file_id=file_id)
 
+    @property
+    def is_photo(self) -> bool:
+        """Картинка (а не гифка/видео). Отправители по этому флагу выбирают
+        sendPhoto вместо sendAnimation — PNG/JPEG, отправленный анимацией,
+        Telegram просто отвергает."""
+        return media_kind(self.data, self.filename or self.url or self.path)[0]
+
+
+_PHOTO_EXT = ("png", "jpg", "jpeg")
+_ANIM_EXT = ("gif", "mp4", "webm", "mov")
+
+
+def media_kind(data: bytes | None, name: str | None = None) -> tuple[bool, str]:
+    """(это картинка?, имя файла с правильным расширением).
+
+    Расширение решает многое: aiogram по нему выставляет content-type, а Telegram
+    по нему выбирает animation / photo / document — поэтому имя «.gif» на байтах
+    MP4 (частый случай) уходит простым файлом. Смотрим на сигнатуру байтов, а если
+    их нет (вставленный file_id или URL) — на расширение исходного имени."""
+    head = (data or b"")[:64]
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        return True, "image.png"
+    if head[:3] == b"\xff\xd8\xff":
+        return True, "image.jpg"
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return False, "animation.gif"
+    if head[4:8] == b"ftyp":  # ISO base media (MP4/MOV)
+        return False, "animation.mp4"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        # VP8X со взведённым битом 0x02 в флагах — анимированный webp, иначе кадр.
+        animated = head[12:16] == b"VP8X" and len(head) > 20 and bool(head[20] & 0x02)
+        return (not animated), ("animation.webp" if animated else "image.webp")
+    ext = (name or "").lower().rsplit(".", 1)[-1].split("?", 1)[0]
+    if ext in _PHOTO_EXT:
+        return True, name
+    if ext in _ANIM_EXT:
+        return False, name
+    return False, "animation.mp4"
+
 
 @dataclass(frozen=True)
 class SentMessage:

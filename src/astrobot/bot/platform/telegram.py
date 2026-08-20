@@ -186,6 +186,9 @@ class TelegramContext(PlatformContext):
     async def send_animation(
         self, media: Media, caption: str | None = None, kb: Keyboard | None = None
     ) -> SentMessage:
+        # Картинку отправляем фото: sendAnimation на PNG/JPEG Telegram отвергает.
+        if media.is_photo:
+            return await self.send_photo(media, caption, kb)
         sent = await self._message.answer_animation(
             _to_input_file(media), caption=caption, reply_markup=to_markup(kb)
         )
@@ -269,11 +272,19 @@ class TelegramBot(PlatformBot):
         sent = await self._bot.send_photo(
             user_id, _to_input_file(media), caption=caption, reply_markup=to_markup(kb)
         )
-        return SentMessage(message_id=sent.message_id)
+        # Кэшируем id самого крупного размера — иначе рассылка перезаливала бы
+        # одну и ту же картинку каждому получателю.
+        return SentMessage(
+            message_id=sent.message_id,
+            file_id=sent.photo[-1].file_id if sent.photo else None,
+        )
 
     async def send_animation(
         self, user_id: int, media: Media, caption: str | None = None, kb: Keyboard | None = None
     ) -> SentMessage:
+        # Картинку отправляем фото: sendAnimation на PNG/JPEG Telegram отвергает.
+        if media.is_photo:
+            return await self.send_photo(user_id, media, caption, kb)
         sent = await self._bot.send_animation(
             user_id, _to_input_file(media), caption=caption, reply_markup=to_markup(kb)
         )

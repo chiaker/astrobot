@@ -684,9 +684,10 @@ def _render_media_pool(media: list[AutopostMedia]) -> str:
         table = "<p class='muted'>Пул пуст — автопосты уходят просто текстом.</p>"
     return (
         "<div class='card'>"
-        "<div class='card-head'><span class='card-title'>🎞 Гифки для автопостов</span></div>"
-        "<p class='muted'>Нейтральные гифки, не привязанные к событиям. К каждому посту "
-        "цепляется та, что использовалась реже всех — по кругу, без повторов подряд.</p>"
+        "<div class='card-head'><span class='card-title'>🎞 Медиа для автопостов</span></div>"
+        "<p class='muted'>Нейтральные картинки и гифки, не привязанные к событиям. К каждому "
+        "посту цепляется та, что использовалась реже всех — по кругу, без повторов подряд. "
+        "Тип определяется по содержимому файла: PNG/JPEG уходят картинкой, GIF/MP4 — анимацией.</p>"
         + table
         + "<form method='post' action='/admin/broadcasts/auto/media' "
         "enctype='multipart/form-data' style='margin-top:12px'>"
