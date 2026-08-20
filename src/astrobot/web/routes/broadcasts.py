@@ -53,7 +53,7 @@ _BTN_TYPES: list[tuple[str, str]] = [
     ("premium", "Купить премиум"),
     ("question_pack", "Докупить вопросы"),
     ("open_chat", "Открыть чат"),
-    ("onboarding", "Пройти онбординг"),
+    ("onboarding", "Познакомиться с Астрой"),
 ]
 
 # Fallback button captions so a fixed-action button (which needs no URL/question)
@@ -64,7 +64,7 @@ _DEFAULT_BTN_LABELS = {
     "premium": "💎 Купить премиум",
     "question_pack": "💬 Докупить вопросы",
     "open_chat": "💬 Открыть чат",
-    "onboarding": "✨ Пройти онбординг",
+    "onboarding": "✨ Познакомиться с Астрой",
 }
 
 _STATUS_LABELS = {
@@ -703,7 +703,7 @@ def _render_media_pool(media: list[AutopostMedia]) -> str:
         "<div class='card'>"
         "<div class='card-head'><span class='card-title'>🎞 Медиа для автопостов</span></div>"
         "<p class='muted'>Нейтральные картинки и гифки, не привязанные к событиям. К каждому "
-        "посту цепляется та, что использовалась реже всех — по кругу, без повторов подряд. "
+        "посту цепляется то, что использовалось реже всех — по кругу, без повторов подряд. "
         "Тип определяется по содержимому файла: PNG/JPEG уходят картинкой, GIF/MP4 — анимацией.</p>"
         + table
         + "<form method='post' action='/admin/broadcasts/auto/media' "

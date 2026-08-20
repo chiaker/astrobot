@@ -25,17 +25,17 @@ MENU_BACK_NEW_BTN = Button(text="🔙 Меню", payload="menu:new")
 # handler (on_broadcast_onboarding), which is registered on both platforms.
 ONBOARDING_START_BTN = Button(text="✨ Пройти знакомство", payload="bcast:onb")
 
-# Акция «подпишись на канал → +2 вопроса». Показывается, пока бонус не забран;
-# доступность считает channel_bonus_available() (handlers/channel_bonus.py).
+# Акция «подпишись на канал → +2 вопроса». Кнопка не пропадает после получения
+# бонуса — забравшему хендлер chbonus:show отвечает «уже получен».
 CHANNEL_BONUS_BTN = Button(text="🎁 +1 вопрос за подписку", payload="chbonus:show")
 
 
 def channel_bonus_available(user: User | None) -> bool:
-    """Акция настроена и этот пользователь бонус ещё не забирал."""
+    """Акция настроена (промо-канал задан в конфиге)."""
     if user is None:
         return False
     s = get_settings()
-    return bool(s.promo_channel_url and s.promo_channel_id) and user.channel_bonus_at is None
+    return bool(s.promo_channel_url and s.promo_channel_id)
 
 
 def _channel_bonus_row(user: User | None) -> list[Button]:
@@ -82,8 +82,8 @@ def main_menu_inline(user: User | None = None) -> Keyboard:
                 Button(text=MENU_PREMIUM, payload="menu:premium"),
                 Button(text=MENU_PROFILE, payload="menu:profile"),
             ],
-            # Оба «бесплатных» способа получить вопросы — в одном ряду. Кнопка
-            # подписки пропадает, когда бонус забран, тогда ряд из одной кнопки.
+            # Оба «бесплатных» способа получить вопросы — в одном ряду. Ряд из
+            # одной кнопки, если промо-канал не настроен.
             [
                 Button(text="🤝 Пригласить друга", payload="referral:show"),
                 *_channel_bonus_row(user),

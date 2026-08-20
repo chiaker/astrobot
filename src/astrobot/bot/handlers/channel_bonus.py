@@ -74,21 +74,27 @@ def _promo_text() -> str:
     )
 
 
+def _promo_kb() -> Keyboard:
+    try:
+        url = get_settings().promo_channel_url
+    except Exception:  # кривой конфиг — экран без ссылки, а не 500 в хендлере
+        url = None
+    rows = [[Button(text="📣 Открыть канал", url=url)]] if url else []
+    return Keyboard.from_rows(
+        [*rows, [Button(text="✅ Я подписался", payload="chbonus:claim")], [MENU_BACK_BTN]]
+    )
+
+
+# Ответы отдаём через edit(), а не answer_callback(): в MAX callback-ack — это
+# notification, которого пользователь не видит, и нажатие выглядит как «ничего
+# не произошло». edit() виден на обеих платформах.
 @router.callback_query(F.data == "chbonus:show")
 async def on_channel_bonus_show(ctx: PlatformContext, user: User) -> None:
-    s = get_settings()
     await ctx.answer_callback()
     if user.channel_bonus_at is not None:
         await ctx.edit("🎁 Бонус за подписку уже получен ✨", with_back([]))
         return
-    kb = Keyboard.from_rows(
-        [
-            [Button(text="📣 Открыть канал", url=s.promo_channel_url)],
-            [Button(text="✅ Я подписался", payload="chbonus:claim")],
-            [MENU_BACK_BTN],
-        ]
-    )
-    await ctx.edit(_promo_text(), kb)
+    await ctx.edit(_promo_text(), _promo_kb())
 
 
 @router.callback_query(F.data == "chbonus:claim")
@@ -96,16 +102,18 @@ async def on_channel_bonus_claim(
     ctx: PlatformContext, session: AsyncSession, user: User, pbot: PlatformBot
 ) -> None:
     if user.channel_bonus_at is not None:
-        await ctx.answer_callback("Бонус уже получен ✨")
+        await ctx.edit("🎁 Бонус за подписку уже получен ✨", with_back([]))
         return
 
     if not await rate_limit_ok(f"chbonus:{user.id}", CLAIMS_PER_HOUR, 3600):
-        await ctx.answer_callback("Слишком часто. Попробуй через несколько минут.", alert=True)
+        await ctx.edit("⏳ Слишком часто. Попробуй через несколько минут.", _promo_kb())
         return
 
     if not await _is_subscribed(pbot, ctx.user_id):
-        await ctx.answer_callback(
-            "Пока не вижу твою подписку. Подпишись на канал и нажми ещё раз.", alert=True
+        await ctx.edit(
+            "🤔 Пока не вижу твою подписку.\n\n"
+            "Открой канал, подпишись — и нажми «Я подписался» ещё раз.",
+            _promo_kb(),
         )
         return
 

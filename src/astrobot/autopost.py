@@ -25,7 +25,7 @@ log = structlog.get_logger()
 DEFAULT_QUESTION = "Как этот период отражается на моей карте?"
 
 ASK_LABEL = "🌙 Спросить Астру"
-ONBOARDING_LABEL = "✨ Пройти онбординг"
+ONBOARDING_LABEL = "✨ Познакомиться с Астрой"
 
 _MONTHS_RU = (
     "января", "февраля", "марта", "апреля", "мая", "июня",

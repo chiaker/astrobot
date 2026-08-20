@@ -63,9 +63,15 @@ async def test_claim_grants_bonus_once(monkeypatch):
     assert session.commits == 1
 
     # Повторное нажатие ничего не начисляет — защита это channel_bonus_at.
+    # Кнопка из меню не пропадает, поэтому пользователь должен УВИДЕТЬ ответ:
+    # на MAX callback-ack невидим, значит отвечаем через edit().
     await cb.on_channel_bonus_claim(ctx, session, user, pbot=None)
     assert user.bonus_questions == cb.CHANNEL_BONUS_QUESTIONS
     assert session.commits == 1
+    assert "уже получен" in ctx.edits[-1]
+
+    await cb.on_channel_bonus_show(ctx, user)
+    assert "уже получен" in ctx.edits[-1]
 
 
 @pytest.mark.asyncio
@@ -77,6 +83,8 @@ async def test_claim_without_subscription_grants_nothing(monkeypatch):
     assert user.bonus_questions == 0
     assert user.channel_bonus_at is None
     assert session.commits == 0
+    # Пользователь видит, почему бонуса нет (на MAX ack не отображается).
+    assert "не вижу твою подписку" in ctx.edits[-1]
 
 
 @pytest.mark.asyncio
