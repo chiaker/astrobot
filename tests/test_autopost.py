@@ -217,10 +217,26 @@ def test_split_post_ignores_extra_lines_after_the_question():
 POST = "<b>Луна в Весах</b>\nДва дня про равновесие и чужие ожидания."
 
 
-def _stub_llm(monkeypatch, text):
-    llm = SimpleNamespace(complete=AsyncMock(return_value=SimpleNamespace(text=text)))
+def _stub_llm(monkeypatch, text, finish_reason="stop"):
+    llm = SimpleNamespace(
+        complete=AsyncMock(
+            return_value=SimpleNamespace(text=text, finish_reason=finish_reason)
+        )
+    )
     monkeypatch.setattr("astrobot.autopost.get_llm", lambda: llm)
     return llm
+
+
+async def test_truncated_completion_is_rejected(monkeypatch):
+    # Обрыв по лимиту токенов: текст выглядит нормальным по длине, но заканчивается
+    # на полуслове и без маркера с вопросом. В рассылку такое уходить не должно.
+    _stub_llm(
+        monkeypatch,
+        "<b>Солнце заходит в Деву</b>\n23 августа Солнце переходит в знак Девы. Это не про",
+        finish_reason="length",
+    )
+    with pytest.raises(ValueError, match="оборван"):
+        await generate_post(pick_event(date(2026, 8, 14)))
 
 
 async def test_empty_completion_is_a_failed_run_not_a_mute_post(monkeypatch):

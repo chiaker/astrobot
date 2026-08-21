@@ -37,6 +37,10 @@ MAX_POST_CHARS = 2000
 # Лимит подписи к медиа в Telegram. Длинный пост с картинкой не уйдёт вообще, а
 # без картинки — уйдёт: в таком случае жертвуем картинкой, а не постом.
 CAPTION_LIMIT = 1024
+# Бюджет на генерацию. Сам пост — это ~400 токенов, но у рассуждающих моделей в
+# этот же лимит попадают reasoning-токены, и на 700 текст обрывался на полуслове.
+# Платим только за реально сгенерированное, так что запас ничего не стоит.
+POST_TOKEN_BUDGET = 2500
 
 ASK_LABEL = "🌙 Спросить Астру"
 ONBOARDING_LABEL = "✨ Познакомиться с Астрой"
@@ -133,9 +137,13 @@ async def generate_post(event: AstroEvent) -> tuple[str, str]:
         system=build_system_autopost(),
         cached_context="",
         user_message=_event_prompt(event),
-        max_tokens=700,
+        max_tokens=POST_TOKEN_BUDGET,
         kind="autopost",
     )
+    # Обрыв по лимиту токенов даёт текст без концовки и без маркера с вопросом.
+    # Такое в рассылку не годится: лучше упасть и попробовать на следующем тике.
+    if resp.finish_reason == "length":
+        raise ValueError("ответ модели оборван лимитом токенов")
     text, question = _split_post(resp.text)
     if len(text) < MIN_POST_CHARS:
         raise ValueError(

@@ -34,6 +34,9 @@ class LLMResponse:
     cached_input_tokens: int
     output_tokens: int
     reasoning_tokens: int = 0
+    # "stop" — модель закончила сама; "length" — упёрлась в max_tokens, то есть
+    # текст оборван на полуслове. Вызывающий решает, годится ли ему обрывок.
+    finish_reason: str = ""
 
 
 class LLMClient(Protocol):
@@ -157,6 +160,7 @@ class DeepSeekClient:
             cached_input_tokens=cache_hit,
             output_tokens=output_tokens,
             reasoning_tokens=reasoning,
+            finish_reason=resp.choices[0].finish_reason or "",
         )
 
 
