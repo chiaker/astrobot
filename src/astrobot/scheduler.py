@@ -867,22 +867,30 @@ async def autopost_job(pbot: PlatformBot) -> None:
         if cfg is None or not is_due(cfg, now_msk):
             return
 
-        event = pick_event(now_msk.date(), cfg.last_event_key)
+        # Всё, что может упасть, — под одним except: иначе ошибка эфемерид, базы
+        # или гварда улетала бы в APScheduler молча, без алерта в ops.
+        event = None
         try:
+            event = pick_event(now_msk.date(), cfg.last_event_key)
             text, question = await generate_post(event)
+            media = await pick_media(session)
+            # Отметку «сгенерировано» пишем в ТОЙ ЖЕ транзакции, что и кампанию
+            # (коммит внутри create_campaign): падение между двумя коммитами
+            # иначе дало бы второй пост в тот же слот.
+            cfg.last_generated_at = now
+            cfg.last_event_key = event.key
+            broadcast = await create_campaign(
+                session, event, text, question, schedule=True, media=media
+            )
         except Exception as e:
-            # Leave last_generated_at alone — the remaining ticks of this hour
-            # retry, and after that it waits for tomorrow's slot.
-            log.warning("autopost_generation_failed", event_key=event.key, error=str(e))
-            await notify_ops(pbot, f"⚠️ Автопост не сгенерировался: {e}")
+            # last_generated_at откатывается вместе с транзакцией — оставшиеся
+            # тики этого часа попробуют снова, дальше ждём завтрашний слот.
+            await session.rollback()
+            log.warning(
+                "autopost_failed", event_key=getattr(event, "key", None), error=str(e)
+            )
+            await notify_ops(pbot, f"⚠️ Автопост не создан: {e}")
             return
-
-        broadcast = await create_campaign(
-            session, event, text, question, schedule=True, media=await pick_media(session)
-        )
-        cfg.last_generated_at = now
-        cfg.last_event_key = event.key
-        await session.commit()
 
     await notify_ops(
         pbot,

@@ -697,6 +697,13 @@ def _render_media_pool(media: list[AutopostMedia]) -> str:
             "<table><thead><tr><th>Файл</th><th>Хранение</th><th>Использований</th>"
             f"<th></th></tr></thead><tbody>{rows}</tbody></table>"
         )
+        if any(not m.animation for m in media):
+            table += (
+                "<p class='bc-hint'>У файлов со статусом «файл» не закэшировался "
+                "file_id (не задан OPS_CHAT_ID или превью не ушло) — их байты "
+                "копируются в каждую кампанию. Загрузи такой файл заново при "
+                "заданном OPS_CHAT_ID, чтобы база не пухла.</p>"
+            )
     else:
         table = "<p class='muted'>Пул пуст — автопосты уходят просто текстом.</p>"
     return (
@@ -929,13 +936,14 @@ async def autopost_generate(request: Request, session: AsyncSession = Depends(ge
     event = pick_event(datetime.now(_MSK).date(), cfg.last_event_key if cfg else None)
     try:
         text, question = await generate_post(event)
-    except Exception as e:  # noqa: BLE001 — surface the LLM error to the admin
+        b = await create_campaign(
+            session, event, text, question, schedule=False, media=await pick_media(session)
+        )
+    except Exception as e:  # noqa: BLE001 — surface the LLM/guard error to the admin
+        await session.rollback()
         return RedirectResponse(
             url=f"/admin/broadcasts/auto?err=Не удалось сгенерировать: {e}", status_code=303
         )
-    b = await create_campaign(
-        session, event, text, question, schedule=False, media=await pick_media(session)
-    )
     return RedirectResponse(url=f"/admin/broadcasts/{b.id}", status_code=303)
 
 

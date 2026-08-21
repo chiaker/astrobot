@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from astrobot.astro_events import pick_event, scan_events
 from astrobot.autopost import (
     DEFAULT_QUESTION,
@@ -163,6 +165,13 @@ def test_interval_mode_waits_out_the_interval():
     assert is_due(_cfg(last_generated_at=FRIDAY - timedelta(days=3)), FRIDAY)
 
 
+def test_interval_counts_calendar_days_not_exact_hours():
+    # Пост в 11:00:30, тик через трое суток в 11:00:10 — по timedelta это 2 дня,
+    # и слот бы пропустился, а расписание поехало бы на день вперёд.
+    last = FRIDAY - timedelta(days=3) + timedelta(seconds=20)
+    assert is_due(_cfg(last_generated_at=last), FRIDAY)
+
+
 def test_weekday_mode_fires_only_on_picked_days():
     assert is_due(_cfg(weekdays="0,4"), FRIDAY)
     assert not is_due(_cfg(weekdays="0,2"), FRIDAY)
@@ -205,15 +214,88 @@ def test_split_post_ignores_extra_lines_after_the_question():
     assert question == "Мой вопрос?"
 
 
-async def test_generate_post_uses_the_llm_response(monkeypatch):
-    llm = SimpleNamespace(
-        complete=AsyncMock(
-            return_value=SimpleNamespace(text=f"Пост.\n{AUTOPOST_MARKER}\nВопрос?")
-        )
-    )
+POST = "<b>Луна в Весах</b>\nДва дня про равновесие и чужие ожидания."
+
+
+def _stub_llm(monkeypatch, text):
+    llm = SimpleNamespace(complete=AsyncMock(return_value=SimpleNamespace(text=text)))
     monkeypatch.setattr("astrobot.autopost.get_llm", lambda: llm)
+    return llm
+
+
+async def test_empty_completion_is_a_failed_run_not_a_mute_post(monkeypatch):
+    # With a gif attached, an empty text still passes _variant_has_content and goes
+    # out as a caption-less photo. Fail the run instead — the job retries.
+    _stub_llm(monkeypatch, "")
+    with pytest.raises(ValueError):
+        await generate_post(pick_event(date(2026, 8, 14)))
+
+
+async def test_answer_with_only_the_question_is_rejected(monkeypatch):
+    _stub_llm(monkeypatch, f"{AUTOPOST_MARKER}\nЧто это значит для меня?")
+    with pytest.raises(ValueError):
+        await generate_post(pick_event(date(2026, 8, 14)))
+
+
+async def test_unbalanced_html_degrades_to_plain_text(monkeypatch):
+    # Один незакрытый тег — и Telegram отвергает сообщение для КАЖДОГО получателя,
+    # то есть рассылка не доходит ни до кого. Лучше без жирного, чем никак.
+    _stub_llm(monkeypatch, "<b>Заголовок\nТело поста про равновесие и ожидания.")
+    text, _ = await generate_post(pick_event(date(2026, 8, 14)))
+    assert "<" not in text and "Заголовок" in text
+
+
+async def test_valid_html_is_kept_and_markdown_is_converted(monkeypatch):
+    _stub_llm(monkeypatch, "<b>Луна в Весах</b>\n**Жирный** день про равновесие и покой.")
+    text, _ = await generate_post(pick_event(date(2026, 8, 14)))
+    assert "<b>Луна в Весах</b>" in text
+    assert "**" not in text and "<b>Жирный</b>" in text
+
+
+async def test_question_is_stripped_of_html(monkeypatch):
+    # Вопрос подставляется в «❓ <i>{question}</i>» — тег внутри ломает и это
+    # сообщение тоже.
+    _stub_llm(monkeypatch, f"{POST}\n{AUTOPOST_MARKER}\n<b>Что это значит для меня?</b>")
+    _, question = await generate_post(pick_event(date(2026, 8, 14)))
+    assert question == "Что это значит для меня?"
+
+
+async def test_runaway_generation_is_rejected(monkeypatch):
+    _stub_llm(monkeypatch, "очень длинный пост. " * 400)
+    with pytest.raises(ValueError):
+        await generate_post(pick_event(date(2026, 8, 14)))
+
+
+async def test_media_is_dropped_when_the_caption_would_be_too_long():
+    # С подписью длиннее лимита Telegram отвергает каждую отправку с медиа, и пост
+    # доходит текстом только после провального запроса на каждого получателя.
+    from astrobot.autopost import CAPTION_LIMIT
+
+    media = AutopostMedia(id=1, animation="FILE", animation_name="a.gif", use_count=0)
+    session = _FakeSession()
+    long_text = "Очень длинный пост. " * ((CAPTION_LIMIT // 20) + 5)
+    await create_campaign(
+        session, pick_event(date(2026, 8, 14)), long_text, "Вопрос?",
+        schedule=True, media=media,
+    )
+    variants = [o for o in session.added if isinstance(o, BroadcastVariant)]
+    assert all(not v.animation for v in variants)
+    assert media.use_count == 0  # и гифка не потрачена впустую
+
+
+async def test_campaign_refuses_empty_text():
+    session = _FakeSession()
+    with pytest.raises(ValueError):
+        await create_campaign(
+            session, pick_event(date(2026, 8, 14)), "  ", "Вопрос?", schedule=True
+        )
+    assert not session.added  # ничего не создано, откатывать нечего
+
+
+async def test_generate_post_uses_the_llm_response(monkeypatch):
+    llm = _stub_llm(monkeypatch, f"{POST}\n{AUTOPOST_MARKER}\nВопрос?")
     event = pick_event(date(2026, 8, 14))
-    assert await generate_post(event) == ("Пост.", "Вопрос?")
+    assert await generate_post(event) == (POST, "Вопрос?")
     assert event.detail in llm.complete.await_args.kwargs["user_message"]
 
 
@@ -240,7 +322,7 @@ class _FakeSession:
 async def _campaign(schedule: bool) -> tuple[Broadcast, list[BroadcastVariant]]:
     session = _FakeSession()
     event = pick_event(date(2026, 8, 14))
-    b = await create_campaign(session, event, "текст", "Мой вопрос?", schedule=schedule)
+    b = await create_campaign(session, event, POST, "Мой вопрос?", schedule=schedule)
     return b, [o for o in session.added if isinstance(o, BroadcastVariant)]
 
 
@@ -249,7 +331,7 @@ async def test_campaign_covers_every_segment():
     # five must exist and be enabled.
     _, variants = await _campaign(schedule=True)
     assert {v.segment for v in variants} == set(BROADCAST_SEGMENTS)
-    assert all(v.enabled and v.text == "текст" for v in variants)
+    assert all(v.enabled and v.text == POST for v in variants)
 
 
 async def test_campaign_buttons_ask_except_for_not_onboarded():
@@ -272,7 +354,7 @@ async def test_campaign_button_renders_as_an_ask_callback():
 async def _campaign_with(media):
     session = _FakeSession()
     event = pick_event(date(2026, 8, 14))
-    await create_campaign(session, event, "текст", "Вопрос?", schedule=True, media=media)
+    await create_campaign(session, event, POST, "Вопрос?", schedule=True, media=media)
     return [o for o in session.added if isinstance(o, BroadcastVariant)]
 
 
